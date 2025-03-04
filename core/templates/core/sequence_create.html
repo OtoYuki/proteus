@@ -1,0 +1,57 @@
+{% extends "core/base.html" %}
+
+{% block title %}Submit New Sequence{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h2 class="mb-0">Submit Protein Sequence for Structure Prediction</h2>
+            </div>
+            <div class="card-body">
+                <form method="post" novalidate>
+                    {% csrf_token %}
+
+                    <div class="mb-3">
+                        <label for="{{ form.sequence_name.id_for_label }}" class="form-label">Sequence Name:</label>
+                        {{ form.sequence_name }}
+                        {% if form.sequence_name.errors %}
+                        <div class="text-danger">{{ form.sequence_name.errors }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.sequence_fasta.id_for_label }}" class="form-label">FASTA Sequence:</label>
+                        {{ form.sequence_fasta }}
+                        {% if form.sequence_fasta.errors %}
+                        <div class="text-danger">{{ form.sequence_fasta.errors }}</div>
+                        {% endif %}
+                        <div class="form-text">Enter your protein sequence in FASTA format</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.organism.id_for_label }}" class="form-label">Organism (optional):</label>
+                        {{ form.organism }}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.source.id_for_label }}" class="form-label">Source (optional):</label>
+                        {{ form.source }}
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="{{ form.description.id_for_label }}" class="form-label">Description
+                            (optional):</label>
+                        {{ form.description }}
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary">Submit for Prediction</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

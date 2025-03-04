@@ -1,0 +1,117 @@
+{% extends "core/base.html" %}
+
+{% block title %}{{ sequence.sequence_name }}{% endblock %}
+
+{% block content %}
+<div class="card mb-4">
+    <div class="card-header">
+        <h2 class="mb-0">{{ sequence.sequence_name }}</h2>
+    </div>
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-6">
+                <h4>Sequence Details</h4>
+                <table class="table">
+                    <tr>
+                        <th>Length:</th>
+                        <td>{{ sequence.sequence_length }}</td>
+                    </tr>
+                    <tr>
+                        <th>Status:</th>
+                        <td>
+                            <span
+                                class="badge {% if sequence.status == 'completed' %}bg-success{% elif sequence.status == 'processing' %}bg-warning{% elif sequence.status == 'error' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                {{ sequence.status }}
+                            </span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>Upload Date:</th>
+                        <td>{{ sequence.upload_date }}</td>
+                    </tr>
+                    {% if sequence.organism %}
+                    <tr>
+                        <th>Organism:</th>
+                        <td>{{ sequence.organism }}</td>
+                    </tr>
+                    {% endif %}
+                    {% if sequence.source %}
+                    <tr>
+                        <th>Source:</th>
+                        <td>{{ sequence.source }}</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h4>FASTA Sequence</h4>
+                <div class="border p-2" style="font-family: monospace; white-space: pre; overflow-x: auto;">{{
+                    sequence.sequence_fasta }}</div>
+
+                {% if sequence.description %}
+                <h4 class="mt-3">Description</h4>
+                <p>{{ sequence.description }}</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if predictions %}
+<div class="card">
+    <div class="card-header">
+        <h3 class="mb-0">Predictions</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Model Version</th>
+                        <th>Status</th>
+                        <th>Confidence</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for prediction in predictions %}
+                    <tr>
+                        <td>{{ prediction.prediction_date|date:"M d, Y" }}</td>
+                        <td>{{ prediction.model_version }}</td>
+                        <td>
+                            <span
+                                class="badge {% if prediction.status == 'completed' %}bg-success{% elif prediction.status == 'processing' %}bg-warning{% elif prediction.status == 'error' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                {{ prediction.status }}
+                            </span>
+                        </td>
+                        <td>{% if prediction.confidence_score %}{{ prediction.confidence_score }}{% else %}-{% endif %}
+                        </td>
+                        <td>
+                            {% if prediction.status == 'completed' %}
+                            <a href="#" class="btn btn-sm btn-outline-primary">View Structure</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+{% if sequence.status == 'uploaded' or sequence.status == 'pending' %}
+<div class="alert alert-info">
+    <p>Your sequence is waiting to be processed.</p>
+</div>
+{% elif sequence.status == 'processing' %}
+<div class="alert alert-warning">
+    <p>Your sequence is currently being processed. Check back later.</p>
+</div>
+{% else %}
+<div class="alert alert-warning">
+    <p>No predictions have been generated for this sequence yet.</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}
