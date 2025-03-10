@@ -131,3 +131,10 @@ STATIC_URL = "static/"
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Celery Configuration
+CELERY_BROKER_URL = "amqp://localhost"  # Use RabbitMQ as the message broker
+CELERY_RESULT_BACKEND = "rpc://"  # Store task results
+CELERY_ACCEPT_CONTENT = ["json"]  # Accept JSON content
+CELERY_TASK_SERIALIZER = "json"  # Serialize tasks as JSON
+CELERY_RESULT_SERIALIZER = "json"  # Serialize results as JSON

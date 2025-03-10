@@ -17,7 +17,11 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
+from core.views import submit_sequence, home
 
 urlpatterns = [
+    path("", home, name="home"),  # Root URL
     path("admin/", admin.site.urls),
+    # Include the URLs from the core app
+    path("submit/", submit_sequence, name="submit_sequence"),
 ]

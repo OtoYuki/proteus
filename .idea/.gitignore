@@ -4,3 +4,26 @@
 # Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
+# Editor-based HTTP Client requests
+/httpRequests/
+# Zeppelin ignored files
+/ZeppelinRemoteNotebooks/
+# Caches and history
+/caches/
+/dictionaries/
+/sonarlint/
+/libraries/
+# User-specific files
+/tasks.xml
+/usage.statistics.xml
+/uiDesigner.xml
+/compiler.xml
+/jarRepositories.xml
+# Gradle and Maven related
+/gradle.xml
+/modules.xml
+# Other common IDE files
+/misc.xml
+/codeStyles/
+/inspectionProfiles/
+
