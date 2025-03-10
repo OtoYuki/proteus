@@ -3,8 +3,8 @@ import subprocess
 from .models import Prediction
 import os
 import logging
-import glob
 import time
+import glob
 
 logger = logging.getLogger(__name__)
 
@@ -99,18 +99,50 @@ def run_colabfold(prediction_id):
         subprocess.run(cmd, shell=True, check=True)
         logger.info("ColabFold prediction completed")
 
-        # Update prediction with actual PDB file
-        pdb_files = glob.glob(f"{host_output_dir}/rank_*.pdb")
-        if pdb_files:
-            prediction.pdb_file_path = pdb_files[0]
-            logger.info(f"Set PDB file path to: {prediction.pdb_file_path}")
-        else:
-            raise Exception(f"No PDB files found in {host_output_dir}")
-        prediction.status = "completed"
-        prediction.save()
-        logger.info("Prediction status updated to completed")
+        # Extra sleep to allow file system sync (especially on mounted volumes)
+        time.sleep(10)
 
-        return f"Prediction {prediction_id} completed successfully"
+        # Poll for the PDB file using glob for a more robust file search
+        timeout = 120  # seconds
+        poll_interval = 5  # seconds
+        pdb_file_path = None
+        elapsed = 0
+
+        while elapsed < timeout:
+            pdb_files = glob.glob(os.path.join(host_output_dir, "*.pdb"))
+            logger.info(f"Polling at {elapsed}s, found pdb_files: {pdb_files}")
+            if pdb_files:
+                pdb_file_path = pdb_files[0]
+                logger.info(f"Found PDB file: {pdb_file_path}")
+                break
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+        if not pdb_file_path:
+            # Fallback: use the find command
+            find_cmd = f"find {host_output_dir} -type f -name '*.pdb'"
+            logger.info(f"Trying find command: {find_cmd}")
+            find_result = subprocess.run(
+                find_cmd, shell=True, capture_output=True, text=True
+            )
+            logger.info(f"Find command output: '{find_result.stdout}'")
+            found_files = [f for f in find_result.stdout.strip().split("\n") if f]
+            if found_files:
+                pdb_file_path = found_files[0]
+                logger.info(f"Found PDB file using find command: {pdb_file_path}")
+
+        if pdb_file_path:
+            prediction.pdb_file_path = pdb_file_path
+            prediction.status = "completed"
+            prediction.save()
+            logger.info(
+                f"Prediction status updated to completed. PDB path: {pdb_file_path}"
+            )
+            return f"Prediction {prediction_id} completed successfully"
+        else:
+            raise Exception(
+                f"No PDB files found in {host_output_dir} after waiting for {timeout} seconds"
+            )
 
     except Prediction.DoesNotExist:
         logger.error(f"Prediction with id {prediction_id} does not exist")

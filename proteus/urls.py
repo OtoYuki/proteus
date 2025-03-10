@@ -17,11 +17,22 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
-from core.views import submit_sequence, home
+from core.views import (
+    submit_sequence,
+    home,
+    prediction_list,
+    prediction_detail,
+    serve_pdb,
+)
 
 urlpatterns = [
     path("", home, name="home"),  # Root URL
     path("admin/", admin.site.urls),
     # Include the URLs from the core app
     path("submit/", submit_sequence, name="submit_sequence"),
+    path("predictions/", prediction_list, name="prediction_list"),
+    path(
+        "predictions/<uuid:prediction_id>/", prediction_detail, name="prediction_detail"
+    ),
+    path("pdb/<uuid:prediction_id>/", serve_pdb, name="serve_pdb"),
 ]
