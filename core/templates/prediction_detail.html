@@ -130,7 +130,10 @@
             <div class="col-md-8">
                 {% if prediction.status == "completed" and pdb_file_exists %}
                 <div id="viewer" class="mb-2"></div>
-                <div class="d-flex justify-content-end">
+                <div class="d-flex justify-content-between">
+                    <button id="runSimulation" class="btn btn-primary">
+                        Run GROMACS Simulation
+                    </button>
                     <a href="{% url 'serve_pdb' prediction.prediction_id %}" class="btn btn-sm btn-outline-secondary"
                         download>
                         Download PDB File
