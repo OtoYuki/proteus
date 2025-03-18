@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trajectory Viewer</title>
+    <script src="https://cdn.jsdelivr.net/gh/arose/ngl@v2.0.0-dev.37/dist/ngl.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+        }
+
+        #viewport {
+            width: 100%;
+            height: 100vh;
+        }
+
+        .controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="viewport"></div>
+    <div class="controls">
+        <button id="playBtn">Play</button>
+        <button id="pauseBtn">Pause</button>
+        <input type="range" id="frameSlider" min="0" value="0" step="1">
+        <span id="frameCounter">Frame: 0</span>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const predictionId = urlParams.get('trajectory');
+
+            if (!predictionId) {
+                alert('No trajectory ID provided');
+                return;
+            }
+
+            const stage = new NGL.Stage('viewport');
+            stage.setParameters({ backgroundColor: 'white' });
+
+            // Load structure and trajectory
+            // Updated lines
+            const pdbUrl = `/pdb/${predictionId}/`;
+            const xtcUrl = `/download_trajectory/${predictionId}/`;
+
+            stage.loadFile(pdbUrl, { ext: 'pdb' }).then(function (component) {
+                component.addRepresentation('cartoon');
+                component.addRepresentation('licorice', { sele: 'hetero' });
+
+                stage.loadFile(xtcUrl, { ext: 'xtc' }).then(function (trajectory) {
+                    component.addTrajectory(trajectory);
+                    trajectory.trajectory.signals.frameChanged.add(function (frame) {
+                        document.getElementById('frameCounter').textContent = `Frame: ${frame}`;
+                        document.getElementById('frameSlider').value = frame;
+                    });
+
+                    document.getElementById('frameSlider').max = trajectory.trajectory.frameCount - 1;
+
+                    // Controls
+                    document.getElementById('playBtn').addEventListener('click', function () {
+                        component.trajectory.player.play();
+                    });
+
+                    document.getElementById('pauseBtn').addEventListener('click', function () {
+                        component.trajectory.player.pause();
+                    });
+
+                    document.getElementById('frameSlider').addEventListener('input', function () {
+                        component.trajectory.player.pause();
+                        component.trajectory.player.frame = parseInt(this.value);
+                    });
+
+                    component.autoView();
+                });
+            });
+        });
+    </script>
+</body>
+
+</html>

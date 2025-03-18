@@ -1,9 +1,15 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+from django.utils import timezone
 from .forms import SequenceForm
-from .models import ProteinSequence, Prediction
-from .tasks import run_colabfold  # Importing the Celery task
+from .models import ProteinSequence, Prediction, ValidationMetric
+from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Create your views here.
@@ -92,3 +98,152 @@ def serve_pdb(request, prediction_id):
     return FileResponse(
         open(prediction.pdb_file_path, "rb"), content_type="chemical/x-pdb"
     )
+
+
+@require_POST
+@csrf_exempt
+def start_gromacs_simulation(request, prediction_id):
+    """
+    View to start a GROMACS simulation for a protein structure.
+    Automatically cleans up stalled/failed simulations.
+    """
+    try:
+        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+
+        # Check if PDB file exists
+        if not prediction.pdb_file_path or not os.path.exists(prediction.pdb_file_path):
+            return JsonResponse(
+                {"status": "error", "message": "PDB file not found"}, status=404
+            )
+
+        # AUTO-CLEANUP: Find simulations that are stuck or stalled
+        # 1. Find "running" simulations that haven't been updated in 10+ minutes
+        stalled_time = timezone.now() - timezone.timedelta(minutes=10)
+        stalled_sims = ValidationMetric.objects.filter(
+            prediction=prediction,
+            status__in=["running", "pending"],
+            modified_date__lt=stalled_time,
+        )
+
+        # 2. Mark these as failed with a note
+        if stalled_sims.exists():
+            for sim in stalled_sims:
+                sim.status = "failed"
+                sim.validation_notes = f"{sim.validation_notes or ''}\nAutomatically marked as failed due to lack of progress."
+                sim.save()
+                logger.info(f"Auto-marked stalled simulation {sim.metric_id} as failed")
+
+        # 3. Check for any remaining active simulations after cleanup
+        active_sims = ValidationMetric.objects.filter(
+            prediction=prediction, status__in=["running", "pending"]
+        )
+
+        if active_sims.exists():
+            # There are still active simulations that aren't stalled
+            return JsonResponse(
+                {
+                    "status": "error",
+                    "message": f"A simulation is already {active_sims[0].status}",
+                    "simulation_id": str(active_sims[0].metric_id),
+                },
+                status=409,
+            )
+
+        # Start a new simulation task
+        task = run_gromacs_simulation.delay(prediction_id)
+
+        # Create a ValidationMetric entry
+        validation_metric = ValidationMetric(
+            prediction=prediction,
+            status="pending",
+            validation_notes=f"Simulation queued (task_id: {task.id})",
+        )
+        validation_metric.save()
+
+        return JsonResponse(
+            {
+                "status": "success",
+                "message": "GROMACS simulation started",
+                "task_id": task.id,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error starting simulation: {e}")
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+
+# A view to check the status of the GROMACS simulation
+def simulation_status(request, prediction_id):
+    """
+    View to check the status of the GROMACS simulation.
+    """
+    try:
+        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+
+        # Get the latest simulation for this prediction
+        latest_sim = (
+            ValidationMetric.objects.filter(prediction=prediction)
+            .order_by("-validation_date")
+            .first()
+        )
+
+        if not latest_sim:
+            return JsonResponse(
+                {
+                    "status": "not_found",
+                    "message": "No simulation found for this prediction",
+                }
+            )
+
+        return JsonResponse(
+            {
+                "status": "success",
+                "simulation_status": latest_sim.status,
+                "date": latest_sim.validation_date,
+                "trajectory_path": latest_sim.trajectory_path,
+                "notes": latest_sim.validation_notes,
+            }
+        )
+
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+
+# Add this function to your views.py file
+
+
+def download_trajectory(request, prediction_id):
+    """
+    View to download a simulation trajectory file.
+    """
+    try:
+        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+
+        # Get the latest completed simulation
+        latest_sim = (
+            ValidationMetric.objects.filter(prediction=prediction, status="completed")
+            .order_by("-validation_date")
+            .first()
+        )
+
+        if (
+            not latest_sim
+            or not latest_sim.trajectory_path
+            or not os.path.exists(latest_sim.trajectory_path)
+        ):
+            raise Http404("Trajectory file not found")
+
+        # Get filename from path
+        filename = os.path.basename(latest_sim.trajectory_path)
+
+        return FileResponse(
+            open(latest_sim.trajectory_path, "rb"),
+            content_type="application/octet-stream",
+            as_attachment=True,
+            filename=filename,
+        )
+
+    except Exception as e:
+        logger.error(f"Error serving trajectory file: {e}")
+        raise Http404(f"Error: {str(e)}")

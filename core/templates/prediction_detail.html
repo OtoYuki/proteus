@@ -48,9 +48,13 @@
             word-break: break-all;
         }
     </style>
+    {% load static %}
+    <script src="{% static 'js/gromacs.js' %}"></script>
 </head>
 
 <body>
+    <!-- Add a hidden element with the prediction ID -->
+    <div id="prediction-id" data-id="{{ prediction.prediction_id }}" style="display: none;"></div>
     <div class="container">
         <div class="row mb-3">
             <div class="col">

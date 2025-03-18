@@ -167,6 +167,7 @@ class ValidationMetric(models.Model):
     simulation_parameters = models.JSONField(blank=True, null=True)
     stability_score = models.FloatField(blank=True, null=True)
     validation_notes = models.TextField(blank=True, null=True)
+    modified_date = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "validation_metrics"

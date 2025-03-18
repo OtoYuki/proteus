@@ -17,12 +17,15 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path
+from core import views
 from core.views import (
     submit_sequence,
     home,
     prediction_list,
     prediction_detail,
     serve_pdb,
+    start_gromacs_simulation,
+    simulation_status,
 )
 
 urlpatterns = [
@@ -35,4 +38,21 @@ urlpatterns = [
         "predictions/<uuid:prediction_id>/", prediction_detail, name="prediction_detail"
     ),
     path("pdb/<uuid:prediction_id>/", serve_pdb, name="serve_pdb"),
+    # GROMACS simulation URLs
+    path(
+        "predictions/<uuid:prediction_id>/simulate/",
+        start_gromacs_simulation,
+        name="start_simulation",
+    ),
+    path(
+        "predictions/<uuid:prediction_id>/simulation_status/",
+        simulation_status,
+        name="simulation_status",
+    ),
+    # Download Trajectory URL
+    path(
+        "download_trajectory/<uuid:prediction_id>/",
+        views.download_trajectory,
+        name="download_trajectory",
+    ),
 ]
