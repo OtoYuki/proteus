@@ -1,48 +1,20 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends 'base.html' %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Protein Predictions - Proteus</title>
-    <!-- Bootstrap for styling -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
+{% block title %}Protein Predictions - Proteus{% endblock %}
 
-        .container {
-            background-color: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
-
-        h1 {
-            margin-bottom: 20px;
-        }
-
-        .badge {
-            font-size: 0.9em;
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <h1>Protein Structure Predictions</h1>
-
-        <div class="row mb-4">
-            <div class="col">
+{% block content %}
+<div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+        <div class="flex justify-between items-center mb-6">
+            <h1 class="text-3xl font-bold">Protein Structure Predictions</h1>
+            <div class="flex gap-2">
                 <a href="{% url 'submit_sequence' %}" class="btn btn-primary">Submit New Sequence</a>
-                <a href="{% url 'home' %}" class="btn btn-outline-secondary">Back to Home</a>
+                <a href="{% url 'home' %}" class="btn btn-outline">Back to Home</a>
             </div>
         </div>
 
-        <div class="table-responsive">
-            <table class="table table-striped">
+        <div class="overflow-x-auto">
+            <table class="table table-zebra w-full">
                 <thead>
                     <tr>
                         <th>Sequence Name</th>
@@ -59,32 +31,38 @@
                         <td>{{ prediction.prediction_date|date:"M d, Y H:i" }}</td>
                         <td>
                             {% if prediction.status == "pending" %}
-                            <span class="badge bg-warning">Pending</span>
+                            <div class="badge badge-warning">Pending</div>
                             {% elif prediction.status == "running" %}
-                            <span class="badge bg-info">Running</span>
+                            <div class="badge badge-info">Running</div>
                             {% elif prediction.status == "completed" %}
-                            <span class="badge bg-success">Completed</span>
+                            <div class="badge badge-success">Completed</div>
                             {% elif prediction.status == "failed" %}
-                            <span class="badge bg-danger">Failed</span>
+                            <div class="badge badge-error">Failed</div>
                             {% else %}
-                            <span class="badge bg-secondary">{{ prediction.status }}</span>
+                            <div class="badge">{{ prediction.status }}</div>
                             {% endif %}
                         </td>
                         <td>{{ prediction.sequence.sequence_length }}</td>
                         <td>
-                            <a href="{% url 'prediction_detail' prediction.prediction_id %}"
-                                class="btn btn-sm btn-primary">View</a>
+                            <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
+                               class="btn btn-primary btn-sm">View</a>
                         </td>
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="5" class="text-center">No predictions available.</td>
+                        <td colspan="5" class="text-center py-4">
+                            <div class="flex flex-col items-center">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-base-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                                <span class="text-base-content opacity-60">No predictions available.</span>
+                            </div>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
-</body>
-
-</html>
+</div>
+{% endblock %}

@@ -26,7 +26,9 @@ from core.views import (
     serve_pdb,
     start_gromacs_simulation,
     simulation_status,
+    signup_view,
 )
+from django.contrib.auth import views as auth_views
 
 urlpatterns = [
     path("", home, name="home"),  # Root URL
@@ -54,5 +56,35 @@ urlpatterns = [
         "download_trajectory/<uuid:prediction_id>/",
         views.download_trajectory,
         name="download_trajectory",
+    ),
+    path(
+        "frame/<uuid:prediction_id>/<int:frame_number>/",
+        views.serve_trajectory_frame,
+        name="serve_trajectory_frame",
+    ),
+]
+
+# Add these to your existing urlpatterns list
+urlpatterns += [
+    path("login/", auth_views.LoginView.as_view(), name="login"),
+    path("logout/", auth_views.LogoutView.as_view(next_page="/"), name="logout"),
+    path("signup/", signup_view, name="signup"),
+    path(
+        "password-reset/", auth_views.PasswordResetView.as_view(), name="password_reset"
+    ),
+    path(
+        "password-reset/done/",
+        auth_views.PasswordResetDoneView.as_view(),
+        name="password_reset_done",
+    ),
+    path(
+        "reset/<uidb64>/<token>/",
+        auth_views.PasswordResetConfirmView.as_view(),
+        name="password_reset_confirm",
+    ),
+    path(
+        "reset/done/",
+        auth_views.PasswordResetCompleteView.as_view(),
+        name="password_reset_complete",
     ),
 ]

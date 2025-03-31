@@ -1,46 +1,95 @@
-<!DOCTYPE html>
-<html lang="en">
+{% extends 'base.html' %}
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Submit Protein Sequence</title>
-    <!-- Bootstrap CSS -->
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            background: #f0f2f5;
-            padding-top: 50px;
-        }
+{% block title %}Submit Protein Sequence - Proteus{% endblock %}
 
-        .glass-card {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(10px);
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            max-width: 600px;
-            margin: auto;
-        }
-    </style>
-</head>
-
-<body>
-    <div class="container">
-        <div class="glass-card">
-            <h2 class="mb-4 text-center">Submit Protein Sequence</h2>
-            <form method="post">
-                {% csrf_token %}
-                {{ form.as_p }}
-                <div class="d-grid gap-2">
-                    <button type="submit" class="btn btn-primary">Submit</button>
+{% block content %}
+<div class="card bg-base-100 shadow-xl max-w-3xl mx-auto">
+    <div class="card-body">
+        <h1 class="text-3xl font-bold mb-6">Submit Protein Sequence</h1>
+        
+        <form method="post">
+            {% csrf_token %}
+            
+            {% if form.errors %}
+            <div class="alert alert-error mb-4">
+                <div>
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span>Please correct the errors below.</span>
                 </div>
-            </form>
-        </div>
+            </div>
+            {% endif %}
+            
+            <!-- Sequence Name -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text font-medium">Sequence Name</span>
+                    <span class="label-text-alt text-error">{{ form.sequence_name.errors }}</span>
+                </label>
+                <input type="text" name="sequence_name" class="input input-bordered" value="{{ form.sequence_name.value|default:'' }}" required>
+                <label class="label">
+                    <span class="label-text-alt">A short, descriptive name for your protein</span>
+                </label>
+            </div>
+            
+            <!-- FASTA Sequence -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text font-medium">FASTA Sequence</span>
+                    <span class="label-text-alt text-error">{{ form.sequence_fasta.errors }}</span>
+                </label>
+                <textarea name="sequence_fasta" class="textarea textarea-bordered h-32 font-mono" placeholder=">Sequence_ID&#10;MVKVGVNGFGRIGRLVTRAAFNSGKVDIVA..." required>{{ form.sequence_fasta.value|default:'' }}</textarea>
+                <label class="label">
+                    <span class="label-text-alt">Paste your protein sequence in FASTA format</span>
+                </label>
+            </div>
+            
+            <!-- Description (Optional) -->
+            <div class="form-control mb-4">
+                <label class="label">
+                    <span class="label-text font-medium">Description (Optional)</span>
+                    <span class="label-text-alt text-error">{{ form.description.errors }}</span>
+                </label>
+                <textarea name="description" class="textarea textarea-bordered h-20">{{ form.description.value|default:'' }}</textarea>
+                <label class="label">
+                    <span class="label-text-alt">Add any additional information about this protein</span>
+                </label>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Organism (Optional) -->
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text font-medium">Organism (Optional)</span>
+                        <span class="label-text-alt text-error">{{ form.organism.errors }}</span>
+                    </label>
+                    <input type="text" name="organism" class="input input-bordered" value="{{ form.organism.value|default:'' }}">
+                    <label class="label">
+                        <span class="label-text-alt">E.g., "Homo sapiens"</span>
+                    </label>
+                </div>
+                
+                <!-- Source (Optional) -->
+                <div class="form-control mb-4">
+                    <label class="label">
+                        <span class="label-text font-medium">Source (Optional)</span>
+                        <span class="label-text-alt text-error">{{ form.source.errors }}</span>
+                    </label>
+                    <input type="text" name="source" class="input input-bordered" value="{{ form.source.value|default:'' }}">
+                    <label class="label">
+                        <span class="label-text-alt">E.g., "UniProt", "GenBank"</span>
+                    </label>
+                </div>
+            </div>
+            
+            <div class="flex justify-between mt-6">
+                <a href="{% url 'prediction_list' %}" class="btn btn-outline">Cancel</a>
+                <button type="submit" class="btn btn-primary">Submit Sequence</button>
+            </div>
+        </form>
     </div>
+</div>
 
-    <!-- Bootstrap Bundle with Popper -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-
-</html>
+<div class="mt-8 text-center text-sm text-base-content opacity-70">
+    <p>Processing may take several minutes depending on sequence length and server load.</p>
+</div>
+{% endblock %}

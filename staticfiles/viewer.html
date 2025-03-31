@@ -4,87 +4,154 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trajectory Viewer</title>
-    <script src="https://cdn.jsdelivr.net/gh/arose/ngl@v2.0.0-dev.37/dist/ngl.js"></script>
+    <title>Protein Trajectory Viewer</title>
+    <script src="https://unpkg.com/molstar@3.30.0/lib/molstar.js"></script>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-        }
-
-        #viewport {
+        body,
+        html {
             width: 100%;
-            height: 100vh;
+            height: 100%;
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+            font-family: sans-serif;
         }
 
-        .controls {
+        #app {
             position: absolute;
-            top: 10px;
-            left: 10px;
-            background: rgba(255, 255, 255, 0.7);
-            padding: 10px;
-            border-radius: 5px;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
         }
     </style>
 </head>
 
 <body>
-    <div id="viewport"></div>
-    <div class="controls">
-        <button id="playBtn">Play</button>
-        <button id="pauseBtn">Pause</button>
-        <input type="range" id="frameSlider" min="0" value="0" step="1">
-        <span id="frameCounter">Frame: 0</span>
-    </div>
+    <div id="app"></div>
+    <div id="loading">Loading Protein Structure...</div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', function () {
+    <script src="https://cdn.jsdelivr.net/npm/molstar@3.30.0/build/molstar.js">
+        document.addEventListener('DOMContentLoaded', async function () {
             const urlParams = new URLSearchParams(window.location.search);
             const predictionId = urlParams.get('trajectory');
 
             if (!predictionId) {
-                alert('No trajectory ID provided');
+                document.getElementById('loading').textContent = 'Error: No prediction ID provided';
                 return;
             }
 
-            const stage = new NGL.Stage('viewport');
-            stage.setParameters({ backgroundColor: 'white' });
+            const loadingIndicator = document.getElementById('loading');
+            loadingIndicator.textContent = 'Loading protein structure...';
 
-            // Load structure and trajectory
-            // Updated lines
+            // URLs for PDB and trajectory files
             const pdbUrl = `/pdb/${predictionId}/`;
-            const xtcUrl = `/download_trajectory/${predictionId}/`;
+            const trajectoryUrl = `/download_trajectory/${predictionId}/`;
 
-            stage.loadFile(pdbUrl, { ext: 'pdb' }).then(function (component) {
-                component.addRepresentation('cartoon');
-                component.addRepresentation('licorice', { sele: 'hetero' });
+            // Check if molstar is available in the global window object
+            if (!window.molstar) {
+                loadingIndicator.textContent = 'Error: Mol* library not loaded. Please try refreshing the page.';
+                console.error('Mol* library not loaded');
+                return;
+            }
 
-                stage.loadFile(xtcUrl, { ext: 'xtc' }).then(function (trajectory) {
-                    component.addTrajectory(trajectory);
-                    trajectory.trajectory.signals.frameChanged.add(function (frame) {
-                        document.getElementById('frameCounter').textContent = `Frame: ${frame}`;
-                        document.getElementById('frameSlider').value = frame;
-                    });
-
-                    document.getElementById('frameSlider').max = trajectory.trajectory.frameCount - 1;
-
-                    // Controls
-                    document.getElementById('playBtn').addEventListener('click', function () {
-                        component.trajectory.player.play();
-                    });
-
-                    document.getElementById('pauseBtn').addEventListener('click', function () {
-                        component.trajectory.player.pause();
-                    });
-
-                    document.getElementById('frameSlider').addEventListener('input', function () {
-                        component.trajectory.player.pause();
-                        component.trajectory.player.frame = parseInt(this.value);
-                    });
-
-                    component.autoView();
-                });
+            // Initialize Mol* viewer - use window.molstar to access the library
+            const { createPluginUI } = window.molstar;
+            const plugin = await createPluginUI({
+                target: document.getElementById('app'),
+                layoutIsExpanded: false,
+                layoutShowControls: true,
+                layoutShowRemoteState: false,
+                layoutShowSequence: true,
+                layoutShowLog: true,
+                layoutShowLeftPanel: true
             });
+
+            try {
+                // First load the PDB structure
+                await plugin.clear();
+                loadingIndicator.textContent = 'Loading PDB structure...';
+
+                const data = await plugin.builders.data.download({ url: pdbUrl }, { state: { isGhost: true } });
+                const trajectory = await plugin.builders.structure.parseTrajectory(data, 'pdb');
+
+                await plugin.builders.structure.hierarchy.applyPreset(trajectory, 'default', {
+                    structure: {
+                        name: 'Protein Structure'
+                    }
+                });
+
+                // Hide loading indicator after structure is loaded
+                loadingIndicator.style.display = 'none';
+
+                // Now try to load the trajectory file
+                try {
+                    loadingIndicator.textContent = 'Loading trajectory...';
+                    loadingIndicator.style.display = 'block';
+
+                    const trajData = await plugin.builders.data.download({ url: trajectoryUrl });
+                    const parsed = await plugin.builders.structure.parseTrajectory(trajData, 'xtc');
+
+                    if (parsed) {
+                        await plugin.builders.structure.hierarchy.applyActionToStructure(
+                            trajectory.ref,
+                            'trajectory-update',
+                            { trajectory: parsed.ref }
+                        );
+
+                        // Show trajectory controls
+                        await plugin.builders.structure.component.updateRepresentations(
+                            plugin.managers.structure.hierarchy.current.structures[0],
+                            { type: 'spacefill', color: 'uniform', colorParams: { value: { r: 0.6, g: 0.8, b: 1 } } }
+                        );
+
+                        // Setup trajectory player
+                        const state = plugin.state.data;
+                        const trajectory_component = state.select('trajectory')[0];
+
+                        if (trajectory_component) {
+                            await plugin.builders.structure.component.updateTransform(
+                                plugin.managers.structure.hierarchy.current.structures[0],
+                                {
+                                    translate: { x: 0, y: 0, z: 0 },
+                                    rotate: { x: 0, y: 0, z: 0 }
+                                }
+                            );
+                        }
+
+                        loadingIndicator.textContent = 'Trajectory loaded successfully! Use the controls to play.';
+                        setTimeout(() => {
+                            loadingIndicator.style.display = 'none';
+                        }, 3000);
+                    } else {
+                        loadingIndicator.textContent = 'Could not parse trajectory file format.';
+                        setTimeout(() => {
+                            loadingIndicator.style.display = 'none';
+                        }, 3000);
+                    }
+                } catch (trajError) {
+                    console.error('Error loading trajectory:', trajError);
+                    loadingIndicator.textContent = 'Error loading trajectory. Showing static structure.';
+                    setTimeout(() => {
+                        loadingIndicator.style.display = 'none';
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('Error loading structure:', error);
+                loadingIndicator.textContent = 'Error loading protein structure: ' + error.message;
+            }
         });
     </script>
 </body>

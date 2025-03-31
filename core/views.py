@@ -8,6 +8,12 @@ from .models import ProteinSequence, Prediction, ValidationMetric
 from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
 import logging
+from django.contrib.auth import login, authenticate
+from django.contrib.auth.forms import UserCreationForm
+from django.contrib import messages
+from django.shortcuts import render, redirect
+from .forms import CustomUserCreationForm
+
 
 logger = logging.getLogger(__name__)
 
@@ -210,19 +216,16 @@ def simulation_status(request, prediction_id):
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
 
 
-# Add this function to your views.py file
-
-
 def download_trajectory(request, prediction_id):
-    """
-    View to download a simulation trajectory file.
-    """
+    """View to serve trajectory files for the NGL viewer."""
     try:
         prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
 
         # Get the latest completed simulation
         latest_sim = (
-            ValidationMetric.objects.filter(prediction=prediction, status="completed")
+            ValidationMetric.objects.filter(
+                prediction_id=prediction_id, status="completed"
+            )
             .order_by("-validation_date")
             .first()
         )
@@ -234,16 +237,85 @@ def download_trajectory(request, prediction_id):
         ):
             raise Http404("Trajectory file not found")
 
-        # Get filename from path
-        filename = os.path.basename(latest_sim.trajectory_path)
+        # Get file information
+        file_path = latest_sim.trajectory_path
+        file_size = os.path.getsize(file_path)
 
-        return FileResponse(
-            open(latest_sim.trajectory_path, "rb"),
+        # Debug: Check file type by reading first few bytes
+        with open(file_path, "rb") as f:
+            header_bytes = f.read(8)  # Read first 8 bytes
+            logger.info(f"File header (hex): {header_bytes.hex()}")
+
+        # Open the file for streaming
+        file_handle = open(file_path, "rb")
+
+        # Create response with appropriate headers
+        response = FileResponse(
+            file_handle,
             content_type="application/octet-stream",
-            as_attachment=True,
-            filename=filename,
+            as_attachment=False,
+            filename="trajectory.xtc",
         )
 
+        # Add headers that help with file identification and caching
+        response["Content-Disposition"] = 'inline; filename="trajectory.xtc"'
+        response["Content-Length"] = str(file_size)
+        response["X-File-Format"] = "xtc"
+        response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+
+        # Log successful file serving for debugging
+        logger.info(f"Serving trajectory file: {file_path} (size: {file_size} bytes)")
+
+        return response
     except Exception as e:
         logger.error(f"Error serving trajectory file: {e}")
         raise Http404(f"Error: {str(e)}")
+
+
+# Add this to views.py
+def serve_trajectory_frame(request, prediction_id, frame_number):
+    """Serve individual PDB frames from a trajectory"""
+    try:
+        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+
+        # Get the latest completed simulation
+        latest_sim = (
+            ValidationMetric.objects.filter(
+                prediction_id=prediction_id, status="completed"
+            )
+            .order_by("-validation_date")
+            .first()
+        )
+
+        if not latest_sim or not latest_sim.trajectory_path:
+            raise Http404("Trajectory not found")
+
+        # Convert XTC to PDB frames using MDAnalysis or similar
+        # This is where you'd extract frame 'frame_number' from the XTC file
+        # For now, just return the original PDB for any frame request
+
+        return FileResponse(
+            open(prediction.pdb_file_path, "rb"), content_type="chemical/x-pdb"
+        )
+
+    except Exception as e:
+        logger.error(f"Error serving trajectory frame: {e}")
+        raise Http404(f"Error: {str(e)}")
+
+
+# Add this function to your views.py
+
+
+def signup_view(request):
+    if request.method == "POST":
+        form = CustomUserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            messages.success(request, "Account created successfully!")
+            return redirect("home")
+    else:
+        form = CustomUserCreationForm()
+    return render(request, "registration/signup.html", {"form": form})
