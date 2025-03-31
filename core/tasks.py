@@ -1,11 +1,12 @@
 from datetime import timezone
 from celery import shared_task
 import subprocess
-from .models import Prediction, ValidationMetric
+from .models import JobQueue, Log, MLRanking, Prediction, SystemMetric, ValidationMetric
 import os
 import logging
 import time
 import glob
+import socket
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +14,107 @@ logger = logging.getLogger(__name__)
 # ColabFold prediction task
 @shared_task
 def run_colabfold(prediction_id):
+    """
+    Run a ColabFold prediction for a given prediction ID.
+    """
     logger.info(f"Starting ColabFold prediction for prediction_id: {prediction_id}")
 
+    # Check if Celery worker is running, start one if not
     try:
+        # Check for running Celery workers
+        ps_cmd = "ps aux | grep 'celery worker' | grep -v grep | wc -l"
+        ps_result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True)
+        worker_count = int(ps_result.stdout.strip())
+
+        if worker_count == 0:
+            logger.warning("No Celery workers detected. Starting a worker...")
+            # Start Celery worker as a background process
+            worker_cmd = (
+                "cd /home/sire/proteus && "
+                "nohup celery -A proteus worker --loglevel=info "
+                "> /home/sire/celery_worker.log 2>&1 &"
+            )
+            subprocess.run(worker_cmd, shell=True)
+            logger.info("Started new Celery worker in background")
+            time.sleep(5)  # Give it a moment to start up
+    except Exception as e:
+        logger.error(f"Error checking/starting Celery worker: {e}")
+
+    # Get or create a job entry for this prediction
+    job = None
+
+    try:
+        # First, create or update the job entry
+        try:
+            # Find existing job or create new one
+            job = JobQueue.objects.filter(
+                job_parameters__prediction_id=str(prediction_id),
+                job_type="colabfold_prediction",
+            ).first()
+
+            if not job:
+                # Get prediction to find the user
+                prediction = Prediction.objects.get(prediction_id=prediction_id)
+                user = prediction.sequence.user
+
+                # Create new job entry
+                job = JobQueue.objects.create(
+                    user=user,
+                    job_type="colabfold_prediction",
+                    status="running",
+                    started_at=timezone.now(),
+                    job_parameters={"prediction_id": str(prediction_id)},
+                )
+                logger.info(f"Created new job for prediction: {prediction_id}")
+            else:
+                # Update existing job
+                job.status = "running"
+                job.started_at = timezone.now()
+                job.save()
+                logger.info(f"Updated existing job for prediction: {prediction_id}")
+        except Exception as e:
+            logger.error(f"Error creating/updating job entry: {e}")
+            # Continue with prediction even if job tracking fails
+
+        # Create a log entry for the prediction start
+        try:
+            prediction = Prediction.objects.get(prediction_id=prediction_id)
+            Log.objects.create(
+                user=prediction.sequence.user,
+                action="colabfold_prediction_started",
+                details=f"Started ColabFold prediction for {prediction.sequence.sequence_name}",
+                status="success",
+                component="prediction_engine",
+            )
+        except Exception as e:
+            logger.error(f"Error creating log entry: {e}")
+
+        # Record system metrics (if possible)
+        try:
+            import psutil
+
+            cpu_usage = psutil.cpu_percent()
+            memory_usage = psutil.virtual_memory().percent
+            disk_usage = psutil.disk_usage("/").percent
+            active_jobs = JobQueue.objects.filter(status="running").count()
+
+            SystemMetric.objects.create(
+                cpu_usage=cpu_usage,
+                memory_usage=memory_usage,
+                disk_usage=disk_usage,
+                active_jobs=active_jobs,
+                status="normal",
+                performance_metrics={
+                    "prediction_id": str(prediction_id),
+                    "action": "prediction_started",
+                },
+            )
+            logger.info(f"Recorded system metrics at prediction start")
+        except ImportError:
+            logger.warning("psutil not installed, skipping system metrics")
+        except Exception as e:
+            logger.error(f"Error recording system metrics: {e}")
+
         # Retrieve prediction object
         prediction = Prediction.objects.get(prediction_id=prediction_id)
         sequence = prediction.sequence
@@ -52,8 +151,10 @@ def run_colabfold(prediction_id):
 
         # Update status to running
         prediction.status = "running"
+        sequence.status = "running"  # Update sequence status to running
         prediction.save()
-        logger.info("Prediction status updated to running")
+        sequence.save()
+        logger.info("Prediction and sequence status updated to running")
 
         # Check and manage ColabFold container
         check_exists_cmd = "docker ps -aq -f name=colabfold"
@@ -88,6 +189,7 @@ def run_colabfold(prediction_id):
             time.sleep(5)
 
         # Run ColabFold
+        start_time = time.time()
         cmd = (
             f"docker exec -t colabfold /bin/bash -c "
             f"'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.8 && "
@@ -99,81 +201,385 @@ def run_colabfold(prediction_id):
         )
         logger.info(f"Running command: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
-        logger.info("ColabFold prediction completed")
+        end_time = time.time()
+        execution_time = end_time - start_time
+        logger.info(f"ColabFold prediction completed in {execution_time:.2f} seconds")
 
         # Extra sleep to allow file system sync (especially on mounted volumes)
         time.sleep(10)
 
-        # Poll for the PDB file using glob for a more robust file search
-        timeout = 120  # seconds
-        poll_interval = 5  # seconds
-        pdb_file_path = None
-        elapsed = 0
-
-        while elapsed < timeout:
+        # Find specific output files
+        pdb_files = glob.glob(
+            os.path.join(host_output_dir, "*unrelaxed_rank_001*seed_000.pdb")
+        )
+        if not pdb_files:
+            # Fallback to any PDB
             pdb_files = glob.glob(os.path.join(host_output_dir, "*.pdb"))
-            logger.info(f"Polling at {elapsed}s, found pdb_files: {pdb_files}")
-            if pdb_files:
-                pdb_file_path = pdb_files[0]
-                logger.info(f"Found PDB file: {pdb_file_path}")
-                break
-            time.sleep(poll_interval)
-            elapsed += poll_interval
 
+        pae_files = glob.glob(
+            os.path.join(host_output_dir, "*predicted_aligned_error*.json")
+        )
+        scores_files = glob.glob(
+            os.path.join(host_output_dir, "*scores_rank_001*.json")
+        )
+        config_file = os.path.join(host_output_dir, "config.json")
+
+        logger.info(f"Found PDB files: {pdb_files}")
+        logger.info(f"Found PAE files: {pae_files}")
+        logger.info(f"Found scores files: {scores_files}")
+
+        pdb_file_path = pdb_files[0] if pdb_files else None
+        pae_file_path = pae_files[0] if pae_files else None
+        scores_file_path = scores_files[0] if scores_files else None
+
+        # Extract data from scores file
+        plddt_score = None
+        confidence_score = None
+        metadata = {}
+
+        if scores_file_path and os.path.exists(scores_file_path):
+            try:
+                import json
+
+                with open(scores_file_path, "r") as f:
+                    scores_data = json.load(f)
+                    logger.info(f"Scores data: {scores_data}")
+
+                    # Extract pLDDT score (mean plddt)
+                    if "plddt" in scores_data:
+                        plddt_values = scores_data["plddt"]
+                        if isinstance(plddt_values, list):
+                            plddt_score = sum(plddt_values) / len(plddt_values)
+                        else:
+                            plddt_score = plddt_values
+                        logger.info(f"Extracted pLDDT score: {plddt_score}")
+
+                    # Use plddt as confidence score as well
+                    confidence_score = plddt_score
+
+                    # Store all scores as metadata
+                    metadata.update({"scores": scores_data})
+            except Exception as e:
+                logger.error(f"Error extracting scores: {e}")
+
+        # Extract config data
+        if os.path.exists(config_file):
+            try:
+                import json
+
+                with open(config_file, "r") as f:
+                    config_data = json.load(f)
+                    logger.info(f"Config data: {config_data}")
+
+                    # Extract model version
+                    model_version = config_data.get("model_name", "colabfold-1.5.5")
+
+                    # Add to metadata
+                    metadata.update({"config": config_data})
+            except Exception as e:
+                logger.error(f"Error extracting config: {e}")
+                model_version = "colabfold-1.5.5"  # Default if extraction fails
+        else:
+            model_version = "colabfold-1.5.5"  # Default if file doesn't exist
+
+        # If we couldn't find PDB files through glob, try the previous approach
         if not pdb_file_path:
-            # Fallback: use the find command
-            find_cmd = f"find {host_output_dir} -type f -name '*.pdb'"
-            logger.info(f"Trying find command: {find_cmd}")
-            find_result = subprocess.run(
-                find_cmd, shell=True, capture_output=True, text=True
-            )
-            logger.info(f"Find command output: '{find_result.stdout}'")
-            found_files = [f for f in find_result.stdout.strip().split("\n") if f]
-            if found_files:
-                pdb_file_path = found_files[0]
-                logger.info(f"Found PDB file using find command: {pdb_file_path}")
+            # Poll for the PDB file using glob for a more robust file search
+            timeout = 120  # seconds
+            poll_interval = 5  # seconds
+            elapsed = 0
+
+            while elapsed < timeout:
+                pdb_files = glob.glob(os.path.join(host_output_dir, "*.pdb"))
+                logger.info(f"Polling at {elapsed}s, found pdb_files: {pdb_files}")
+                if pdb_files:
+                    pdb_file_path = pdb_files[0]
+                    logger.info(f"Found PDB file: {pdb_file_path}")
+                    break
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+
+            if not pdb_file_path:
+                # Fallback: use the find command
+                find_cmd = f"find {host_output_dir} -type f -name '*.pdb'"
+                logger.info(f"Trying find command: {find_cmd}")
+                find_result = subprocess.run(
+                    find_cmd, shell=True, capture_output=True, text=True
+                )
+                logger.info(f"Find command output: '{find_result.stdout}'")
+                found_files = [f for f in find_result.stdout.strip().split("\n") if f]
+                if found_files:
+                    pdb_file_path = found_files[0]
+                    logger.info(f"Found PDB file using find command: {pdb_file_path}")
 
         if pdb_file_path:
+            # Update all fields in the prediction
             prediction.pdb_file_path = pdb_file_path
             prediction.status = "completed"
-            prediction.save()
-            logger.info(
-                f"Prediction status updated to completed. PDB path: {pdb_file_path}"
+
+            if pae_file_path:
+                prediction.pae_file_path = pae_file_path
+                logger.info(f"Updated PAE file path: {pae_file_path}")
+
+            if plddt_score is not None:
+                prediction.plddt_score = plddt_score
+                logger.info(f"Updated pLDDT score: {plddt_score}")
+
+            if confidence_score is not None:
+                prediction.confidence_score = confidence_score
+                logger.info(f"Updated confidence score: {confidence_score}")
+
+            prediction.model_version = model_version
+            logger.info(f"Updated model version: {model_version}")
+
+            # Add additional metadata
+            import datetime
+
+            metadata.update(
+                {
+                    "sequence_name": sequence.sequence_name,
+                    "sequence_length": len(sequence.sequence_fasta.replace("\n", "")),
+                    "completion_time": datetime.datetime.now().isoformat(),
+                    "execution_time_seconds": execution_time,
+                    "host_machine": (
+                        socket.gethostname()
+                        if hasattr(socket, "gethostname")
+                        else "unknown"
+                    ),
+                }
             )
-            return f"Prediction {prediction_id} completed successfully"
-        else:
-            raise Exception(
-                f"No PDB files found in {host_output_dir} after waiting for {timeout} seconds"
+            prediction.prediction_metadata = metadata
+            logger.info(f"Updated prediction metadata")
+
+            prediction.save()
+
+            # IMPORTANT FIX: Update ProteinSequence status to completed
+            sequence.status = "completed"
+            sequence.save()
+            logger.info(f"Updated sequence {sequence.sequence_id} status to completed")
+
+            logger.info(
+                f"Prediction status updated to completed with all fields populated. PDB path: {pdb_file_path}"
             )
 
+            # Update job status
+            if job:
+                job.status = "completed"
+                job.completed_at = timezone.now()
+                job.save()
+                logger.info(f"Updated job status to completed")
+
+            # Add basic validation metrics based on PDB structure
+            try:
+                # Simple PDB parser to count atoms and residues
+                atom_count = 0
+                residue_count = 0
+
+                with open(pdb_file_path, "r") as pdb_file:
+                    prev_res_num = None
+                    for line in pdb_file:
+                        if line.startswith("ATOM"):
+                            atom_count += 1
+                            # Extract residue number (positions 22-26 in PDB format)
+                            try:
+                                res_num = int(line[22:26].strip())
+                                if prev_res_num != res_num:
+                                    residue_count += 1
+                                    prev_res_num = res_num
+                            except (ValueError, IndexError):
+                                pass
+
+                # Calculate approximate radius of gyration (very simplistic estimation)
+                approx_rg = 1.2 * pow(residue_count, 1 / 3)  # Very rough approximation
+
+                # Create validation entry with basic structure info
+                ValidationMetric.objects.create(
+                    prediction=prediction,
+                    status="initial",
+                    rg=approx_rg,
+                    stability_score=plddt_score if plddt_score else None,
+                    validation_notes=f"Initial structure metrics: {atom_count} atoms, {residue_count} residues",
+                    simulation_parameters={
+                        "atom_count": atom_count,
+                        "residue_count": residue_count,
+                    },
+                )
+                logger.info(
+                    f"Created initial validation metrics with {atom_count} atoms and {residue_count} residues"
+                )
+            except Exception as e:
+                logger.error(f"Error creating initial validation metrics: {e}")
+                # Non-critical error, continue execution
+
+            # Record final system metrics
+            try:
+                import psutil
+
+                SystemMetric.objects.create(
+                    cpu_usage=psutil.cpu_percent(),
+                    memory_usage=psutil.virtual_memory().percent,
+                    disk_usage=psutil.disk_usage("/").percent,
+                    active_jobs=JobQueue.objects.filter(status="running").count(),
+                    status="normal",
+                    performance_metrics={
+                        "prediction_id": str(prediction_id),
+                        "action": "prediction_completed",
+                        "execution_time": execution_time,
+                    },
+                )
+                logger.info(f"Recorded final system metrics")
+            except Exception as e:
+                logger.error(f"Error recording final system metrics: {e}")
+
+            # Create a log entry for successful completion
+            try:
+                Log.objects.create(
+                    user=prediction.sequence.user,
+                    action="colabfold_prediction_completed",
+                    details=f"Completed ColabFold prediction for {prediction.sequence.sequence_name}"
+                    + (
+                        f" with pLDDT {plddt_score:.2f}"
+                        if plddt_score is not None
+                        else ""
+                    ),
+                    status="success",
+                    component="prediction_engine",
+                )
+                logger.info(f"Created success log entry")
+            except Exception as e:
+                logger.error(f"Error creating completion log entry: {e}")
+
+            return (
+                f"Prediction {prediction_id} completed successfully with enhanced data"
+            )
+        else:
+            # Handle failure due to missing PDB file
+            error_msg = f"No PDB files found in {host_output_dir} after waiting for {timeout} seconds"
+
+            prediction.status = "failed"
+            prediction.save()
+
+            # IMPORTANT FIX: Update ProteinSequence status to failed
+            sequence.status = "failed"
+            sequence.save()
+            logger.info(f"Updated sequence {sequence.sequence_id} status to failed")
+
+            if job:
+                job.status = "failed"
+                job.completed_at = timezone.now()
+                job.save()
+
+            # Log the failure
+            try:
+                Log.objects.create(
+                    user=prediction.sequence.user,
+                    action="colabfold_prediction_failed",
+                    details=error_msg,
+                    status="error",
+                    component="prediction_engine",
+                )
+            except Exception as e:
+                logger.error(f"Error creating failure log entry: {e}")
+
+            raise Exception(error_msg)
+
     except Prediction.DoesNotExist:
-        logger.error(f"Prediction with id {prediction_id} does not exist")
-        return f"Error: Prediction with id {prediction_id} does not exist"
+        error_msg = f"Prediction with id {prediction_id} does not exist"
+        logger.error(error_msg)
+
+        # Update job status if exists
+        if job:
+            job.status = "failed"
+            job.completed_at = timezone.now()
+            job.save()
+
+        # Create error log
+        try:
+            Log.objects.create(
+                action="colabfold_prediction_error",
+                details=error_msg,
+                status="error",
+                component="prediction_engine",
+            )
+        except Exception as e:
+            logger.error(f"Error creating log entry: {e}")
+
+        return f"Error: {error_msg}"
+
     except subprocess.CalledProcessError as e:
-        logger.error(f"Command execution failed: {e}")
+        error_msg = f"Command execution failed: {e}"
+        logger.error(error_msg)
+
         try:
             prediction = Prediction.objects.get(prediction_id=prediction_id)
             prediction.status = "failed"
             prediction.save()
+
+            # IMPORTANT FIX: Update ProteinSequence status to failed
+            sequence = prediction.sequence
+            sequence.status = "failed"
+            sequence.save()
+            logger.info(f"Updated sequence {sequence.sequence_id} status to failed")
+
             logger.info("Prediction status updated to failed due to subprocess error")
+
+            # Update job status
+            if job:
+                job.status = "failed"
+                job.completed_at = timezone.now()
+                job.save()
+
+            # Log the failure
+            Log.objects.create(
+                user=prediction.sequence.user,
+                action="colabfold_prediction_failed",
+                details=f"Command execution failed: {e.stderr if hasattr(e, 'stderr') else str(e)}",
+                status="error",
+                component="prediction_engine",
+            )
         except Exception as inner_e:
-            logger.error(f"Failed to update prediction status: {inner_e}")
+            logger.error(f"Failed to update status records: {inner_e}")
+
         return f"Error: Command execution failed for prediction {prediction_id}"
+
     except Exception as e:
-        logger.error(f"Error in run_colabfold: {e}")
+        error_msg = f"Error in run_colabfold: {e}"
+        logger.error(error_msg)
+
         try:
             prediction = Prediction.objects.get(prediction_id=prediction_id)
             prediction.status = "failed"
             prediction.save()
+
+            # IMPORTANT FIX: Update ProteinSequence status to failed
+            sequence = prediction.sequence
+            sequence.status = "failed"
+            sequence.save()
+            logger.info(f"Updated sequence {sequence.sequence_id} status to failed")
+
             logger.info("Prediction status updated to failed")
+
+            # Update job status
+            if job:
+                job.status = "failed"
+                job.completed_at = timezone.now()
+                job.save()
+
+            # Log the failure
+            Log.objects.create(
+                user=prediction.sequence.user,
+                action="colabfold_prediction_failed",
+                details=f"Error: {str(e)}",
+                status="error",
+                component="prediction_engine",
+            )
         except Exception as inner_e:
-            logger.error(f"Failed to update prediction status: {inner_e}")
+            logger.error(f"Failed to update status records: {inner_e}")
+
         return f"Error: {str(e)}"
 
 
 # GROMACS Task
-
-
 @shared_task
 def run_gromacs_simulation(prediction_id):
     """

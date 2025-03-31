@@ -25,19 +25,47 @@
                     </div>
                 </div>
                 {% endif %}
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">First Name</span>
+                        </label>
+                        <input type="text" name="first_name" class="input input-bordered" 
+                               value="{{ form.first_name.value|default:'' }}">
+                    </div>
+                    
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Last Name</span>
+                        </label>
+                        <input type="text" name="last_name" class="input input-bordered"
+                               value="{{ form.last_name.value|default:'' }}">
+                    </div>
+                </div>
                 
                 <div class="form-control">
                     <label class="label">
                         <span class="label-text">Email</span>
+                        {% if form.email.errors %}
+                            <span class="label-text-alt text-error">{{ form.email.errors|join:", " }}</span>
+                        {% endif %}
                     </label>
-                    <input type="email" name="email" class="input input-bordered" required>
+                    <input type="email" name="email" class="input input-bordered {% if form.email.errors %}input-error{% endif %}" 
+                           value="{{ form.email.value|default:'' }}" required>
                 </div>
                 
                 <div class="form-control">
                     <label class="label">
                         <span class="label-text">Role</span>
                     </label>
-                    {{ form.role }}
+                    <select name="role" class="select select-bordered w-full">
+                        {% for role in form.role.field.queryset %}
+                            <option value="{{ role.pk }}" {% if form.role.value == role.pk %}selected{% endif %}>
+                                {{ role.role_name }}
+                            </option>
+                        {% endfor %}
+                    </select>
                 </div>
                 
                 <div class="form-control">
@@ -45,6 +73,9 @@
                         <span class="label-text">Password</span>
                     </label>
                     <input type="password" name="password1" class="input input-bordered" required>
+                    <label class="label">
+                        <span class="label-text-alt text-base-content/70">Must be at least 8 characters with letters and numbers</span>
+                    </label>
                 </div>
                 
                 <div class="form-control">

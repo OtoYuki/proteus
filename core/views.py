@@ -3,16 +3,15 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
-from .forms import SequenceForm
+from .forms import SequenceForm, SignupForm
 from .models import ProteinSequence, Prediction, ValidationMetric
 from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
 import logging
 from django.contrib.auth import login, authenticate
-from django.contrib.auth.forms import UserCreationForm
 from django.contrib import messages
 from django.shortcuts import render, redirect
-from .forms import CustomUserCreationForm
+import datetime
 
 
 logger = logging.getLogger(__name__)
@@ -77,10 +76,17 @@ def prediction_detail(request, prediction_id):
     """
     prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
 
-    # Check if the PDB file exists
+    # Check if the PDB file exists and get additional info
     pdb_file_exists = False
+    pdb_file_size = None
+    pdb_file_date = None
+
     if prediction.pdb_file_path and os.path.exists(prediction.pdb_file_path):
         pdb_file_exists = True
+        pdb_file_size = os.path.getsize(prediction.pdb_file_path) / 1024  # Size in KB
+        pdb_file_date = datetime.datetime.fromtimestamp(
+            os.path.getmtime(prediction.pdb_file_path)
+        )
 
     return render(
         request,
@@ -88,6 +94,8 @@ def prediction_detail(request, prediction_id):
         {
             "prediction": prediction,
             "pdb_file_exists": pdb_file_exists,
+            "pdb_file_size": pdb_file_size,
+            "pdb_file_date": pdb_file_date,
         },
     )
 
@@ -98,12 +106,15 @@ def serve_pdb(request, prediction_id):
     """
     prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
 
+    # Check if file exists
     if not prediction.pdb_file_path or not os.path.exists(prediction.pdb_file_path):
         raise Http404("PDB file not found")
 
-    return FileResponse(
-        open(prediction.pdb_file_path, "rb"), content_type="chemical/x-pdb"
-    )
+    # Serve the file with proper Content-Type
+    response = FileResponse(open(prediction.pdb_file_path, "rb"))
+    response["Content-Type"] = "chemical/x-pdb"  # Proper MIME type for PDB files
+    response["Content-Disposition"] = f'inline; filename="{prediction_id}.pdb"'
+    return response
 
 
 @require_POST
@@ -310,12 +321,17 @@ def serve_trajectory_frame(request, prediction_id, frame_number):
 
 def signup_view(request):
     if request.method == "POST":
-        form = CustomUserCreationForm(request.POST)
+        form = SignupForm(request.POST)
         if form.is_valid():
             user = form.save()
+            # Log the user in
             login(request, user)
-            messages.success(request, "Account created successfully!")
+            messages.success(
+                request,
+                f"Welcome to Proteus, {user.first_name or user.email.split('@')[0]}!",
+            )
             return redirect("home")
     else:
-        form = CustomUserCreationForm()
+        form = SignupForm()
+
     return render(request, "registration/signup.html", {"form": form})
