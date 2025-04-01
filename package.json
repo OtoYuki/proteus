@@ -1,0 +1,24 @@
+{
+  "name": "proteus",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OtoYuki/proteus.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/OtoYuki/proteus/issues"
+  },
+  "homepage": "https://github.com/OtoYuki/proteus#readme",
+  "dependencies": {
+    "daisyui": "^5.0.9",
+    "tailwindcss": "^4.0.17"
+  }
+}

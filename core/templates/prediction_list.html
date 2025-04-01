@@ -1,68 +1,583 @@
 {% extends 'base.html' %}
+{% load static %}
 
 {% block title %}Protein Predictions - Proteus{% endblock %}
 
+{% block extra_css %}
+<style>
+    /* Import fonts */
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&display=swap');
+    
+    /* Global font settings */
+    .prediction-table, .status-badge, .btn, .input, .select, .font-mono {
+        font-family: 'JetBrains Mono', monospace;
+    }
+    
+    /* Header font settings */
+    .font-header, h1, h2, h3, h4, h5, h6 {
+        font-family: 'Playfair Display', serif;
+    }
+    
+    /* Glassmorphism styling */
+    .glassmorphic {
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+    }
+    
+    .dashboard-card {
+        border-radius: 1rem;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+    
+    .dashboard-card:hover {
+        box-shadow: 0 15px 30px -10px rgba(0, 0, 0, 0.1);
+    }
+    
+    .dashboard-header {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Table styling */
+    .prediction-table th {
+        font-weight: 700;
+        color: rgba(0, 0, 0, 0.8);
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+        position: relative;
+        text-align: center;
+        letter-spacing: 0.02em;
+    }
+    
+    .prediction-table td {
+        text-align: center;
+        vertical-align: middle;
+    }
+    
+    .prediction-table tr:hover {
+        background-color: rgba(0, 0, 0, 0.02);
+    }
+    
+    /* Sortable columns */
+    .sortable {
+        cursor: pointer;
+        user-select: none;
+        padding-right: 1.5rem !important;
+    }
+    
+    .sortable:hover {
+        background-color: rgba(0, 0, 0, 0.04);
+    }
+    
+    .sort-icon {
+        position: absolute;
+        right: 0.5rem;
+        top: 50%;
+        transform: translateY(-50%);
+        opacity: 0.4;
+        transition: all 0.2s ease;
+    }
+    
+    .sortable:hover .sort-icon {
+        opacity: 0.8;
+    }
+    
+    .sort-icon.asc, .sort-icon.desc {
+        opacity: 1;
+        color: var(--primary);
+    }
+    
+    /* pLDDT score visualization - simplified and improved */
+    .plddt-pill {
+        padding: 0.35rem 0.75rem;
+        border-radius: 1rem;
+        font-weight: 600;
+        font-size: 0.9rem;
+        width: fit-content;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        transition: all 0.3s ease;
+    }
+    
+    .plddt-label {
+        font-size: 0.7rem;
+        margin-top: 0.25rem;
+        font-weight: 500;
+        letter-spacing: 0.02em;
+        opacity: 0.7;
+    }
+    
+    .plddt-high { 
+        background-color: rgba(74, 222, 128, 0.15); 
+        color: #22c55e;
+        border: 1px solid rgba(74, 222, 128, 0.3);
+    }
+    
+    .plddt-confident { 
+        background-color: rgba(250, 204, 21, 0.15); 
+        color: #eab308;
+        border: 1px solid rgba(250, 204, 21, 0.3);
+    }
+    
+    .plddt-low { 
+        background-color: rgba(251, 146, 60, 0.15); 
+        color: #f97316;
+        border: 1px solid rgba(251, 146, 60, 0.3);
+    }
+    
+    .plddt-very-low { 
+        background-color: rgba(248, 113, 113, 0.15); 
+        color: #ef4444;
+        border: 1px solid rgba(248, 113, 113, 0.3);
+    }
+    
+    /* Status badges */
+    .status-badge {
+        padding: 0.35rem 0.75rem;
+        border-radius: 1rem;
+        font-weight: 500;
+        font-size: 0.8rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        width: fit-content;
+        margin: 0 auto;
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+    }
+    
+    .status-badge svg {
+        width: 0.85rem;
+        height: 0.85rem;
+    }
+    
+    /* Filter controls */
+    .filter-controls {
+        background-color: rgba(0, 0, 0, 0.02);
+        border-radius: 0.75rem;
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    /* Action buttons */
+    .action-button {
+        border-radius: 0.5rem;
+        font-weight: 500;
+        transition: all 0.3s;
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    /* Empty states */
+    .empty-state {
+        padding: 3rem 1rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        color: rgba(0,0,0,0.5);
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        border-radius: 1rem;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .empty-icon {
+        margin-bottom: 1rem;
+        opacity: 0.3;
+    }
+    
+    /* Custom scrollbar for glassmorphic effect */
+    .overflow-x-auto::-webkit-scrollbar {
+        height: 8px;
+    }
+    
+    .overflow-x-auto::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+    }
+    
+    .overflow-x-auto::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+    }
+    
+    .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.3);
+    }
+    
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .prediction-table {
+            font-size: 0.875rem;
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="card bg-base-100 shadow-xl">
-    <div class="card-body">
-        <div class="flex justify-between items-center mb-6">
-            <h1 class="text-3xl font-bold">Protein Structure Predictions</h1>
-            <div class="flex gap-2">
-                <a href="{% url 'submit_sequence' %}" class="btn btn-primary">Submit New Sequence</a>
-                <a href="{% url 'home' %}" class="btn btn-outline">Back to Home</a>
+<div class="dashboard-card glassmorphic bg-base-100 shadow-lg">
+    <!-- Header section with title and actions -->
+    <div class="dashboard-header p-6 flex flex-wrap justify-between items-center gap-4">
+        <div>
+            <h1 class="text-2xl sm:text-3xl font-bold font-header">Protein Structure Predictions</h1>
+            <p class="text-base-content/70 mt-1 font-mono">Browse and manage your protein predictions</p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="{% url 'submit_sequence' %}" class="btn btn-primary gap-2 glassmorphic">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd" />
+                </svg>
+                New Prediction
+            </a>
+            <a href="{% url 'home' %}" class="btn btn-outline gap-2 glassmorphic">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+                </svg>
+                Back
+            </a>
+        </div>
+    </div>
+    
+    <!-- Search and filter section -->
+    <div class="filter-controls p-4 mx-6 mb-4">
+        <div class="flex flex-wrap gap-3">
+            <div class="form-control flex-grow">
+                <div class="input-group">
+                    <input type="text" id="searchInput" placeholder="Search by sequence name..." class="input input-bordered w-full glassmorphic" />
+                    <button class="btn btn-square glassmorphic" id="searchButton">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="flex flex-wrap gap-2 items-center">
+                <select id="statusFilter" class="select select-bordered glassmorphic">
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="running">Running</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                </select>
+                <button class="btn btn-sm btn-outline glassmorphic" id="resetButton">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                    </svg>
+                    Reset
+                </button>
             </div>
         </div>
-
-        <div class="overflow-x-auto">
-            <table class="table table-zebra w-full">
-                <thead>
-                    <tr>
-                        <th>Sequence Name</th>
-                        <th>Date</th>
-                        <th>Status</th>
-                        <th>Length</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for prediction in predictions %}
-                    <tr>
-                        <td>{{ prediction.sequence.sequence_name }}</td>
-                        <td>{{ prediction.prediction_date|date:"M d, Y H:i" }}</td>
-                        <td>
-                            {% if prediction.status == "pending" %}
-                            <div class="badge badge-warning">Pending</div>
-                            {% elif prediction.status == "running" %}
-                            <div class="badge badge-info">Running</div>
-                            {% elif prediction.status == "completed" %}
-                            <div class="badge badge-success">Completed</div>
-                            {% elif prediction.status == "failed" %}
-                            <div class="badge badge-error">Failed</div>
-                            {% else %}
-                            <div class="badge">{{ prediction.status }}</div>
-                            {% endif %}
-                        </td>
-                        <td>{{ prediction.sequence.sequence_length }}</td>
-                        <td>
-                            <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
-                               class="btn btn-primary btn-sm">View</a>
-                        </td>
-                    </tr>
-                    {% empty %}
-                    <tr>
-                        <td colspan="5" class="text-center py-4">
-                            <div class="flex flex-col items-center">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-base-300 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                                </svg>
-                                <span class="text-base-content opacity-60">No predictions available.</span>
+    </div>
+    
+    <!-- Table section -->
+    <div class="overflow-x-auto px-6 pb-6">
+        <table class="table table-zebra w-full prediction-table">
+            <thead>
+                <tr>
+                    <th class="sortable" id="sortCol0">
+                        Sequence Name
+                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </th>
+                    <th class="sortable" id="sortCol1">
+                        Date
+                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </th>
+                    <th class="sortable" id="sortCol2">
+                        Status
+                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </th>
+                    <th class="sortable" id="sortCol3">
+                        Length
+                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </th>
+                    <th class="sortable" id="sortCol4">
+                        pLDDT Score
+                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                    </th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody id="predictionTable">
+                {% for prediction in predictions %}
+                <tr>
+                    <td class="font-medium text-center">{{ prediction.sequence.sequence_name }}</td>
+                    <td class="text-center" data-date="{{ prediction.prediction_date|date:'Y-m-d H:i:s' }}">
+                        <div>{{ prediction.prediction_date|date:"M d, Y" }}</div>
+                        <div class="text-xs opacity-70">{{ prediction.prediction_date|date:"H:i" }}</div>
+                    </td>
+                    <td class="text-center" data-status="{{ prediction.status }}">
+                        {% if prediction.status == "pending" %}
+                        <div class="status-badge bg-warning/10 text-warning">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+                            </svg>
+                            Pending
+                        </div>
+                        {% elif prediction.status == "running" %}
+                        <div class="status-badge bg-info/10 text-info">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                            </svg>
+                            Running
+                        </div>
+                        {% elif prediction.status == "completed" %}
+                        <div class="status-badge bg-success/10 text-success">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                            </svg>
+                            Completed
+                        </div>
+                        {% elif prediction.status == "failed" %}
+                        <div class="status-badge bg-error/10 text-error">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                            </svg>
+                            Failed
+                        </div>
+                        {% else %}
+                        <div class="status-badge bg-base-200 text-base-content">{{ prediction.status }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-center" data-length="{{ prediction.sequence.sequence_length }}">
+                        <span class="font-mono font-medium">{{ prediction.sequence.sequence_length }}</span>
+                        <div class="text-xs opacity-70">amino acids</div>
+                    </td>
+                    <td class="text-center" data-score="{{ prediction.plddt_score|default_if_none:0 }}">
+                        {% if prediction.plddt_score %}
+                            {% with raw_score=prediction.plddt_score %}
+                            <div class="plddt-pill
+                                {% if raw_score >= 90 %}plddt-high
+                                {% elif raw_score >= 70 %}plddt-confident
+                                {% elif raw_score >= 50 %}plddt-low
+                                {% else %}plddt-very-low{% endif %}">
+                                <span class="font-mono">{{ raw_score|floatformat:1 }}</span>
                             </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                            <div class="plddt-label">
+                                {% if raw_score >= 90 %}High Confidence
+                                {% elif raw_score >= 70 %}Confident
+                                {% elif raw_score >= 50 %}Low Confidence
+                                {% else %}Very Low Confidence{% endif %}
+                            </div>
+                            {% endwith %}
+                        {% else %}
+                            <div class="font-mono text-base-content/50">—</div>
+                        {% endif %}
+                    </td>
+                    <td class="text-center">
+                        <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
+                           class="btn btn-sm btn-primary glassmorphic">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                                <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+                            </svg>
+                            View
+                        </a>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr id="emptyRow">
+                    <td colspan="6">
+                        <div class="empty-state">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <p class="text-lg font-medium font-header mt-3">No predictions available yet</p>
+                            <p class="mt-1 mb-4 font-mono opacity-70">Submit your first protein sequence to get started</p>
+                            <a href="{% url 'submit_sequence' %}" class="btn btn-primary glassmorphic font-mono">Submit a Sequence</a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <!-- No results message (hidden by default) -->
+        <div id="noResults" class="empty-state hidden">
+            <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <p class="text-lg font-medium font-header mt-3">No matching predictions found</p>
+            <p class="mt-1 mb-4 font-mono opacity-70">Try adjusting your search criteria</p>
+            <button class="btn btn-outline glassmorphic font-mono" id="resetButtonAlt">Clear Filters</button>
         </div>
     </div>
 </div>
+
+<!-- Include the script directly in the content block -->
+<script>
+    // Table sorting
+    let currentSortColumn = -1;
+    let currentSortDirection = 'asc';
+    
+    function sortTable(columnIndex) {
+        const table = document.getElementById('predictionTable');
+        const rows = Array.from(table.getElementsByTagName('tr'));
+        const icons = document.querySelectorAll('.sort-icon');
+        
+        // Reset all icons
+        icons.forEach(icon => {
+            icon.classList.remove('asc', 'desc');
+        });
+        
+        // Set direction
+        if (currentSortColumn === columnIndex) {
+            currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            currentSortDirection = 'asc';
+        }
+        
+        currentSortColumn = columnIndex;
+        
+        // Update active icon
+        if (columnIndex >= 0 && columnIndex < icons.length) {
+            icons[columnIndex].classList.add(currentSortDirection);
+        }
+        
+        // Sort the rows
+        rows.sort((a, b) => {
+            let aValue, bValue;
+            
+            // Handle different column types
+            if (columnIndex === 1) { // Date column
+                aValue = a.cells[columnIndex].getAttribute('data-date') || '';
+                bValue = b.cells[columnIndex].getAttribute('data-date') || '';
+            } else if (columnIndex === 3) { // Length column (numeric)
+                aValue = parseInt(a.cells[columnIndex].getAttribute('data-length') || '0');
+                bValue = parseInt(b.cells[columnIndex].getAttribute('data-length') || '0');
+            } else if (columnIndex === 4) { // pLDDT score (numeric)
+                aValue = parseFloat(a.cells[columnIndex].getAttribute('data-score') || '0');
+                bValue = parseFloat(b.cells[columnIndex].getAttribute('data-score') || '0');
+            } else if (columnIndex === 2) { // Status column
+                aValue = a.cells[columnIndex].getAttribute('data-status') || '';
+                bValue = b.cells[columnIndex].getAttribute('data-status') || '';
+            } else { // Default text comparison
+                aValue = a.cells[columnIndex].textContent.trim();
+                bValue = b.cells[columnIndex].textContent.trim();
+            }
+            
+            // Compare values
+            if (typeof aValue === 'number' && typeof bValue === 'number') {
+                return currentSortDirection === 'asc' ? aValue - bValue : bValue - aValue;
+            } else {
+                return currentSortDirection === 'asc' ? 
+                    aValue.localeCompare(bValue) : 
+                    bValue.localeCompare(aValue);
+            }
+        });
+        
+        // Reorder rows in the DOM
+        for (const row of rows) {
+            table.appendChild(row);
+        }
+        
+        // Hide empty row if we have results
+        updateEmptyState();
+    }
+    
+    // Search and filtering
+    function applyFilters() {
+        const searchText = document.getElementById('searchInput').value.toLowerCase();
+        const statusFilter = document.getElementById('statusFilter').value.toLowerCase();
+        const rows = Array.from(document.getElementById('predictionTable').getElementsByTagName('tr'));
+        
+        let visibleCount = 0;
+        
+        rows.forEach(row => {
+            const name = row.cells[0] ? row.cells[0].textContent.toLowerCase() : '';
+            const status = row.cells[2] ? row.cells[2].getAttribute('data-status').toLowerCase() : '';
+            
+            const nameMatch = name.includes(searchText);
+            const statusMatch = !statusFilter || status === statusFilter;
+            
+            if (nameMatch && statusMatch) {
+                row.classList.remove('hidden');
+                visibleCount++;
+            } else {
+                row.classList.add('hidden');
+            }
+        });
+        
+        updateEmptyState(visibleCount === 0);
+    }
+    
+    function resetFilters() {
+        document.getElementById('searchInput').value = '';
+        document.getElementById('statusFilter').value = '';
+        
+        const rows = document.getElementById('predictionTable').getElementsByTagName('tr');
+        for (let row of rows) {
+            row.classList.remove('hidden');
+        }
+        
+        updateEmptyState();
+    }
+    
+    function updateEmptyState(noResults = false) {
+        const emptyRow = document.getElementById('emptyRow');
+        const noResultsMsg = document.getElementById('noResults');
+        
+        // Original empty state (no predictions at all)
+        if (emptyRow) {
+            emptyRow.classList.add('hidden');
+        }
+        
+        // No results from search
+        if (noResults) {
+            noResultsMsg.classList.remove('hidden');
+        } else {
+            noResultsMsg.classList.add('hidden');
+        }
+    }
+    
+    // Initialize when document is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        // Add event listeners to the column headers
+        document.getElementById('sortCol0').addEventListener('click', function() { sortTable(0); });
+        document.getElementById('sortCol1').addEventListener('click', function() { sortTable(1); });
+        document.getElementById('sortCol2').addEventListener('click', function() { sortTable(2); });
+        document.getElementById('sortCol3').addEventListener('click', function() { sortTable(3); });
+        document.getElementById('sortCol4').addEventListener('click', function() { sortTable(4); });
+        
+        // Add event listeners for search and filter
+        document.getElementById('searchButton').addEventListener('click', applyFilters);
+        document.getElementById('statusFilter').addEventListener('change', applyFilters);
+        document.getElementById('resetButton').addEventListener('click', resetFilters);
+        
+        // Additional reset button in the "no results" message
+        const resetButtonAlt = document.getElementById('resetButtonAlt');
+        if (resetButtonAlt) {
+            resetButtonAlt.addEventListener('click', resetFilters);
+        }
+        
+        // Default sort by date (newest first)
+        setTimeout(() => sortTable(1), 100);
+        
+        // Add enter key listener for search
+        document.getElementById('searchInput').addEventListener('keyup', function(event) {
+            if (event.key === 'Enter') {
+                applyFilters();
+            }
+        });
+    });
+</script>
 {% endblock %}

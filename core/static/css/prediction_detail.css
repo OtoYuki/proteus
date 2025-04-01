@@ -1,0 +1,204 @@
+/* Import fonts */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&display=swap');
+
+/* Global font settings */
+.font-mono,
+.sequence-box,
+.stats-grid,
+.stats-value,
+.badge {
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* Header font settings */
+.font-header,
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+th {
+    font-family: 'Playfair Display', serif;
+}
+
+/* Glassmorphic styling */
+.glassmorphic {
+    background: rgba(255, 255, 255, 0.1);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+}
+
+.detail-card {
+    border-radius: 1rem;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.detail-card:hover {
+    box-shadow: 0 15px 30px -10px rgba(0, 0, 0, 0.1);
+}
+
+.detail-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Structure viewer styling */
+#viewer {
+    width: 100%;
+    height: 500px;
+    position: relative;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+}
+
+/* Sequence box styling */
+.sequence-box {
+    font-family: 'JetBrains Mono', monospace;
+    word-break: break-all;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    background: rgba(0, 0, 0, 0.02);
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Stats grid styling */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    font-size: 0.95rem;
+}
+
+.stats-label {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+.stats-value {
+    font-weight: 600;
+}
+
+/* Status badges */
+.status-badge {
+    padding: 0.35rem 0.75rem;
+    border-radius: 1rem;
+    font-weight: 500;
+    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: fit-content;
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+}
+
+.status-badge svg {
+    width: 0.85rem;
+    height: 0.85rem;
+}
+
+/* pLDDT score visualization */
+.plddt-pill {
+    padding: 0.35rem 0.75rem;
+    border-radius: 1rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    width: fit-content;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: all 0.3s ease;
+}
+
+.plddt-high {
+    background-color: rgba(74, 222, 128, 0.15);
+    color: #22c55e;
+    border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.plddt-confident {
+    background-color: rgba(250, 204, 21, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(250, 204, 21, 0.3);
+}
+
+.plddt-low {
+    background-color: rgba(251, 146, 60, 0.15);
+    color: #f97316;
+    border: 1px solid rgba(251, 146, 60, 0.3);
+}
+
+.plddt-very-low {
+    background-color: rgba(248, 113, 113, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+/* Control panel styling */
+.control-panel {
+    background-color: rgba(0, 0, 0, 0.02);
+    border-radius: 0.75rem;
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.75rem;
+}
+
+/* Charts and visualization */
+.chart-container {
+    width: 100%;
+    height: 200px;
+    position: relative;
+    margin-top: 1rem;
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+
+/* Secondary structure visualization */
+.ss-visualization {
+    display: flex;
+    align-items: center;
+    height: 2rem;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+
+.ss-helix {
+    background: rgba(74, 222, 128, 0.3);
+    height: 100%;
+}
+
+.ss-sheet {
+    background: rgba(59, 130, 246, 0.3);
+    height: 100%;
+}
+
+.ss-coil {
+    background: rgba(209, 213, 219, 0.3);
+    height: 100%;
+}
+
+/* Loading state */
+.loading-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 300px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+}
