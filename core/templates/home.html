@@ -3,16 +3,154 @@
 {% block title %}Proteus | Home{% endblock %}
 
 {% block content %}
-<div class="hero min-h-[70vh] bg-base-200 rounded-lg">
-  <div class="hero-content text-center">
-    <div class="max-w-md">
-      <h1 class="text-5xl font-bold">Welcome to Proteus</h1>
-      <p class="py-6">Protein Structure Prediction and Analysis Platform</p>
-      <div class="flex justify-center gap-4">
-        <a href="{% url 'submit_sequence' %}" class="btn btn-primary">Submit a Sequence</a>
-        <a href="{% url 'prediction_list' %}" class="btn btn-secondary">View Predictions</a>
+<!-- Hero Section -->
+<div class="hero min-h-[70vh] rounded-lg overflow-hidden relative glassmorphism">
+  <!-- Background DNA Pattern -->
+  <div class="absolute inset-0 opacity-10">
+    <svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" fill="none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      <path stroke="#314528" stroke-width="2" d="M0,50 Q250,120 500,50 T1000,50 V950 Q750,880 500,950 T0,950 Z" />
+      <path stroke="#314528" stroke-width="2" d="M0,100 Q250,200 500,100 T1000,100 V900 Q750,800 500,900 T0,900 Z" />
+      <path stroke="#314528" stroke-width="2" d="M0,150 Q250,250 500,150 T1000,150 V850 Q750,750 500,850 T0,850 Z" />
+      <path stroke="#314528" stroke-width="2" d="M0,200 Q250,300 500,200 T1000,200 V800 Q750,700 500,800 T0,800 Z" />
+      <path stroke="#314528" stroke-width="2" d="M0,250 Q250,350 500,250 T1000,250 V750 Q750,650 500,750 T0,750 Z" />
+    </svg>
+  </div>
+  
+  <div class="hero-content text-center z-10">
+    <div class="max-w-2xl">
+      <h1 class="text-5xl md:text-6xl font-bold text-proteus-accent mb-6">Welcome to Proteus</h1>
+      <p class="py-4 text-xl md:text-2xl text-proteus-secondary font-cambria mb-2">Protein Structure Prediction and Analysis Platform</p>
+      <p class="text-base text-proteus-secondary mb-8 font-cambria">Accelerating protein research with AI-driven structure prediction, molecular dynamics simulations, and machine learning-based ranking</p>
+      <div class="flex flex-col sm:flex-row justify-center gap-4 mb-8">
+        <a href="{% url 'submit_sequence' %}" class="btn btn-primary btn-lg gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+          </svg>
+          Submit a Sequence
+        </a>
+        <a href="{% url 'prediction_list' %}" class="btn btn-secondary btn-lg gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
+          </svg>
+          View Predictions
+        </a>
       </div>
     </div>
   </div>
 </div>
+
+<!-- Feature Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+  <!-- Card 1: Structure Prediction -->
+  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-all duration-300">
+    <figure class="px-10 pt-10">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
+      </svg>
+    </figure>
+    <div class="card-body items-center text-center">
+      <h2 class="card-title">Structure Prediction</h2>
+      <p class="font-cambria">Predict 3D protein structures from amino acid sequences using ColabFold, an advanced AI-based tool.</p>
+      <div class="card-actions justify-end mt-4">
+        <a href="{% url 'submit_sequence' %}" class="btn btn-primary">Get Started</a>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Card 2: Molecular Dynamics -->
+  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-all duration-300">
+    <figure class="px-10 pt-10">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+      </svg>
+    </figure>
+    <div class="card-body items-center text-center">
+      <h2 class="card-title">Molecular Dynamics</h2>
+      <p class="font-cambria">Validate protein structures with GROMACS simulations to assess stability, flexibility, and behavior.</p>
+      <div class="card-actions justify-end mt-4">
+        <a href="{% url 'prediction_list' %}" class="btn btn-primary">Explore</a>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Card 3: ML Ranking -->
+  <div class="card bg-base-100 shadow-xl hover:shadow-2xl transition-all duration-300">
+    <figure class="px-10 pt-10">
+      <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+      </svg>
+    </figure>
+    <div class="card-body items-center text-center">
+      <h2 class="card-title">ML Ranking</h2>
+      <p class="font-cambria">Evaluate protein designs using machine learning to rank stability, solubility, and binding efficiency.</p>
+      <div class="card-actions justify-end mt-4">
+        <a href="{% url 'prediction_list' %}" class="btn btn-primary">View Rankings</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Workflow Section -->
+<div class="mt-12 mb-4">
+  <h2 class="text-3xl font-bold text-center mb-8 text-proteus-accent">How It Works</h2>
+  
+  <div class="flex flex-col md:flex-row gap-6 items-center justify-center">
+    <div class="card bg-base-100 shadow-xl p-6 flex-1 hover:scale-105 transition-all duration-300">
+      <div class="flex items-center mb-4">
+        <div class="bg-proteus-accent text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-3">1</div>
+        <h3 class="font-bold text-xl">Submit Sequence</h3>
+      </div>
+      <p class="font-cambria">Upload your FASTA protein sequence with a name and description to start the process.</p>
+    </div>
+    
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-proteus-accent transform rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+    </svg>
+    
+    <div class="card bg-base-100 shadow-xl p-6 flex-1 hover:scale-105 transition-all duration-300">
+      <div class="flex items-center mb-4">
+        <div class="bg-proteus-accent text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-3">2</div>
+        <h3 class="font-bold text-xl">Receive Predictions</h3>
+      </div>
+      <p class="font-cambria">ColabFold generates detailed 3D protein structure predictions with confidence scores.</p>
+    </div>
+    
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-proteus-accent transform rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+    </svg>
+    
+    <div class="card bg-base-100 shadow-xl p-6 flex-1 hover:scale-105 transition-all duration-300">
+      <div class="flex items-center mb-4">
+        <div class="bg-proteus-accent text-white rounded-full w-8 h-8 flex items-center justify-center font-bold mr-3">3</div>
+        <h3 class="font-bold text-xl">Analyze Results</h3>
+      </div>
+      <p class="font-cambria">View interactive 3D models, run simulations, and receive ML-based quality rankings.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    // Add some subtle animation to the hero section
+    const heroContent = document.querySelector('.hero-content');
+    heroContent.classList.add('animate-fadeIn');
+    
+    // Add animation class if not already defined
+    if (!document.styleSheets[0].cssRules[0].selectorText.includes('animate-fadeIn')) {
+      const style = document.createElement('style');
+      style.innerHTML = `
+        @keyframes fadeIn {
+          0% { opacity: 0; transform: translateY(20px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 1s ease-out forwards;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  });
+</script>
 {% endblock %}
