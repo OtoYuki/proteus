@@ -4,21 +4,24 @@ import uuid
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
+from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 
 
-# Models Shall be defined here
 class Role(models.Model):
-    """
-    Role model for the user.
-    """
+    """Role model for the user."""
 
     role_id = models.AutoField(primary_key=True)
-    role_name = models.CharField(max_length=20, unique=True)
+    role_name = models.CharField(max_length=20, unique=True, db_index=True)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    modified_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "role"
         verbose_name = "Role"
         verbose_name_plural = "Roles"
+        indexes = [models.Index(fields=["role_name"])]
 
     def __str__(self):
         return self.role_name
@@ -28,21 +31,16 @@ class UserManager(BaseUserManager):
     """Custom manager for User model with email as the identifier."""
 
     def _create_user(self, email, password=None, **extra_fields):
-        """Create and save a User with the provided email and password."""
         if not email:
             raise ValueError("The Email field is a mandatory requirement.")
         email = self.normalize_email(email)
 
-        # Handle the Role Assignment for New Users
         if "role" not in extra_fields:
             try:
                 role = Role.objects.get_or_create(role_name="User")[0]
                 extra_fields["role"] = role
             except Exception:
-                pass  # Will be caught below if no roles exist
-
-        if "role" not in extra_fields:
-            raise ValueError("We could not assign a role to the user.")
+                raise ValueError("We could not assign a role to the user.")
 
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
@@ -69,18 +67,14 @@ class UserManager(BaseUserManager):
 class User(AbstractUser):
     """Custom User model with email as the primary identifier."""
 
-    user_id = models.UUIDField(
-        primary_key=True,
-        default=uuid.uuid4,
-        editable=False,
+    user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="users")
+    email = models.EmailField(
+        unique=True,
+        db_index=True,
+        db_collation="und-x-icu",  # Case-insensitive collation
     )
-    role = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="users",
-    )
-    email = models.EmailField(unique=True)
-    username = None  # Remove username field
+    username = None
     created_at = models.DateTimeField(default=timezone.now)
     is_active = models.BooleanField(default=True)
     last_login = models.DateTimeField(null=True, blank=True)
@@ -94,6 +88,9 @@ class User(AbstractUser):
         db_table = "users"
         verbose_name = "User"
         verbose_name_plural = "Users"
+        indexes = [
+            models.Index(fields=["email", "created_at"]),
+        ]
 
     def __str__(self):
         return self.email
@@ -106,19 +103,25 @@ class ProteinSequence(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="protein_sequences"
     )
-    sequence_name = models.CharField(max_length=100)
+    sequence_name = models.CharField(max_length=100, db_index=True)
     sequence_fasta = models.TextField()
-    upload_date = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20)
+    upload_date = models.DateTimeField(auto_now_add=True, db_index=True)
+    status = models.CharField(max_length=20, db_index=True)
     description = models.TextField(blank=True, null=True)
-    sequence_length = models.IntegerField()
-    organism = models.CharField(max_length=100, blank=True, null=True)
+    sequence_length = models.IntegerField(db_index=True)
+    organism = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     source = models.CharField(max_length=100, blank=True, null=True)
+    search_vector = SearchVectorField(null=True)
 
     class Meta:
         db_table = "protein_sequences"
         verbose_name = "Protein Sequence"
         verbose_name_plural = "Protein Sequences"
+        indexes = [
+            models.Index(fields=["sequence_name", "upload_date"]),
+            models.Index(fields=["organism", "sequence_length"]),
+            GinIndex(fields=["search_vector"]),
+        ]
 
     def __str__(self):
         return self.sequence_name
@@ -135,10 +138,10 @@ class Prediction(models.Model):
     )
     pdb_file_path = models.CharField(max_length=255)
     pae_file_path = models.CharField(max_length=255, blank=True, null=True)
-    plddt_score = models.FloatField(blank=True, null=True)
-    prediction_date = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20)
-    confidence_score = models.FloatField(blank=True, null=True)
+    plddt_score = models.FloatField(blank=True, null=True, db_index=True)
+    prediction_date = models.DateTimeField(auto_now_add=True, db_index=True)
+    status = models.CharField(max_length=20, db_index=True)
+    confidence_score = models.FloatField(blank=True, null=True, db_index=True)
     model_version = models.CharField(max_length=50)
     prediction_metadata = models.JSONField(blank=True, null=True)
 
@@ -146,6 +149,10 @@ class Prediction(models.Model):
         db_table = "predictions"
         verbose_name = "Prediction"
         verbose_name_plural = "Predictions"
+        indexes = [
+            models.Index(fields=["prediction_date", "status"]),
+            models.Index(fields=["plddt_score", "confidence_score"]),
+        ]
 
     def __str__(self):
         return f"Prediction for {self.sequence.sequence_name}"
@@ -158,14 +165,14 @@ class ValidationMetric(models.Model):
     prediction = models.ForeignKey(
         Prediction, on_delete=models.CASCADE, related_name="validation_metrics"
     )
-    rmsd = models.FloatField(blank=True, null=True)
-    rg = models.FloatField(blank=True, null=True)
-    energy = models.FloatField(blank=True, null=True)
+    rmsd = models.FloatField(blank=True, null=True, db_index=True)
+    rg = models.FloatField(blank=True, null=True, db_index=True)
+    energy = models.FloatField(blank=True, null=True, db_index=True)
     trajectory_path = models.CharField(max_length=255, blank=True, null=True)
-    validation_date = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=20)
+    validation_date = models.DateTimeField(auto_now_add=True, db_index=True)
+    status = models.CharField(max_length=20, db_index=True)
     simulation_parameters = models.JSONField(blank=True, null=True)
-    stability_score = models.FloatField(blank=True, null=True)
+    stability_score = models.FloatField(blank=True, null=True, db_index=True)
     validation_notes = models.TextField(blank=True, null=True)
     modified_date = models.DateTimeField(auto_now=True)
 
@@ -173,6 +180,10 @@ class ValidationMetric(models.Model):
         db_table = "validation_metrics"
         verbose_name = "Validation Metric"
         verbose_name_plural = "Validation Metrics"
+        indexes = [
+            models.Index(fields=["validation_date", "status"]),
+            models.Index(fields=["rmsd", "rg", "energy"]),
+        ]
 
     def __str__(self):
         return f"Validation for {self.prediction}"
@@ -185,11 +196,11 @@ class MLRanking(models.Model):
     prediction = models.ForeignKey(
         Prediction, on_delete=models.CASCADE, related_name="ml_rankings"
     )
-    stability_score = models.FloatField(blank=True, null=True)
-    solubility_score = models.FloatField(blank=True, null=True)
-    binding_efficiency_score = models.FloatField(blank=True, null=True)
-    ranking_date = models.DateTimeField(auto_now_add=True)
-    overall_score = models.FloatField(blank=True, null=True)
+    stability_score = models.FloatField(blank=True, null=True, db_index=True)
+    solubility_score = models.FloatField(blank=True, null=True, db_index=True)
+    binding_efficiency_score = models.FloatField(blank=True, null=True, db_index=True)
+    ranking_date = models.DateTimeField(auto_now_add=True, db_index=True)
+    overall_score = models.FloatField(blank=True, null=True, db_index=True)
     feature_importance = models.JSONField(blank=True, null=True)
     model_version = models.CharField(max_length=50)
     ranking_notes = models.TextField(blank=True, null=True)
@@ -198,6 +209,16 @@ class MLRanking(models.Model):
         db_table = "ml_ranking"
         verbose_name = "ML Ranking"
         verbose_name_plural = "ML Rankings"
+        indexes = [
+            models.Index(fields=["ranking_date"]),
+            models.Index(
+                fields=[
+                    "stability_score",
+                    "solubility_score",
+                    "binding_efficiency_score",
+                ]
+            ),
+        ]
 
     def __str__(self):
         return f"Ranking for {self.prediction}"
@@ -210,39 +231,47 @@ class Log(models.Model):
     user = models.ForeignKey(
         User, on_delete=models.CASCADE, related_name="logs", null=True, blank=True
     )
-    action = models.CharField(max_length=100)
-    timestamp = models.DateTimeField(auto_now_add=True)
+    action = models.CharField(max_length=100, db_index=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
     details = models.TextField(blank=True, null=True)
     ip_address = models.CharField(max_length=45, blank=True, null=True)
     session_id = models.CharField(max_length=100, blank=True, null=True)
-    status = models.CharField(max_length=20)
-    component = models.CharField(max_length=50)
+    status = models.CharField(max_length=20, db_index=True)
+    component = models.CharField(max_length=50, db_index=True)
 
     class Meta:
         db_table = "logs"
         verbose_name = "Log"
         verbose_name_plural = "Logs"
+        indexes = [
+            models.Index(fields=["timestamp", "action"]),
+            models.Index(fields=["status", "component"]),
+        ]
 
     def __str__(self):
         return f"{self.action} by {self.user if self.user else 'System'}"
 
 
 class SystemMetric(models.Model):
-    """Model to store the system metrics generated by the system."""
+    """Model to store the system metrics."""
 
     metric_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    timestamp = models.DateTimeField(auto_now_add=True)
-    cpu_usage = models.FloatField()
-    memory_usage = models.FloatField()
-    disk_usage = models.FloatField()
-    active_jobs = models.IntegerField()
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    cpu_usage = models.FloatField(db_index=True)
+    memory_usage = models.FloatField(db_index=True)
+    disk_usage = models.FloatField(db_index=True)
+    active_jobs = models.IntegerField(db_index=True)
     performance_metrics = models.JSONField(blank=True, null=True)
-    status = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, db_index=True)
 
     class Meta:
         db_table = "system_metrics"
         verbose_name = "System Metric"
         verbose_name_plural = "System Metrics"
+        indexes = [
+            models.Index(fields=["timestamp"]),
+            models.Index(fields=["cpu_usage", "memory_usage", "disk_usage"]),
+        ]
 
     def __str__(self):
         return f"System Metric at {self.timestamp}"
@@ -253,18 +282,22 @@ class JobQueue(models.Model):
 
     job_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="jobs")
-    job_type = models.CharField(max_length=50)
-    created_at = models.DateTimeField(auto_now_add=True)
+    job_type = models.CharField(max_length=50, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    status = models.CharField(max_length=20)
+    status = models.CharField(max_length=20, db_index=True)
     job_parameters = models.JSONField(blank=True, null=True)
-    priority = models.IntegerField(default=0)
+    priority = models.IntegerField(default=0, db_index=True)
 
     class Meta:
         db_table = "job_queue"
         verbose_name = "Job"
         verbose_name_plural = "Jobs"
+        indexes = [
+            models.Index(fields=["created_at", "status"]),
+            models.Index(fields=["job_type", "priority"]),
+        ]
 
     def __str__(self):
         return f"{self.job_type} - {self.status}"

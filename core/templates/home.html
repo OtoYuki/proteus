@@ -11,26 +11,24 @@
       <path stroke="#314528" stroke-width="2" d="M0,50 Q250,120 500,50 T1000,50 V950 Q750,880 500,950 T0,950 Z" />
       <path stroke="#314528" stroke-width="2" d="M0,100 Q250,200 500,100 T1000,100 V900 Q750,800 500,900 T0,900 Z" />
       <path stroke="#314528" stroke-width="2" d="M0,150 Q250,250 500,150 T1000,150 V850 Q750,750 500,850 T0,850 Z" />
-      <path stroke="#314528" stroke-width="2" d="M0,200 Q250,300 500,200 T1000,200 V800 Q750,700 500,800 T0,800 Z" />
-      <path stroke="#314528" stroke-width="2" d="M0,250 Q250,350 500,250 T1000,250 V750 Q750,650 500,750 T0,750 Z" />
     </svg>
   </div>
   
   <div class="hero-content text-center z-10">
     <div class="max-w-2xl">
-      <h1 class="text-5xl md:text-6xl font-bold text-proteus-accent mb-6">Welcome to Proteus</h1>
-      <p class="py-4 text-xl md:text-2xl text-proteus-secondary font-cambria mb-2">Protein Structure Prediction and Analysis Platform</p>
-      <p class="text-base text-proteus-secondary mb-8 font-cambria">Accelerating protein research with AI-driven structure prediction, molecular dynamics simulations, and machine learning-based ranking</p>
+      <h1 class="text-5xl md:text-6xl font-bold mb-6 font-playfair text-proteus-accent">Welcome to Proteus</h1>
+      <p class="py-4 text-xl md:text-2xl text-proteus-secondary font-jetbrains mb-2">Protein Structure Prediction and Analysis Platform</p>
+      <p class="text-base text-proteus-secondary mb-8 font-jetbrains">Accelerating protein research with AI-driven structure prediction, molecular dynamics simulations, and machine learning-based ranking</p>
       <div class="flex flex-col sm:flex-row justify-center gap-4 mb-8">
-        <a href="{% url 'submit_sequence' %}" class="btn btn-primary btn-lg gap-2">
+        <a href="{% url 'submit_sequence' %}" class="btn bg-proteus-accent hover:bg-opacity-90 text-proteus-panel border-none btn-lg gap-2 font-jetbrains shadow-lg hover:shadow-xl transition-all duration-300">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 11h16M4 15h8m4 0l4-4m0 0l-4-4m4 4H12" />
           </svg>
           Submit a Sequence
         </a>
-        <a href="{% url 'prediction_list' %}" class="btn btn-secondary btn-lg gap-2">
+        <a href="{% url 'prediction_list' %}" class="btn btn-outline border-proteus-accent text-proteus-accent hover:bg-proteus-accent hover:text-proteus-panel btn-lg gap-2 font-jetbrains shadow-lg hover:shadow-xl transition-all duration-300">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 10l-2 1m0 0l-2-1m2 1v2.5M20 7l-2 1m2-1l-2-1m2 1v2.5M14 4l-2-1-2 1M4 7l2-1M4 7l2 1M4 7v2.5M12 21l-2-1m2 1l2-1m-2 1v-2.5M6 18l-2-1v-2.5M18 18l2-1v-2.5" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
           </svg>
           View Predictions
         </a>
@@ -49,10 +47,10 @@
       </svg>
     </figure>
     <div class="card-body items-center text-center">
-      <h2 class="card-title">Structure Prediction</h2>
-      <p class="font-cambria">Predict 3D protein structures from amino acid sequences using ColabFold, an advanced AI-based tool.</p>
+      <h2 class="card-title font-jetbrains">Structure Prediction</h2>
+      <p class="font-jetbrains">Predict 3D protein structures from amino acid sequences using ColabFold, an advanced AI-based tool.</p>
       <div class="card-actions justify-end mt-4">
-        <a href="{% url 'submit_sequence' %}" class="btn btn-primary">Get Started</a>
+        <a href="{% url 'submit_sequence' %}" class="btn bg-proteus-accent hover:bg-opacity-90 text-proteus-panel border-none font-jetbrains">Get Started</a>
       </div>
     </div>
   </div>
@@ -65,10 +63,10 @@
       </svg>
     </figure>
     <div class="card-body items-center text-center">
-      <h2 class="card-title">Molecular Dynamics</h2>
-      <p class="font-cambria">Validate protein structures with GROMACS simulations to assess stability, flexibility, and behavior.</p>
+      <h2 class="card-title font-jetbrains">Molecular Dynamics</h2>
+      <p class="font-jetbrains">Validate protein structures with GROMACS simulations to assess stability, flexibility, and behavior.</p>
       <div class="card-actions justify-end mt-4">
-        <a href="{% url 'prediction_list' %}" class="btn btn-primary">Explore</a>
+        <a href="{% url 'prediction_list' %}" class="btn bg-proteus-accent hover:bg-opacity-90 text-proteus-panel border-none font-jetbrains">Explore</a>
       </div>
     </div>
   </div>
@@ -81,10 +79,10 @@
       </svg>
     </figure>
     <div class="card-body items-center text-center">
-      <h2 class="card-title">ML Ranking</h2>
-      <p class="font-cambria">Evaluate protein designs using machine learning to rank stability, solubility, and binding efficiency.</p>
+      <h2 class="card-title font-jetbrains">ML Ranking</h2>
+      <p class="font-jetbrains">Evaluate protein designs using machine learning to rank stability, solubility, and binding efficiency.</p>
       <div class="card-actions justify-end mt-4">
-        <a href="{% url 'prediction_list' %}" class="btn btn-primary">View Rankings</a>
+        <a href="{% url 'prediction_list' %}" class="btn bg-proteus-accent hover:bg-opacity-90 text-proteus-panel border-none font-jetbrains">View Rankings</a>
       </div>
     </div>
   </div>
@@ -92,7 +90,7 @@
 
 <!-- Workflow Section -->
 <div class="mt-12 mb-4">
-  <h2 class="text-3xl font-bold text-center mb-8 text-proteus-accent">How It Works</h2>
+  <h2 class="text-3xl font-bold text-center mb-8 text-proteus-accent font-jetbrains">How It Works</h2>
   
   <div class="flex flex-col md:flex-row gap-6 items-center justify-center">
     <div class="card bg-base-100 shadow-xl p-6 flex-1 hover:scale-105 transition-all duration-300">

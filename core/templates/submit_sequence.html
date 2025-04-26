@@ -3,93 +3,152 @@
 {% block title %}Submit Protein Sequence - Proteus{% endblock %}
 
 {% block content %}
-<div class="card bg-base-100 shadow-xl max-w-3xl mx-auto">
-    <div class="card-body">
-        <h1 class="text-3xl font-bold mb-6">Submit Protein Sequence</h1>
-        
-        <form method="post">
-            {% csrf_token %}
-            
-            {% if form.errors %}
-            <div class="alert alert-error mb-4">
-                <div>
-                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                    <span>Please correct the errors below.</span>
+<div class="max-w-4xl mx-auto">
+    <!-- Header -->
+    <div class="mb-8 text-center">
+        <h1 class="text-4xl font-bold mb-3 font-playfair text-proteus-accent">Submit Protein Sequence</h1>
+        <p class="text-proteus-secondary font-jetbrains">Enter your protein sequence in FASTA format for structure prediction</p>
+    </div>
+
+    <div class="card bg-base-100 shadow-xl glassmorphism">
+        <div class="card-body">
+            <form method="post" class="space-y-6">
+                {% csrf_token %}
+                
+                {% if form.errors %}
+                <div class="alert alert-error mb-4">
+                    <div>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span class="font-jetbrains">Please correct the errors below.</span>
+                    </div>
                 </div>
-            </div>
-            {% endif %}
-            
-            <!-- Sequence Name -->
-            <div class="form-control mb-4">
-                <label class="label">
-                    <span class="label-text font-medium">Sequence Name</span>
-                    <span class="label-text-alt text-error">{{ form.sequence_name.errors }}</span>
-                </label>
-                <input type="text" name="sequence_name" class="input input-bordered" value="{{ form.sequence_name.value|default:'' }}" required>
-                <label class="label">
-                    <span class="label-text-alt">A short, descriptive name for your protein</span>
-                </label>
-            </div>
-            
-            <!-- FASTA Sequence -->
-            <div class="form-control mb-4">
-                <label class="label">
-                    <span class="label-text font-medium">FASTA Sequence</span>
-                    <span class="label-text-alt text-error">{{ form.sequence_fasta.errors }}</span>
-                </label>
-                <textarea name="sequence_fasta" class="textarea textarea-bordered h-32 font-mono" placeholder=">Sequence_ID&#10;MVKVGVNGFGRIGRLVTRAAFNSGKVDIVA..." required>{{ form.sequence_fasta.value|default:'' }}</textarea>
-                <label class="label">
-                    <span class="label-text-alt">Paste your protein sequence in FASTA format</span>
-                </label>
-            </div>
-            
-            <!-- Description (Optional) -->
-            <div class="form-control mb-4">
-                <label class="label">
-                    <span class="label-text font-medium">Description (Optional)</span>
-                    <span class="label-text-alt text-error">{{ form.description.errors }}</span>
-                </label>
-                <textarea name="description" class="textarea textarea-bordered h-20">{{ form.description.value|default:'' }}</textarea>
-                <label class="label">
-                    <span class="label-text-alt">Add any additional information about this protein</span>
-                </label>
-            </div>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <!-- Organism (Optional) -->
-                <div class="form-control mb-4">
+                {% endif %}
+                
+                <!-- Sequence Name -->
+                <div class="form-control">
                     <label class="label">
-                        <span class="label-text font-medium">Organism (Optional)</span>
-                        <span class="label-text-alt text-error">{{ form.organism.errors }}</span>
+                        <span class="label-text font-jetbrains font-medium flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Sequence Name
+                        </span>
+                        <span class="label-text-alt text-error font-jetbrains">{{ form.sequence_name.errors }}</span>
                     </label>
-                    <input type="text" name="organism" class="input input-bordered" value="{{ form.organism.value|default:'' }}">
+                    <input type="text" name="sequence_name" class="input input-bordered font-jetbrains" value="{{ form.sequence_name.value|default:'' }}" required>
                     <label class="label">
-                        <span class="label-text-alt">E.g., "Homo sapiens"</span>
+                        <span class="label-text-alt font-jetbrains text-proteus-secondary">A descriptive name for your protein sequence</span>
                     </label>
                 </div>
                 
-                <!-- Source (Optional) -->
-                <div class="form-control mb-4">
+                <!-- FASTA Sequence -->
+                <div class="form-control">
                     <label class="label">
-                        <span class="label-text font-medium">Source (Optional)</span>
-                        <span class="label-text-alt text-error">{{ form.source.errors }}</span>
+                        <span class="label-text font-jetbrains font-medium flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 11h16M4 15h16" />
+                            </svg>
+                            FASTA Sequence
+                        </span>
+                        <span class="label-text-alt text-error font-jetbrains">{{ form.sequence_fasta.errors }}</span>
                     </label>
-                    <input type="text" name="source" class="input input-bordered" value="{{ form.source.value|default:'' }}">
+                    <textarea name="sequence_fasta" class="textarea textarea-bordered h-32 font-jetbrains font-mono" placeholder=">Sequence_ID&#10;MVKVGVNGFGRIGRLVTRAAFNSGKVDIVA..." required>{{ form.sequence_fasta.value|default:'' }}</textarea>
                     <label class="label">
-                        <span class="label-text-alt">E.g., "UniProt", "GenBank"</span>
+                        <span class="label-text-alt font-jetbrains text-proteus-secondary">Paste your protein sequence in FASTA format</span>
                     </label>
                 </div>
-            </div>
-            
-            <div class="flex justify-between mt-6">
-                <a href="{% url 'prediction_list' %}" class="btn btn-outline">Cancel</a>
-                <button type="submit" class="btn btn-primary">Submit Sequence</button>
-            </div>
-        </form>
+                
+                <!-- Description -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-jetbrains font-medium flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7" />
+                            </svg>
+                            Description (Optional)
+                        </span>
+                        <span class="label-text-alt text-error font-jetbrains">{{ form.description.errors }}</span>
+                    </label>
+                    <textarea name="description" class="textarea textarea-bordered h-20 font-jetbrains">{{ form.description.value|default:'' }}</textarea>
+                    <label class="label">
+                        <span class="label-text-alt font-jetbrains text-proteus-secondary">Additional details about your protein sequence</span>
+                    </label>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Organism -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-jetbrains font-medium flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                </svg>
+                                Organism (Optional)
+                            </span>
+                            <span class="label-text-alt text-error font-jetbrains">{{ form.organism.errors }}</span>
+                        </label>
+                        <input type="text" name="organism" class="input input-bordered font-jetbrains" value="{{ form.organism.value|default:'' }}">
+                        <label class="label">
+                            <span class="label-text-alt font-jetbrains text-proteus-secondary">E.g., "Homo sapiens"</span>
+                        </label>
+                    </div>
+                    
+                    <!-- Source -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-jetbrains font-medium flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                                </svg>
+                                Source (Optional)
+                            </span>
+                            <span class="label-text-alt text-error font-jetbrains">{{ form.source.errors }}</span>
+                        </label>
+                        <input type="text" name="source" class="input input-bordered font-jetbrains" value="{{ form.source.value|default:'' }}">
+                        <label class="label">
+                            <span class="label-text-alt font-jetbrains text-proteus-secondary">E.g., "UniProt", "GenBank"</span>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="flex flex-col sm:flex-row justify-between gap-4 mt-8">
+                    <a href="{% url 'prediction_list' %}" class="btn btn-outline font-jetbrains gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12" />
+                        </svg>
+                        Cancel
+                    </a>
+                    <button type="submit" class="btn btn-primary font-jetbrains gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Submit Sequence
+                    </button>
+                </div>
+            </form>
+        </div>
     </div>
-</div>
 
-<div class="mt-8 text-center text-sm text-base-content opacity-70">
-    <p>Processing may take several minutes depending on sequence length and server load.</p>
+    <!-- Processing Info Card -->
+    <div class="mt-8 card bg-base-100 shadow-lg glassmorphism p-6">
+        <div class="flex items-start gap-4">
+            <div class="flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-proteus-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+            </div>
+            <div>
+                <h3 class="text-lg font-medium font-jetbrains mb-2">Processing Information</h3>
+                <ul class="list-disc list-inside space-y-2 font-jetbrains text-sm text-proteus-secondary">
+                    <li>Structure prediction may take several minutes to complete</li>
+                    <li>Longer sequences will require more processing time</li>
+                    <li>You can track the status in your predictions list</li>
+                    <li>You'll receive a notification when the prediction is ready</li>
+                </ul>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}
