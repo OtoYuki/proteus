@@ -3,57 +3,65 @@
 {% block title %}Login | Proteus{% endblock %}
 
 {% block content %}
-<div class="flex justify-center items-center min-h-[70vh]">
-    <div class="card w-96 bg-base-100 shadow-xl">
+<div class="flex justify-center items-center min-h-[70vh] px-4">
+    <div class="card w-full max-w-lg bg-base-100 shadow-xl glassmorphism">
         <div class="card-body">
-            <h2 class="card-title text-2xl font-bold text-center mb-6">Login</h2>
+            <h2 class="card-title text-2xl font-bold text-center mb-6 font-playfair text-proteus-accent">Welcome Back</h2>
             
-            <form method="post">
+            <form method="post" class="space-y-4">
                 {% csrf_token %}
                 
                 {% if form.errors %}
-                <div class="alert alert-error">
+                <div class="alert alert-error shadow-sm">
                     <div>
                         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        <span>Invalid username or password.</span>
+                        <span class="font-jetbrains text-sm">Invalid username or password.</span>
                     </div>
                 </div>
                 {% endif %}
                 
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">Email</span>
+                        <span class="label-text font-jetbrains flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.206" />
+                            </svg>
+                            Email
+                        </span>
                     </label>
-                    <input type="text" name="username" class="input input-bordered" required>
+                    <input type="text" name="username" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300" required>
                 </div>
                 
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">Password</span>
+                        <span class="label-text font-jetbrains flex items-center gap-2">
+                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                           </svg>
+                           Password
+                        </span>
+                        <a href="{% url 'password_reset' %}" class="label-text-alt link link-hover font-jetbrains text-sm">Forgot password?</a>
                     </label>
-                    <input type="password" name="password" class="input input-bordered" required>
-                    <label class="label">
-                        <a href="{% url 'password_reset' %}" class="label-text-alt link link-hover">Forgot password?</a>
-                    </label>
+                    <input type="password" name="password" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300" required>
                 </div>
                 
-                <div class="form-control mt-6">
-                    <button class="btn btn-primary">Login</button>
+                <div class="form-control pt-4">
+                    <button class="btn btn-primary font-jetbrains hover:shadow-lg transition-shadow duration-300">Login</button>
                 </div>
 
                 <div class="form-control">
                     <label class="label cursor-pointer justify-start gap-2">
                         <input type="checkbox" name="remember_me" class="checkbox checkbox-sm checkbox-primary">
-                        <span class="label-text">Remember me</span>
+                        <span class="label-text font-jetbrains text-sm">Remember me</span>
                     </label>
                 </div>
             </form>
             
-            <div class="divider">OR</div>
+            <div class="divider font-jetbrains text-sm">OR</div>
             
-            <div class="text-center">
-                <p>Don't have an account?</p>
-                <a href="{% url 'signup' %}" class="link link-primary">Sign up</a>
+            <div class="text-center font-jetbrains text-sm">
+                <p class="text-proteus-secondary">Don't have an account?</p>
+                <a href="{% url 'signup' %}" class="link link-primary font-medium">Sign up</a>
             </div>
         </div>
     </div>

@@ -8,9 +8,9 @@ from .models import ProteinSequence, Prediction, ValidationMetric
 from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
 import logging
-from django.contrib.auth import login, authenticate
+from django.contrib.auth import login
 from django.contrib import messages
-from django.shortcuts import render, redirect
+from django.contrib.auth.decorators import login_required
 import datetime
 
 
@@ -328,10 +328,17 @@ def signup_view(request):
             login(request, user)
             messages.success(
                 request,
-                f"Welcome to Proteus, {user.first_name or user.email.split('@')[0]}!",
+                f"Welcome to Proteus, {user.first_name or user.email.split('@')[0]}! Your account has been created successfully.",
             )
-            return redirect("home")
+            # Redirect to a dedicated success page
+            return redirect("signup_success")
     else:
         form = SignupForm()
 
     return render(request, "registration/signup.html", {"form": form})
+
+
+# Simple view for the signup success page
+@login_required
+def signup_success_view(request):
+    return render(request, "registration/signup_success.html")

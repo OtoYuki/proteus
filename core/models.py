@@ -35,21 +35,55 @@ class UserManager(BaseUserManager):
             raise ValueError("The Email field is a mandatory requirement.")
         email = self.normalize_email(email)
 
-        if "role" not in extra_fields:
+        # Role should absolutely be in extra_fields when called from create_user/create_superuser
+        if "role" not in extra_fields or extra_fields["role"] is None:
+            # This indicates a programming error if hit from create_user/superuser
+            print("ERROR: _create_user called without a valid role in extra_fields.")
+            # Attempt to recover with default, but this shouldn't be necessary
             try:
-                role = Role.objects.get_or_create(role_name="User")[0]
-                extra_fields["role"] = role
-            except Exception:
-                raise ValueError("We could not assign a role to the user.")
+                default_role, _ = Role.objects.get_or_create(role_name="User")
+                extra_fields["role"] = default_role
+                print("Warning: _create_user recovered by assigning the default role.")
+            except Exception as e:
+                raise ValueError(
+                    f"Could not assign default role in _create_user recovery: {e}"
+                )
 
+        print(f"_create_user: Role in extra_fields: {extra_fields.get('role')}")
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
+        print(f"_create_user: User object created with role: {user.role}")
         user.save(using=self._db)
+        print(f"_create_user: User saved with ID: {user.pk}")
         return user
 
     def create_user(self, email, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
+
+        # Ensure the default 'User' role is assigned *before* calling _create_user
+        if "role" not in extra_fields:
+            print("create_user: Assigning default 'User' role.")
+            try:
+                user_role, created = Role.objects.get_or_create(role_name="User")
+                if created:
+                    print(f"create_user: Default role 'User' created.")
+                extra_fields["role"] = user_role
+                print(f"create_user: Assigned role: {user_role}")
+            except Exception as e:
+                # Make failure explicit and stop user creation
+                print(f"ERROR: Failed to get or create the default 'User' role: {e}")
+                raise ValueError(
+                    f"System configuration error: Default 'User' role is missing or inaccessible. {e}"
+                )
+        else:
+            print(f"create_user: Role provided in extra_fields: {extra_fields['role']}")
+
+        # Ensure role is not None before proceeding
+        if extra_fields.get("role") is None:
+            print("ERROR: Role became None unexpectedly in create_user.")
+            raise ValueError("System error: Role assignment failed unexpectedly.")
+
         return self._create_user(email, password, **extra_fields)
 
     def create_superuser(self, email, password=None, **extra_fields):
@@ -61,6 +95,21 @@ class UserManager(BaseUserManager):
         if extra_fields.get("is_superuser") is not True:
             raise ValueError("Superuser must have is_superuser=True.")
 
+        # Attempt to set the Admin role explicitly
+        print("create_superuser: Assigning 'Admin' role.")
+        try:
+            admin_role, created = Role.objects.get_or_create(role_name="Admin")
+            if created:
+                print(f"create_superuser: Admin role created.")
+            extra_fields["role"] = admin_role
+            print(f"create_superuser: Assigned role: {admin_role}")
+        except Exception as e:
+            print(f"ERROR: Could not assign Admin role during superuser creation: {e}")
+            # Raise error to prevent superuser creation without Admin role
+            raise ValueError(
+                f"System configuration error: 'Admin' role is missing or inaccessible. {e}"
+            )
+
         return self._create_user(email, password, **extra_fields)
 
 
@@ -68,7 +117,14 @@ class User(AbstractUser):
     """Custom User model with email as the primary identifier."""
 
     user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name="users")
+    # Allow null/blank temporarily for the save logic to handle default assignment
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.SET_NULL,  # Keep SET_NULL for flexibility, but manager should prevent null for new users
+        related_name="users",
+        null=True,
+        blank=True,
+    )
     email = models.EmailField(
         unique=True,
         db_index=True,
@@ -83,6 +139,54 @@ class User(AbstractUser):
     REQUIRED_FIELDS = []
 
     objects = UserManager()
+
+    def save(self, *args, **kwargs):
+        print(f"User.save: Called for user {self.email}. Current role: {self.role}")
+        # Role assignment is now handled entirely by the UserManager before save is called.
+        # We only need to sync is_staff and handle superuser role enforcement.
+
+        # 1. Sync is_staff based on role (if role is set)
+        if self.role:
+            print(f"User.save: Syncing is_staff based on role: {self.role.role_name}")
+            if self.role.role_name == "Admin":
+                self.is_staff = True
+            else:
+                # Ensure non-admins are not staff, unless they are superusers
+                if not self.is_superuser:
+                    self.is_staff = False
+            print(f"User.save: is_staff set to {self.is_staff}")
+        else:
+            # This case should ideally not happen for new users if UserManager works.
+            # Could happen if role is manually set to None later.
+            print("User.save: Role is None. Setting is_staff based on is_superuser.")
+            if not self.is_superuser:
+                self.is_staff = False
+            print(f"User.save: is_staff set to {self.is_staff}")
+
+        # 2. Ensure Superusers always have 'Admin' role and are staff
+        if self.is_superuser:
+            print("User.save: Ensuring superuser settings.")
+            self.is_staff = True  # Superusers MUST be staff
+            try:
+                admin_role, _ = Role.objects.get_or_create(role_name="Admin")
+                if self.role != admin_role:
+                    print(
+                        f"User.save: Assigning/Correcting Admin role for superuser {self.email}."
+                    )
+                    self.role = admin_role
+            except Exception as e:
+                # Log this critical error
+                print(
+                    f"CRITICAL ERROR: Could not ensure 'Admin' role for superuser {self.email} in save(): {e}"
+                )
+                # Consider implications: superuser might lack Admin role if DB issue persists
+            print(
+                f"User.save: Superuser final role: {self.role}, is_staff: {self.is_staff}"
+            )
+
+        print(f"User.save: Calling super().save() for user {self.email}")
+        super().save(*args, **kwargs)
+        print(f"User.save: Finished saving user {self.email}")
 
     class Meta:
         db_table = "users"

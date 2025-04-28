@@ -3,98 +3,121 @@
 {% block title %}Sign Up | Proteus{% endblock %}
 
 {% block content %}
-<div class="flex justify-center items-center min-h-[70vh]">
-    <div class="card w-96 bg-base-100 shadow-xl">
+<div class="flex justify-center items-center min-h-[70vh] py-8 px-4">
+    <div class="card w-full max-w-lg bg-base-100 shadow-xl glassmorphism">
         <div class="card-body">
-            <h2 class="card-title text-2xl font-bold text-center mb-6">Create an Account</h2>
+            <h2 class="card-title text-2xl font-bold text-center mb-6 font-playfair text-proteus-accent">Create Your Account</h2>
             
-            <form method="post">
+            <form method="post" class="space-y-4">
                 {% csrf_token %}
                 
-                {% if form.errors %}
-                <div class="alert alert-error">
+                {% if form.errors or form.non_field_errors %}
+                <div class="alert alert-error shadow-sm">
                     <div>
                         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current flex-shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                        <span>
+                        <span class="font-jetbrains text-sm">
                             {% for field, errors in form.errors.items %}
                                 {% for error in errors %}
                                     {{ error }}
                                 {% endfor %}
                             {% endfor %}
+                            {% if form.non_field_errors %}
+                                {% for error in form.non_field_errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            {% endif %}
                         </span>
                     </div>
                 </div>
                 {% endif %}
 
-                <div class="grid grid-cols-2 gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div class="form-control">
                         <label class="label">
-                            <span class="label-text">First Name</span>
+                            <span class="label-text font-jetbrains flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                                First Name
+                            </span>
                         </label>
-                        <input type="text" name="first_name" class="input input-bordered" 
+                        <input type="text" name="first_name" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300" 
                                value="{{ form.first_name.value|default:'' }}">
                     </div>
                     
                     <div class="form-control">
                         <label class="label">
-                            <span class="label-text">Last Name</span>
+                            <span class="label-text font-jetbrains flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                  <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                                Last Name
+                            </span>
                         </label>
-                        <input type="text" name="last_name" class="input input-bordered"
+                        <input type="text" name="last_name" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300"
                                value="{{ form.last_name.value|default:'' }}">
                     </div>
                 </div>
                 
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">Email</span>
+                        <span class="label-text font-jetbrains flex items-center gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                              <path stroke-linecap="round" stroke-linejoin="round" d="M16 12a4 4 0 10-8 0 4 4 0 008 0zm0 0v1.5a2.5 2.5 0 005 0V12a9 9 0 10-9 9m4.5-1.206a8.959 8.959 0 01-4.5 1.206" />
+                            </svg>
+                            Email
+                        </span>
                         {% if form.email.errors %}
-                            <span class="label-text-alt text-error">{{ form.email.errors|join:", " }}</span>
+                            <span class="label-text-alt text-error font-jetbrains text-xs">{{ form.email.errors|join:", " }}</span>
                         {% endif %}
                     </label>
-                    <input type="email" name="email" class="input input-bordered {% if form.email.errors %}input-error{% endif %}" 
+                    <input type="email" name="email" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300 {% if form.email.errors %}input-error{% endif %}" 
                            value="{{ form.email.value|default:'' }}" required>
                 </div>
                 
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">Role</span>
+                        <span class="label-text font-jetbrains flex items-center gap-2">
+                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                           </svg>
+                           Password
+                        </span>
+                        {% if form.password1.errors %}
+                            <span class="label-text-alt text-error font-jetbrains text-xs">{{ form.password1.errors|join:", " }}</span>
+                        {% endif %}
                     </label>
-                    <select name="role" class="select select-bordered w-full">
-                        {% for role in form.role.field.queryset %}
-                            <option value="{{ role.pk }}" {% if form.role.value == role.pk %}selected{% endif %}>
-                                {{ role.role_name }}
-                            </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                
-                <div class="form-control">
+                    <input type="password" name="password1" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300 {% if form.password1.errors %}input-error{% endif %}" required>
                     <label class="label">
-                        <span class="label-text">Password</span>
-                    </label>
-                    <input type="password" name="password1" class="input input-bordered" required>
-                    <label class="label">
-                        <span class="label-text-alt text-base-content/70">Must be at least 8 characters with letters and numbers</span>
+                        <span class="label-text-alt text-base-content/70 font-jetbrains text-xs">Must be at least 8 characters with letters and numbers</span>
                     </label>
                 </div>
                 
                 <div class="form-control">
                     <label class="label">
-                        <span class="label-text">Confirm Password</span>
+                        <span class="label-text font-jetbrains flex items-center gap-2">
+                           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-proteus-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                           </svg>
+                           Confirm Password
+                        </span>
+                         {% if form.password2.errors %}
+                            <span class="label-text-alt text-error font-jetbrains text-xs">{{ form.password2.errors|join:", " }}</span>
+                        {% endif %}
                     </label>
-                    <input type="password" name="password2" class="input input-bordered" required>
+                    <input type="password" name="password2" class="input input-bordered font-jetbrains focus:input-primary transition-colors duration-300 {% if form.password2.errors %}input-error{% endif %}" required>
                 </div>
-                
-                <div class="form-control mt-6">
-                    <button class="btn btn-primary">Sign Up</button>
+
+                <div class="form-control pt-4">
+                    <button class="btn btn-primary font-jetbrains hover:shadow-lg transition-shadow duration-300">Sign Up</button>
                 </div>
             </form>
             
-            <div class="divider">OR</div>
+            <div class="divider font-jetbrains text-sm">OR</div>
             
-            <div class="text-center">
-                <p>Already have an account?</p>
-                <a href="{% url 'login' %}" class="link link-primary">Login</a>
+            <div class="text-center font-jetbrains text-sm">
+                <p class="text-proteus-secondary">Already have an account?</p>
+                <a href="{% url 'login' %}" class="link link-primary font-medium">Login</a>
             </div>
         </div>
     </div>

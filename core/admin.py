@@ -24,7 +24,7 @@ class UserAdmin(BaseUserAdmin):
             {
                 "fields": (
                     "is_active",
-                    "is_staff",
+                    "is_staff",  # Keep is_staff visible, but consider making it read-only
                     "is_superuser",
                     "groups",
                     "user_permissions",
@@ -38,14 +38,24 @@ class UserAdmin(BaseUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "role"),
+                # Remove role from add_fieldsets, it will be set by save()
+                "fields": ("email", "password1", "password2"),
             },
         ),
     )
-    list_display = ("email", "first_name", "last_name", "role", "is_staff")
+    list_display = (
+        "email",
+        "first_name",
+        "last_name",
+        "role",
+        "is_staff",
+        "is_superuser",
+    )  # Added is_superuser for clarity
     search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
     list_filter = ("is_staff", "is_superuser", "is_active", "groups", "role")
+    # Make is_staff read-only in the admin change view as it's now managed by the Role
+    readonly_fields = ("is_staff", "last_login", "date_joined", "created_at")
 
 
 # Register all models
