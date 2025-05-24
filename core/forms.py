@@ -1,14 +1,14 @@
 from django import forms
-from .models import ProteinSequence, Role, User  # Ensure User is imported
+from .models import ProteinSequence, Role, User
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import get_user_model
+from .utils import parse_fasta
 
 
 class SequenceForm(forms.ModelForm):
     """
     The form for uploading protein sequences.
     """
-
     class Meta:
         model = ProteinSequence
         fields = [
@@ -18,6 +18,22 @@ class SequenceForm(forms.ModelForm):
             "organism",
             "source",
         ]
+    
+    def clean_sequence_fasta(self):
+        """Validate the FASTA sequence"""
+        sequence_fasta = self.cleaned_data.get('sequence_fasta')
+        if sequence_fasta:
+            try:
+                result = parse_fasta(sequence_fasta)
+                # Calculate sequence length without newlines
+                sequence_length = len(result['sequence'])
+                # Store it for save() method
+                self.instance.sequence_length = sequence_length
+                self.instance.status = 'pending'
+                return sequence_fasta
+            except Exception as e:
+                raise forms.ValidationError(str(e))
+        return sequence_fasta
 
 
 class SignupForm(UserCreationForm):

@@ -710,13 +710,29 @@ def run_colabfold(prediction_id):
 def run_gromacs_simulation(prediction_id):
     """
     Run a GROMACS simulation for a given prediction derived from ColabFold.
-    This improved implementation:
-    - Ensures GPU acceleration via CUDA when available
-    - Manages resource monitoring to stay within 85% CPU/memory limits
-    - Implements proper database logging and updates
-    - Creates clean working directories and maintains trajectory files
-    - Calculates essential structural metrics (RMSD, Rg, energy)
+    This implementation supports both TRR and XTC trajectory formats.
     """
+    # Check for GPU availability - ALWAYS use GPU when available
+    try:
+        import subprocess
+
+        nvidia_output = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+        has_gpu = nvidia_output.returncode == 0
+        if has_gpu:
+            logger.info(
+                "NVIDIA GPU detected, will use GPU acceleration for maximum performance"
+            )
+        else:
+            logger.info("No NVIDIA GPU detected, falling back to CPU")
+    except FileNotFoundError:
+        has_gpu = False
+        logger.info("nvidia-smi not found, assuming no GPU available")
+
+    # Set up resource allocation identical to ColabFold task
+    os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = (
+        "0.8"  # Memory allocation like ColabFold
+    )
+
     job = None
     prediction = None
     validation_metric = None
@@ -739,171 +755,37 @@ def run_gromacs_simulation(prediction_id):
             logger.error(error_msg)
             raise Exception(error_msg)
 
-        # Create or update job entry
+        # Find existing job and validation metric - they should exist as we create them in the view
         try:
-            # Find existing job or create new one
-            job = JobQueue.objects.filter(
-                job_parameters__prediction_id=str(prediction_id),
+            job = JobQueue.objects.get(
                 job_type="gromacs_simulation",
-            ).first()
-
-            if not job:
-                job = JobQueue.objects.create(
-                    user=prediction.sequence.user,
-                    job_type="gromacs_simulation",
-                    status="running",
-                    started_at=datetime.datetime.now(tz.utc),
-                    job_parameters={
-                        "prediction_id": str(prediction_id),
-                        "component": "simulation_engine",
-                        "priority": 3,  # Lower priority than predictions and rankings
-                    },
-                    priority=3,
-                )
-                logger.info(
-                    f"Created new simulation job for prediction: {prediction_id}"
-                )
-            else:
-                job.status = "running"
-                job.started_at = datetime.datetime.now(tz.utc)
-                job.save()
-                logger.info(
-                    f"Updated existing simulation job for prediction: {prediction_id}"
-                )
-
-            # Record initial system metrics
-            try:
-                SystemMetric.objects.create(
-                    cpu_usage=psutil.cpu_percent(),
-                    memory_usage=psutil.virtual_memory().percent,
-                    disk_usage=psutil.disk_usage("/").percent,
-                    active_jobs=JobQueue.objects.filter(status="running").count(),
-                    status="normal",
-                    performance_metrics={
-                        "prediction_id": str(prediction_id),
-                        "action": "simulation_started",
-                        "job_id": str(job.job_id),
-                    },
-                )
-            except Exception as e:
-                logger.warning(f"Could not create system metrics: {e}")
-
-            # Create initial log entry
-            Log.objects.create(
-                user=prediction.sequence.user,
-                action="gromacs_simulation_started",
-                details=f"Starting GROMACS simulation for prediction {prediction_id}",
-                status="info",
-                component="simulation_engine",
-                session_id=job.job_id,
+                job_parameters__prediction_id=str(prediction_id),
+                status="pending",
             )
-        except Exception as e:
-            logger.error(f"Error in job management: {e}")
-
-        # Check existing simulations to avoid duplicates
-        existing_sim = ValidationMetric.objects.filter(
-            prediction_id=prediction_id, status__in=["running", "pending"]
-        ).first()
-
-        if existing_sim:
-            # Check for stalled simulations
-            time_threshold = datetime.datetime.now(tz.utc) - datetime.timedelta(
-                minutes=30
-            )
-            if existing_sim.validation_date < time_threshold:
-                existing_sim.status = "failed"
-                existing_sim.validation_notes = f"{existing_sim.validation_notes or ''}\nSimulation timed out after 30 minutes of inactivity"
-                existing_sim.save()
-                logger.warning(
-                    f"Found stale simulation for {prediction_id}, marking as failed"
-                )
-            else:
-                logger.warning(f"A simulation is already running for {prediction_id}")
-                return f"A simulation is already running for prediction {prediction_id}"
-
-        # Create a ValidationMetric entry for this simulation
-        validation_metric = ValidationMetric.objects.create(
-            prediction=prediction,
-            status="pending",
-            validation_notes="Preparing GROMACS simulation environment",
-        )
-        logger.info(f"Created validation metric entry {validation_metric.metric_id}")
-
-        # Check for GPU availability by checking nvidia-smi command
-        has_gpu = False
-        try:
-            gpu_check = subprocess.run(
-                "nvidia-smi", shell=True, capture_output=True, text=True
-            )
-            if gpu_check.returncode == 0:
-                has_gpu = True
-                logger.info("NVIDIA GPU detected, will use GPU acceleration")
-            else:
-                logger.warning(
-                    "No NVIDIA GPU detected, will proceed with CPU-only mode"
-                )
-        except:
-            logger.warning("Could not check for GPU, assuming CPU-only mode")
-
-        # Check if GROMACS Docker container is available
-        try:
-            # Check for CUDA-enabled GROMACS container if GPU is available
-            container_name = "gromacs_gpu" if has_gpu else "gromacs"
-            check_gromacs_cmd = (
-                f"docker ps -a | grep {container_name} || echo 'not_found'"
-            )
-            container_result = subprocess.run(
-                check_gromacs_cmd, shell=True, capture_output=True, text=True
+            validation_metric = ValidationMetric.objects.get(
+                prediction=prediction, status="pending"
             )
 
-            if "not_found" in container_result.stdout:
-                logger.info(
-                    f"GROMACS container not found, creating {container_name} container..."
-                )
-                if has_gpu:
-                    # Create CUDA-enabled GROMACS container
-                    create_container_cmd = (
-                        "docker run -d --name gromacs_gpu --gpus all "
-                        "--restart unless-stopped "
-                        "-v /home/sire/gromacs_data:/data "
-                        "nvcr.io/hpc/gromacs:2023"
-                    )
-                else:
-                    # Create CPU-only GROMACS container
-                    create_container_cmd = (
-                        "docker run -d --name gromacs "
-                        "--restart unless-stopped "
-                        "-v /home/sire/gromacs_data:/data "
-                        "gromacs/gromacs:latest"
-                    )
-                subprocess.run(create_container_cmd, shell=True, check=True)
-                logger.info(f"Created {container_name} container")
-            elif "Exited" in container_result.stdout:
-                logger.info(
-                    f"{container_name} container exists but is not running, starting it..."
-                )
-                start_container_cmd = f"docker start {container_name}"
-                subprocess.run(start_container_cmd, shell=True, check=True)
-                logger.info(f"Started {container_name} container")
-        except Exception as e:
-            logger.error(f"Error setting up GROMACS container: {e}")
-            validation_metric.status = "failed"
-            validation_metric.validation_notes = (
-                f"Failed to set up GROMACS container: {str(e)}"
-            )
+            # Update status to running
+            job.status = "running"
+            job.save()
+
+            validation_metric.status = "running"
+            validation_metric.validation_notes = "Setting up GROMACS simulation"
             validation_metric.save()
 
-            if job:
-                job.status = "failed"
-                job.completed_at = datetime.datetime.now(tz.utc)
-                job.save()
+            logger.info(f"Updated job and validation metric to running state")
 
-            raise Exception(f"Failed to set up GROMACS container: {str(e)}")
+        except (JobQueue.DoesNotExist, ValidationMetric.DoesNotExist) as e:
+            error_msg = f"Required job or validation metric not found: {str(e)}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
         # Create a unique working directory for this simulation
-        protein_name = f"protein_{prediction_id}"[:25].replace("-", "_")
-        sim_dir = f"/home/sire/gromacs_data/{protein_name}"
-        container_sim_dir = f"/data/{protein_name}"
+        # Fix the variable name issue by defining protein_name here
+        protein_name = f"protein_{str(prediction_id).replace('-', '_')}"
+        sim_dir = f"/home/sire/colabfold_data/simulations/{prediction_id}"
+        container_sim_dir = f"/data/simulations/{prediction_id}"
 
         # Create directories and copy PDB file
         os.makedirs(sim_dir, exist_ok=True)
@@ -911,64 +793,7 @@ def run_gromacs_simulation(prediction_id):
         shutil.copy2(prediction.pdb_file_path, pdb_destination)
         logger.info(f"Copied PDB file to {pdb_destination}")
 
-        # Update validation metric status
-        validation_metric.status = "running"
-        validation_metric.validation_notes = "Setting up GROMACS simulation"
-        validation_metric.save()
-
-        logger.info("Preparing GROMACS simulation with controlled resource usage")
-
-        # Define the GROMACS workflow steps with resource control and GPU acceleration
-        # Each step is a shell command that will be executed in sequence
-        nice_prefix = "nice -n 10"  # Lower CPU priority to avoid resource exhaustion
-        container_name = "gromacs_gpu" if has_gpu else "gromacs"
-
-        # GPU flag for mdrun
-        gpu_flag = "-update gpu -bonded gpu -nb gpu" if has_gpu else ""
-
-        steps = [
-            # Step 1: Generate topology
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx pdb2gmx -f {protein_name}.pdb -o {protein_name}_processed.gro "
-            f"-water spc -ter -ignh -ff amber03 -p {protein_name}.top <<< 0'",
-            # Step 2: Define simulation box
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx editconf -f {protein_name}_processed.gro -o {protein_name}_box.gro "
-            f"-c -d 1.0 -bt dodecahedron'",
-            # Step 3: Solvate the box
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx solvate -cp {protein_name}_box.gro -cs spc216.gro "
-            f"-o {protein_name}_solvated.gro -p {protein_name}.top'",
-            # Step 4: Add ions for neutrality
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx grompp -f /data/ions.mdp -c {protein_name}_solvated.gro "
-            f"-p {protein_name}.top -o {protein_name}_ions.tpr -maxwarn 2 && "
-            f'echo "SOL" | gmx genion -s {protein_name}_ions.tpr -o {protein_name}_solv_ions.gro '
-            f"-p {protein_name}.top -pname NA -nname CL -neutral'",
-            # Step 5: Energy minimization (CPU-only as it's more stable for this step)
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx grompp -f /data/em.mdp -c {protein_name}_solv_ions.gro "
-            f"-p {protein_name}.top -o {protein_name}_em.tpr -maxwarn 2 && "
-            f"gmx mdrun -v -s {protein_name}_em.tpr -deffnm {protein_name}_em'",
-            # Step 6: NVT equilibration (with GPU if available)
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx grompp -f /data/nvt.mdp -c {protein_name}_em.gro "
-            f"-r {protein_name}_em.gro -p {protein_name}.top -o {protein_name}_nvt.tpr -maxwarn 2 && "
-            f"gmx mdrun -v {gpu_flag} -s {protein_name}_nvt.tpr -deffnm {protein_name}_nvt'",
-            # Step 7: NPT equilibration (with GPU if available)
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx grompp -f /data/npt.mdp -c {protein_name}_nvt.gro "
-            f"-r {protein_name}_nvt.gro -t {protein_name}_nvt.cpt "
-            f"-p {protein_name}.top -o {protein_name}_npt.tpr -maxwarn 2 && "
-            f"gmx mdrun -v {gpu_flag} -s {protein_name}_npt.tpr -deffnm {protein_name}_npt'",
-            # Step 8: Production MD (with GPU if available)
-            f"{nice_prefix} docker exec {container_name} bash -c 'cd {container_sim_dir} && "
-            f"gmx grompp -f /data/md.mdp -c {protein_name}_npt.gro "
-            f"-t {protein_name}_npt.cpt -p {protein_name}.top -o {protein_name}_md.tpr -maxwarn 2 && "
-            f"gmx mdrun -v {gpu_flag} -s {protein_name}_md.tpr -deffnm {protein_name}_md'",
-        ]
-
-        # Create MDP files with parameters optimized for GPU when available
+        # Create MDP files in simulation directory
         mdp_templates = {
             "ions.mdp": "; ions.mdp - for adding ions\nintegrator  = steep\nemtol = 1000.0\nnsteps = 50000",
             "em.mdp": """; em.mdp - energy minimization
@@ -988,8 +813,7 @@ coulombtype = PME
 rcoulomb    = 1.2
 vdwtype     = Cut-off
 rvdw        = 1.2
-pbc         = xyz
-""",
+pbc         = xyz""",
             "nvt.mdp": f"""; nvt.mdp - NVT equilibration
 define      = -DPOSRES
 ; Run control
@@ -1001,6 +825,7 @@ nstenergy   = 500
 nstxout     = 500
 nstvout     = 500
 nstfout     = 0
+nstxtcout   = 500       ; Output XTC format explicitly
 ; Bond constraints
 constraints = h-bonds
 constraint-algorithm = lincs
@@ -1023,8 +848,7 @@ pcoupl      = no
 ; Velocity generation
 gen_vel     = yes
 gen_temp    = 300
-gen_seed    = -1
-""",
+gen_seed    = -1""",
             "npt.mdp": f"""; npt.mdp - NPT equilibration
 define      = -DPOSRES
 ; Run control
@@ -1036,6 +860,7 @@ nstenergy   = 500
 nstxout     = 500
 nstvout     = 500
 nstfout     = 0
+nstxtcout   = 500       ; Output XTC format explicitly
 ; Bond constraints
 constraints = h-bonds
 constraint-algorithm = lincs
@@ -1058,8 +883,7 @@ pcoupl      = Berendsen
 pcoupltype  = isotropic
 tau_p       = 2.0
 ref_p       = 1.0
-compressibility = 4.5e-5
-""",
+compressibility = 4.5e-5""",
             "md.mdp": f"""; md.mdp - Production MD
 ; Run control
 integrator  = md
@@ -1070,6 +894,7 @@ nstenergy   = 1000
 nstxout     = 1000
 nstvout     = 1000
 nstfout     = 0
+nstxtcout   = 1000      ; Output XTC format explicitly
 ; Bond constraints
 constraints = h-bonds
 constraint-algorithm = lincs
@@ -1094,40 +919,74 @@ pcoupl      = Parrinello-Rahman
 pcoupltype  = isotropic
 tau_p       = 2.0
 ref_p       = 1.0
-compressibility = 4.5e-5
-""",
+compressibility = 4.5e-5""",
         }
 
-        # Create MDP files in simulation directory
+        # First create MDP files in simulation directory
         for mdp_name, mdp_content in mdp_templates.items():
-            with open(f"{sim_dir}/{mdp_name}", "w") as mdp_file:
+            mdp_path = f"{sim_dir}/{mdp_name}"
+            with open(mdp_path, "w") as mdp_file:
                 mdp_file.write(mdp_content)
 
         logger.info(
-            f"Created MDP template files for GROMACS simulation using {'GPU' if has_gpu else 'CPU'} mode"
+            f"Created MDP template files with XTC output using {'GPU' if has_gpu else 'CPU'} mode"
         )
 
-        # After each simulation step, update the validation metric with progress
+        # Define GPU resource flags like ColabFold
+        gpu_resource = "--gpus all" if has_gpu else ""
+        container_memory = "--memory=16g --memory-swap=20g --shm-size=8g"  # Match ColabFold memory limits
+
+        # GPU flag for mdrun - use all available GPU acceleration
+        gpu_flag = "-update gpu -bonded gpu -nb gpu -pme gpu" if has_gpu else ""
+
+        # Update steps to use the container-mounted MDP files and GPU resources
+        steps = [
+            # Step 1: Generate topology
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx pdb2gmx -f {protein_name}.pdb -o {protein_name}_processed.gro "
+            f"-water spc -ter -ignh -ff amber03 -p {protein_name}.top <<< 0'",
+            # Step 2: Define simulation box
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx editconf -f {protein_name}_processed.gro -o {protein_name}_box.gro "
+            f"-c -d 1.0 -bt dodecahedron'",
+            # Step 3: Solvate the box
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx solvate -cp {protein_name}_box.gro -cs spc216.gro "
+            f"-o {protein_name}_solvated.gro -p {protein_name}.top'",
+            # Step 4: Add ions for neutrality
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx grompp -f {container_sim_dir}/ions.mdp -c {protein_name}_solvated.gro "
+            f"-p {protein_name}.top -o {protein_name}_ions.tpr -maxwarn 2 && "
+            f'echo "SOL" | gmx genion -s {protein_name}_ions.tpr -o {protein_name}_solv_ions.gro '
+            f"-p {protein_name}.top -pname NA -nname CL -neutral'",
+            # Step 5: Energy minimization
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx grompp -f {container_sim_dir}/em.mdp -c {protein_name}_solv_ions.gro "
+            f"-p {protein_name}.top -o {protein_name}_em.tpr -maxwarn 2 && "
+            f"gmx mdrun -v {gpu_flag} -s {protein_name}_em.tpr -deffnm {protein_name}_em'",
+            # Step 6: NVT equilibration with GPU
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx grompp -f {container_sim_dir}/nvt.mdp -c {protein_name}_em.gro "
+            f"-r {protein_name}_em.gro -p {protein_name}.top -o {protein_name}_nvt.tpr -maxwarn 2 && "
+            f"gmx mdrun -v {gpu_flag} -s {protein_name}_nvt.tpr -deffnm {protein_name}_nvt'",
+            # Step 7: NPT equilibration with GPU
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx grompp -f {container_sim_dir}/npt.mdp -c {protein_name}_nvt.gro "
+            f"-r {protein_name}_nvt.gro -t {protein_name}_nvt.cpt "
+            f"-p {protein_name}.top -o {protein_name}_npt.tpr -maxwarn 2 && "
+            f"gmx mdrun -v {gpu_flag} -s {protein_name}_npt.tpr -deffnm {protein_name}_npt'",
+            # Step 8: Production MD with GPU
+            f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+            f"gmx grompp -f {container_sim_dir}/md.mdp -c {protein_name}_npt.gro "
+            f"-t {protein_name}_npt.cpt -p {protein_name}.top -o {protein_name}_md.tpr -maxwarn 2 && "
+            f"gmx mdrun -v {gpu_flag} -s {protein_name}_md.tpr -deffnm {protein_name}_md'",
+        ]
+
+        # Execute simulation steps
         for i, step_cmd in enumerate(steps):
-            # Check resource usage before each step
-            current_cpu = psutil.cpu_percent()
-            current_memory = psutil.virtual_memory().percent
+            logger.info(f"Running GROMACS step {i+1}/{len(steps)}")
 
-            # If resource usage is high, pause briefly
-            if current_cpu > MAX_CPU_PERCENT or current_memory > MAX_MEMORY_PERCENT:
-                logger.warning(
-                    f"Resource usage high before step {i+1}: CPU {current_cpu}%, "
-                    f"Memory {current_memory}%. Pausing for 30 seconds."
-                )
-                time.sleep(30)  # Wait for resources to free up
-
-            logger.info(
-                f"Running GROMACS step {i+1}/{len(steps)} (CPU: {current_cpu}%, Memory: {current_memory}%)"
-            )
-
-            # Update validation metric with current step
             validation_metric.validation_notes = f"Running step {i+1}/{len(steps)}"
-            validation_metric.modified_date = datetime.datetime.now(tz.utc)
             validation_metric.save()
 
             try:
@@ -1136,18 +995,10 @@ compressibility = 4.5e-5
                 )
                 logger.info(f"Step {i+1} completed successfully")
 
-                # Check for GPU usage in output if applicable
-                if (
-                    has_gpu
-                    and "mdrun" in step_cmd
-                    and "Using" in result.stdout
-                    and "GPU" in result.stdout
-                ):
-                    logger.info("Confirmed GPU usage for this step")
-
                 # Update validation metric with progress
-                validation_metric.validation_notes = f"Completed step {i+1}/{len(steps)}: {result.stdout[-150:] if result.stdout else ''}"
-                validation_metric.modified_date = datetime.datetime.now(tz.utc)
+                validation_metric.validation_notes = (
+                    f"Completed step {i+1}/{len(steps)}"
+                )
                 validation_metric.save()
 
                 # Create progress log
@@ -1163,233 +1014,234 @@ compressibility = 4.5e-5
             except subprocess.CalledProcessError as e:
                 error_msg = f"GROMACS step {i+1} failed: {e.stderr[:500] if e.stderr else str(e)}"
                 logger.error(error_msg)
+                raise Exception(error_msg)
 
-                validation_metric.status = "failed"
-                validation_metric.validation_notes = (
-                    f"{validation_metric.validation_notes}\n{error_msg}"
-                )
-                validation_metric.save()
+        # After all steps complete, check for trajectory files
+        logger.info("All GROMACS steps completed, checking for trajectory files")
 
-                if job:
-                    job.status = "failed"
-                    job.completed_at = datetime.datetime.now(tz.utc)
-                    job.save()
-
-                Log.objects.create(
-                    user=prediction.sequence.user,
-                    action="gromacs_simulation_failed",
-                    details=error_msg,
-                    status="error",
-                    component="simulation_engine",
-                    session_id=job.job_id,
-                )
-
-                return f"Error in GROMACS simulation: {error_msg}"
-
-        # Process and record final results
+        # Process and record results
         try:
-            logger.info("All GROMACS steps completed, processing results")
-            trajectory_path = f"{sim_dir}/{protein_name}_md.xtc"
+            logger.info("Processing simulation results")
 
-            if os.path.exists(trajectory_path):
-                # Calculate final metrics
+            # First, check for both .xtc and .trr trajectory files
+            xtc_path = os.path.join(sim_dir, f"{protein_name}_md.xtc")
+            trr_path = os.path.join(sim_dir, f"{protein_name}_md.trr")
+
+            # Check which trajectory file exists
+            trajectory_file = None
+            if os.path.exists(xtc_path):
+                trajectory_file = f"{protein_name}_md.xtc"
+                logger.info(f"Found XTC trajectory file: {xtc_path}")
+            elif os.path.exists(trr_path):
+                trajectory_file = f"{protein_name}_md.trr"
+                logger.info(f"Found TRR trajectory file: {trr_path}")
+
+                # Try to convert TRR to XTC for better compatibility
+                try:
+                    logger.info(f"Converting TRR to XTC format")
+                    convert_cmd = (
+                        f"docker exec {gpu_resource} {container_memory} gromacs bash -c 'cd {container_sim_dir} && "
+                        f"echo 0 | gmx trjconv -f {protein_name}_md.trr -s {protein_name}_md.tpr -o {protein_name}_md.xtc'"
+                    )
+                    subprocess.run(
+                        convert_cmd, shell=True, check=True, capture_output=True
+                    )
+
+                    # Check if conversion succeeded
+                    if os.path.exists(xtc_path):
+                        trajectory_file = f"{protein_name}_md.xtc"
+                        logger.info(f"Successfully converted TRR to XTC format")
+                    else:
+                        logger.warning(
+                            f"TRR to XTC conversion didn't produce expected file at {xtc_path}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to convert TRR to XTC: {e}")
+
+            if not trajectory_file:
+                error_msg = "No trajectory file (.xtc or .trr) was generated"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
+            # Check for other essential files
+            essential_files = {
+                "trajectory": trajectory_file,
+                "topology": f"{protein_name}_md.tpr",
+                "structure": f"{protein_name}.pdb",
+            }
+
+            # Verify essential files exist in simulation directory
+            missing_files = []
+            for file_type, filename in essential_files.items():
+                filepath = os.path.join(sim_dir, filename)
+                if not os.path.exists(filepath):
+                    missing_files.append(f"{file_type}: {filename}")
+                    logger.warning(f"Missing file: {filepath}")
+                else:
+                    logger.info(f"Found essential file: {file_type} at {filepath}")
+
+            if missing_files:
+                error_msg = f"Missing essential files after simulation: {', '.join(missing_files)}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
+            # Set up results directory
+            results_dir = os.path.join(sim_dir, "results")
+            os.makedirs(results_dir, exist_ok=True)
+
+            trajectory_path = os.path.join(sim_dir, trajectory_file)
+
+            # Calculate metrics using the trajectory file (works with either XTC or TRR)
+            try:
+                # Extract RMSD from trajectory
+                rmsd_cmd = f"""docker exec {gpu_resource} {container_memory} gromacs bash -c '
+                    cd {container_sim_dir}
+                    echo "Protein" | gmx rms -s {protein_name}_md.tpr -f {trajectory_file} -o rmsd.xvg
+                    chmod -R 755 .
+                '"""
+                subprocess.run(rmsd_cmd, shell=True, check=True, capture_output=True)
+                logger.info("Calculated RMSD from trajectory")
+
+                # Calculate radius of gyration
+                rg_cmd = f"""docker exec {gpu_resource} {container_memory} gromacs bash -c '
+                    cd {container_sim_dir}
+                    echo "Protein" | gmx gyrate -s {protein_name}_md.tpr -f {trajectory_file} -o rg.xvg
+                    chmod -R 755 .
+                '"""
+                subprocess.run(rg_cmd, shell=True, check=True, capture_output=True)
+                logger.info("Calculated radius of gyration")
+
+                # Calculate potential energy
+                energy_cmd = f"""docker exec {gpu_resource} {container_memory} gromacs bash -c '
+                    cd {container_sim_dir}
+                    echo "Potential" | gmx energy -s {protein_name}_md.tpr -f {protein_name}_md.edr -o energy.xvg
+                    chmod -R 755 .
+                '"""
+                subprocess.run(energy_cmd, shell=True, check=True, capture_output=True)
+                logger.info("Calculated potential energy")
+
                 metrics = {}
-                try:
-                    # Extract RMSD from trajectory
-                    rmsd_cmd = f"""docker exec {container_name} bash -c '
-                        cd {container_sim_dir}
-                        echo "Protein" | gmx rms -s {protein_name}_md.tpr -f {protein_name}_md.xtc -o rmsd.xvg
-                        chmod -R 755 .
-                    '"""
-                    subprocess.run(
-                        rmsd_cmd, shell=True, check=True, capture_output=True
-                    )
 
-                    # Calculate radius of gyration
-                    rg_cmd = f"""docker exec {container_name} bash -c '
-                        cd {container_sim_dir}
-                        echo "Protein" | gmx gyrate -s {protein_name}_md.tpr -f {protein_name}_md.xtc -o rg.xvg
-                        chmod -R 755 .
-                    '"""
-                    subprocess.run(rg_cmd, shell=True, check=True, capture_output=True)
+                # Read the last RMSD value
+                if os.path.exists(f"{sim_dir}/rmsd.xvg"):
+                    with open(f"{sim_dir}/rmsd.xvg", "r") as f:
+                        lines = [
+                            line
+                            for line in f.readlines()
+                            if not line.startswith(("#", "@"))
+                        ]
+                        if lines:
+                            last_rmsd = float(lines[-1].split()[1])
+                            metrics["rmsd"] = last_rmsd
+                            validation_metric.rmsd = last_rmsd
 
-                    # Calculate potential energy
-                    energy_cmd = f"""docker exec {container_name} bash -c '
-                        cd {container_sim_dir}
-                        echo "Potential" | gmx energy -s {protein_name}_md.tpr -f {protein_name}_md.edr -o energy.xvg
-                        chmod -R 755 .
-                    '"""
-                    subprocess.run(
-                        energy_cmd, shell=True, check=True, capture_output=True
-                    )
+                # Read the last Rg value
+                if os.path.exists(f"{sim_dir}/rg.xvg"):
+                    with open(f"{sim_dir}/rg.xvg", "r") as f:
+                        lines = [
+                            line
+                            for line in f.readlines()
+                            if not line.startswith(("#", "@"))
+                        ]
+                        if lines:
+                            last_rg = float(lines[-1].split()[1])
+                            metrics["rg"] = last_rg
+                            validation_metric.rg = last_rg
 
-                    # Read the last RMSD value
-                    if os.path.exists(f"{sim_dir}/rmsd.xvg"):
-                        with open(f"{sim_dir}/rmsd.xvg", "r") as f:
-                            lines = [
-                                line
-                                for line in f.readlines()
-                                if not line.startswith(("#", "@"))
-                            ]
-                            if lines:
-                                last_rmsd = float(lines[-1].split()[1])
-                                metrics["rmsd"] = last_rmsd
-                                validation_metric.rmsd = last_rmsd
+                # Read the last energy value
+                if os.path.exists(f"{sim_dir}/energy.xvg"):
+                    with open(f"{sim_dir}/energy.xvg", "r") as f:
+                        lines = [
+                            line
+                            for line in f.readlines()
+                            if not line.startswith(("#", "@"))
+                        ]
+                        if lines:
+                            last_energy = float(lines[-1].split()[1])
+                            metrics["energy"] = last_energy
+                            validation_metric.energy = last_energy
 
-                    # Read the last Rg value
-                    if os.path.exists(f"{sim_dir}/rg.xvg"):
-                        with open(f"{sim_dir}/rg.xvg", "r") as f:
-                            lines = [
-                                line
-                                for line in f.readlines()
-                                if not line.startswith(("#", "@"))
-                            ]
-                            if lines:
-                                last_rg = float(lines[-1].split()[1])
-                                metrics["rg"] = last_rg
-                                validation_metric.rg = last_rg
+                # Calculate stability score (simple metric based on RMSD)
+                if "rmsd" in metrics:
+                    stability_score = max(
+                        0, 100 - (metrics["rmsd"] * 50)
+                    )  # Lower RMSD = higher stability
+                    validation_metric.stability_score = stability_score
+                    metrics["stability_score"] = stability_score
 
-                    # Read the last energy value
-                    if os.path.exists(f"{sim_dir}/energy.xvg"):
-                        with open(f"{sim_dir}/energy.xvg", "r") as f:
-                            lines = [
-                                line
-                                for line in f.readlines()
-                                if not line.startswith(("#", "@"))
-                            ]
-                            if lines:
-                                last_energy = float(lines[-1].split()[1])
-                                metrics["energy"] = last_energy
-                                validation_metric.energy = last_energy
+                logger.info(f"Calculated metrics: {metrics}")
 
-                    # Calculate stability score (simple metric based on RMSD)
-                    if "rmsd" in metrics:
-                        stability_score = max(
-                            0, 100 - (metrics["rmsd"] * 50)
-                        )  # Lower RMSD = higher stability
-                        validation_metric.stability_score = stability_score
-                        metrics["stability_score"] = stability_score
+            except Exception as e:
+                logger.error(f"Error calculating metrics: {e}")
+                # Continue even if metrics calculation fails
+                metrics = {"error": str(e)}
 
-                    logger.info(f"Calculated metrics: {metrics}")
+            # Copy essential files to results directory
+            important_files = [
+                trajectory_file,
+                f"{protein_name}_md.tpr",
+                f"{protein_name}.pdb",
+                "rmsd.xvg",
+                "rg.xvg",
+                "energy.xvg",
+            ]
 
-                except Exception as e:
-                    logger.error(f"Error calculating metrics: {e}")
+            for filename in important_files:
+                src_path = os.path.join(sim_dir, filename)
+                if os.path.exists(src_path):
+                    dst_path = os.path.join(results_dir, filename)
+                    shutil.copy2(src_path, dst_path)
+                    logger.info(f"Copied {filename} to results directory")
 
-                # Store simulation parameters
-                validation_metric.simulation_parameters = {
-                    "protein_name": protein_name,
-                    "simulation_dir": sim_dir,
-                    "trajectory_path": trajectory_path,
-                    "metrics": metrics,
-                    "simulation_length": "100 ps",  # Based on md.mdp parameters
-                    "completion_time": datetime.datetime.now().isoformat(),
-                    "gpu_accelerated": has_gpu,
-                }
+            # Store simulation parameters
+            validation_metric.simulation_parameters = {
+                "protein_name": protein_name,
+                "simulation_dir": sim_dir,
+                "results_dir": results_dir,
+                "trajectory_path": os.path.join(results_dir, trajectory_file),
+                "trajectory_format": trajectory_file.split(".")[-1],  # XTC or TRR
+                "metrics": metrics,
+                "simulation_length": "200 ps",  # Based on md.mdp parameters
+                "completion_time": datetime.datetime.now().isoformat(),
+                "gpu_accelerated": has_gpu,
+            }
 
-                validation_metric.trajectory_path = trajectory_path
-                validation_metric.status = "completed"
-                validation_metric.validation_notes = (
+            # Set the final trajectory path in the database
+            validation_metric.trajectory_path = os.path.join(
+                results_dir, trajectory_file
+            )
+            validation_metric.status = "completed"
+            validation_metric.validation_notes = (
+                f"GROMACS simulation completed successfully using {'GPU' if has_gpu else 'CPU'} acceleration. "
+                f"Trajectory format: {trajectory_file.split('.')[-1]}. "
+                f"Metrics: {str(metrics)}"
+            )
+            validation_metric.save()
+            logger.info(
+                f"Successfully saved validation metrics with trajectory path: {validation_metric.trajectory_path}"
+            )
+
+            # Update job status
+            if job:
+                job.status = "completed"
+                job.completed_at = datetime.datetime.now(tz=timezone)
+                job.save()
+
+            # Create completion log
+            Log.objects.create(
+                user=prediction.sequence.user,
+                action="gromacs_simulation_completed",
+                details=(
                     f"GROMACS simulation completed successfully using {'GPU' if has_gpu else 'CPU'} acceleration. "
-                    f"Metrics: {str(metrics)}"
-                )
-                validation_metric.save()
+                    f"RMSD: {metrics.get('rmsd', 'N/A'):.3f} nm, "
+                    f"Stability: {metrics.get('stability_score', 'N/A'):.1f}%"
+                ),
+                status="success",
+                component="simulation_engine",
+                session_id=job.job_id,
+            )
 
-                # Update job status
-                if job:
-                    job.status = "completed"
-                    job.completed_at = datetime.datetime.now(tz.utc)
-                    job.save()
-
-                # Record final system metrics
-                try:
-                    SystemMetric.objects.create(
-                        cpu_usage=psutil.cpu_percent(),
-                        memory_usage=psutil.virtual_memory().percent,
-                        disk_usage=psutil.disk_usage("/").percent,
-                        active_jobs=JobQueue.objects.filter(status="running").count(),
-                        status="normal",
-                        performance_metrics={
-                            "prediction_id": str(prediction_id),
-                            "action": "simulation_completed",
-                            "job_id": str(job.job_id),
-                            "metrics": metrics,
-                            "gpu_used": has_gpu,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not create final system metrics: {e}")
-
-                # Create completion log
-                Log.objects.create(
-                    user=prediction.sequence.user,
-                    action="gromacs_simulation_completed",
-                    details=(
-                        f"GROMACS simulation completed successfully using {'GPU' if has_gpu else 'CPU'} acceleration. "
-                        f"RMSD: {metrics.get('rmsd', 'N/A'):.3f} nm, "
-                        f"Stability: {metrics.get('stability_score', 'N/A'):.1f}%"
-                    ),
-                    status="success",
-                    component="simulation_engine",
-                    session_id=job.job_id,
-                )
-
-                # Clean up unneeded files to save space but keep important results
-                try:
-                    # List of essential files to keep
-                    essential_files = [
-                        f"{protein_name}.pdb",
-                        f"{protein_name}_md.xtc",  # Trajectory
-                        f"{protein_name}_md.tpr",  # Run input
-                        f"{protein_name}_md.gro",  # Final structure
-                        "rmsd.xvg",
-                        "rg.xvg",
-                        "energy.xvg",
-                    ]
-
-                    # Move essential files to a results directory
-                    results_dir = f"{sim_dir}/results"
-                    os.makedirs(results_dir, exist_ok=True)
-
-                    for filename in essential_files:
-                        filepath = f"{sim_dir}/{filename}"
-                        if os.path.exists(filepath):
-                            shutil.copy2(filepath, f"{results_dir}/{filename}")
-
-                    # Update validation metric to point to the saved trajectory
-                    validation_metric.trajectory_path = (
-                        f"{results_dir}/{protein_name}_md.xtc"
-                    )
-                    validation_metric.save()
-
-                    logger.info(f"Saved essential simulation files to {results_dir}")
-
-                except Exception as e:
-                    logger.warning(f"Error during clean-up: {e}")
-
-                return f"GROMACS simulation for prediction {prediction_id} completed successfully with calculated metrics using {'GPU' if has_gpu else 'CPU'} acceleration"
-
-            else:
-                error_msg = "Simulation completed but no trajectory file was generated"
-                logger.warning(error_msg)
-                validation_metric.status = "failed"
-                validation_metric.validation_notes = error_msg
-                validation_metric.save()
-
-                if job:
-                    job.status = "failed"
-                    job.completed_at = datetime.datetime.now(tz.utc)
-                    job.save()
-
-                Log.objects.create(
-                    user=prediction.sequence.user,
-                    action="gromacs_simulation_failed",
-                    details=error_msg,
-                    status="error",
-                    component="simulation_engine",
-                    session_id=job.job_id,
-                )
-
-                return f"Error: {error_msg}"
+            return f"GROMACS simulation for prediction {prediction_id} completed successfully"
 
         except Exception as e:
             error_msg = f"Error finalizing simulation results: {str(e)}"
@@ -1404,7 +1256,7 @@ compressibility = 4.5e-5
 
             if job:
                 job.status = "failed"
-                job.completed_at = datetime.datetime.now(tz.utc)
+                job.completed_at = datetime.datetime.now(tz=timezone)
                 job.save()
 
             Log.objects.create(
@@ -1431,7 +1283,7 @@ compressibility = 4.5e-5
 
             if job:
                 job.status = "failed"
-                job.completed_at = datetime.datetime.now(tz.utc)
+                job.completed_at = datetime.datetime.now(tz=timezone)
                 job.save()
 
             # Create an error log if possible
@@ -1447,10 +1299,9 @@ compressibility = 4.5e-5
         except Exception as log_error:
             logger.error(f"Error creating error log: {log_error}")
 
-        # Clean up working directory on critical error
+        # Create minimal error log in the directory
         if sim_dir and os.path.exists(sim_dir):
             try:
-                # Create a minimal error log in the directory
                 with open(f"{sim_dir}/error.log", "w") as f:
                     f.write(f"Error in simulation: {error_msg}")
             except:

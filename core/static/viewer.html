@@ -43,7 +43,7 @@
     <div id="app"></div>
     <div id="loading">Loading Protein Structure...</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/molstar@3.30.0/build/molstar.js">
+    <script>
         document.addEventListener('DOMContentLoaded', async function () {
             const urlParams = new URLSearchParams(window.location.search);
             const predictionId = urlParams.get('trajectory');
@@ -102,7 +102,18 @@
                     loadingIndicator.style.display = 'block';
 
                     const trajData = await plugin.builders.data.download({ url: trajectoryUrl });
-                    const parsed = await plugin.builders.structure.parseTrajectory(trajData, 'xtc');
+
+                    // Check the response headers to determine format
+                    let format = 'xtc'; // default
+                    if (trajData.blob) {
+                        const contentType = trajData.blob.type;
+                        if (contentType && contentType.includes('trr')) {
+                            format = 'trr';
+                        }
+                    }
+
+                    console.log(`Loading trajectory with format: ${format}`);
+                    const parsed = await plugin.builders.structure.parseTrajectory(trajData, format);
 
                     if (parsed) {
                         await plugin.builders.structure.hierarchy.applyActionToStructure(
@@ -114,7 +125,7 @@
                         // Show trajectory controls
                         await plugin.builders.structure.component.updateRepresentations(
                             plugin.managers.structure.hierarchy.current.structures[0],
-                            { type: 'spacefill', color: 'uniform', colorParams: { value: { r: 0.6, g: 0.8, b: 1 } } }
+                            { type: 'cartoon', color: 'chain' }
                         );
 
                         // Setup trajectory player

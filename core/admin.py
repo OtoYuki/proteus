@@ -24,7 +24,7 @@ class UserAdmin(BaseUserAdmin):
             {
                 "fields": (
                     "is_active",
-                    "is_staff",  # Keep is_staff visible, but consider making it read-only
+                    "is_staff",
                     "is_superuser",
                     "groups",
                     "user_permissions",

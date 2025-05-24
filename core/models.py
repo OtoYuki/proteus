@@ -1,5 +1,6 @@
 # Description: This file contains the models for the core app.
 from django.db import models
+from django.core.exceptions import ValidationError
 import uuid
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.utils.translation import gettext_lazy as _
@@ -216,6 +217,15 @@ class ProteinSequence(models.Model):
     organism = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     source = models.CharField(max_length=100, blank=True, null=True)
     search_vector = SearchVectorField(null=True)
+
+    def clean(self):
+        """Validate the FASTA sequence"""
+        from .utils import parse_fasta
+
+        try:
+            parse_fasta(self.sequence_fasta)
+        except Exception as e:
+            raise ValidationError({"sequence_fasta": str(e)})
 
     class Meta:
         db_table = "protein_sequences"

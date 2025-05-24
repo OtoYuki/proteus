@@ -3,8 +3,9 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
+from django.db import transaction  # Import transaction
 from .forms import SequenceForm, SignupForm
-from .models import ProteinSequence, Prediction, ValidationMetric
+from .models import ProteinSequence, Prediction, ValidationMetric, JobQueue
 from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
 import logging
@@ -119,13 +120,18 @@ def serve_pdb(request, prediction_id):
 
 @require_POST
 @csrf_exempt
+@transaction.atomic  # Add this decorator to ensure atomicity
 def start_gromacs_simulation(request, prediction_id):
     """
     View to start a GROMACS simulation for a protein structure.
-    Automatically cleans up stalled/failed simulations.
+    Automatically cleans up stalled/failed simulations. Ensures atomicity.
     """
     try:
-        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+        # Lock both the prediction and any related records
+        prediction = get_object_or_404(
+            Prediction.objects.select_for_update(),
+            prediction_id=prediction_id,
+        )
 
         # Check if PDB file exists
         if not prediction.pdb_file_path or not os.path.exists(prediction.pdb_file_path):
@@ -134,54 +140,80 @@ def start_gromacs_simulation(request, prediction_id):
             )
 
         # AUTO-CLEANUP: Find simulations that are stuck or stalled
-        # 1. Find "running" simulations that haven't been updated in 10+ minutes
         stalled_time = timezone.now() - timezone.timedelta(minutes=10)
-        stalled_sims = ValidationMetric.objects.filter(
+        stalled_sims = ValidationMetric.objects.select_for_update().filter(
             prediction=prediction,
             status__in=["running", "pending"],
             modified_date__lt=stalled_time,
         )
 
-        # 2. Mark these as failed with a note
         if stalled_sims.exists():
             for sim in stalled_sims:
                 sim.status = "failed"
-                sim.validation_notes = f"{sim.validation_notes or ''}\nAutomatically marked as failed due to lack of progress."
+                sim.validation_notes = f"{sim.validation_notes or ''}\\nAutomatically marked as failed due to lack of progress."
                 sim.save()
                 logger.info(f"Auto-marked stalled simulation {sim.metric_id} as failed")
 
-        # 3. Check for any remaining active simulations after cleanup
-        active_sims = ValidationMetric.objects.filter(
+            # Also cleanup any associated jobs
+            JobQueue.objects.filter(
+                job_type="gromacs_simulation",
+                job_parameters__prediction_id=str(prediction_id),
+                status__in=["running", "pending"],
+            ).update(status="failed", completed_at=timezone.now())
+
+        # Check for any remaining active simulations and jobs
+        active_sims = ValidationMetric.objects.select_for_update().filter(
             prediction=prediction, status__in=["running", "pending"]
         )
 
-        if active_sims.exists():
-            # There are still active simulations that aren't stalled
+        active_jobs = JobQueue.objects.select_for_update().filter(
+            job_type="gromacs_simulation",
+            job_parameters__prediction_id=str(prediction_id),
+            status__in=["running", "pending"],
+        )
+
+        if active_sims.exists() or active_jobs.exists():
             return JsonResponse(
                 {
                     "status": "error",
-                    "message": f"A simulation is already {active_sims[0].status}",
-                    "simulation_id": str(active_sims[0].metric_id),
+                    "message": f"A simulation is already active",
+                    "simulation_id": (
+                        str(active_sims[0].metric_id) if active_sims.exists() else None
+                    ),
                 },
                 status=409,
             )
 
-        # Start a new simulation task
-        task = run_gromacs_simulation.delay(prediction_id)
+        # Create both records atomically
+        job = JobQueue.objects.create(
+            user=prediction.sequence.user,
+            job_type="gromacs_simulation",
+            status="pending",
+            started_at=timezone.now(),
+            job_parameters={
+                "prediction_id": str(prediction_id),
+                "component": "simulation_engine",
+                "priority": 3,
+            },
+            priority=3,
+        )
 
-        # Create a ValidationMetric entry
-        validation_metric = ValidationMetric(
+        validation_metric = ValidationMetric.objects.create(
             prediction=prediction,
             status="pending",
-            validation_notes=f"Simulation queued (task_id: {task.id})",
+            validation_notes=f"Simulation queued (task_id: {job.job_id})",
         )
-        validation_metric.save()
+
+        # Start the simulation task
+        task = run_gromacs_simulation.delay(prediction_id)
 
         return JsonResponse(
             {
                 "status": "success",
                 "message": "GROMACS simulation started",
                 "task_id": task.id,
+                "job_id": str(job.job_id),
+                "metric_id": str(validation_metric.metric_id),
             }
         )
 
