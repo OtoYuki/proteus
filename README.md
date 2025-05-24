@@ -88,7 +88,7 @@ The architecture of Proteus is designed for scalability, reliability, and ease o
 2. **Clone the repository:**
 
     ```bash
-    git clone <repository-url>
+    git clone https://github.com/OtoYuki/proteus.git
     cd proteus
     ```
 
