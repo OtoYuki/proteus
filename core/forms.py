@@ -1,6 +1,6 @@
 from django import forms
 from .models import ProteinSequence, Role, User  # Ensure User is imported
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import UserCreationForm, PasswordChangeForm
 from django.contrib.auth import get_user_model
 
 
@@ -57,3 +57,66 @@ class SignupForm(UserCreationForm):
         # The create_user method already saves the user, so we don't need to call user.save() again
         # or worry about the commit flag here.
         return user
+
+
+class ProfileUpdateForm(forms.ModelForm):
+    """
+    Form for updating user profile information.
+    """
+
+    email = forms.EmailField(
+        required=True,
+        widget=forms.EmailInput(
+            attrs={
+                "class": "input input-bordered font-jetbrains focus:input-primary transition-colors duration-300"
+            }
+        ),
+    )
+    first_name = forms.CharField(
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "input input-bordered font-jetbrains focus:input-primary transition-colors duration-300"
+            }
+        ),
+    )
+    last_name = forms.CharField(
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "input input-bordered font-jetbrains focus:input-primary transition-colors duration-300"
+            }
+        ),
+    )
+
+    class Meta:
+        model = User
+        fields = ("email", "first_name", "last_name")
+
+    def __init__(self, *args, **kwargs):
+        self.user = kwargs.pop("user", None)
+        super().__init__(*args, **kwargs)
+
+    def clean_email(self):
+        email = self.cleaned_data.get("email")
+        if email and self.user:
+            # Check if email is being changed and if it already exists
+            if email != self.user.email and User.objects.filter(email=email).exists():
+                raise forms.ValidationError("This email address is already in use.")
+        return email
+
+
+class CustomPasswordChangeForm(PasswordChangeForm):
+    """
+    Custom password change form with styled widgets.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Add custom CSS classes to all password fields
+        for field_name in ["old_password", "new_password1", "new_password2"]:
+            self.fields[field_name].widget.attrs.update(
+                {
+                    "class": "input input-bordered font-jetbrains focus:input-primary transition-colors duration-300"
+                }
+            )

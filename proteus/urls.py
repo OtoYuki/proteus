@@ -26,7 +26,9 @@ from core.views import (
     serve_pdb,
     start_gromacs_simulation,
     simulation_status,
+    simulation_status_realtime,
     signup_view,
+    profile_view,
 )
 from django.contrib.auth import views as auth_views
 
@@ -40,6 +42,7 @@ urlpatterns = [
         "predictions/<uuid:prediction_id>/", prediction_detail, name="prediction_detail"
     ),
     path("pdb/<uuid:prediction_id>/", serve_pdb, name="serve_pdb"),
+    path("profile/", profile_view, name="profile"),
     # GROMACS simulation URLs
     path(
         "predictions/<uuid:prediction_id>/simulate/",
@@ -50,6 +53,11 @@ urlpatterns = [
         "predictions/<uuid:prediction_id>/simulation_status/",
         simulation_status,
         name="simulation_status",
+    ),
+    path(
+        "predictions/<uuid:prediction_id>/simulation_status_realtime/",
+        simulation_status_realtime,
+        name="simulation_status_realtime",
     ),
     # Download Trajectory URL
     path(

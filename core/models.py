@@ -6,6 +6,8 @@ from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 
 
 class Role(models.Model):
@@ -273,6 +275,9 @@ class ValidationMetric(models.Model):
     rg = models.FloatField(blank=True, null=True, db_index=True)
     energy = models.FloatField(blank=True, null=True, db_index=True)
     trajectory_path = models.CharField(max_length=255, blank=True, null=True)
+    structure_path = models.CharField(
+        max_length=255, blank=True, null=True
+    )  # .gro file path
     validation_date = models.DateTimeField(auto_now_add=True, db_index=True)
     status = models.CharField(max_length=20, db_index=True)
     simulation_parameters = models.JSONField(blank=True, null=True)
@@ -291,6 +296,152 @@ class ValidationMetric(models.Model):
 
     def __str__(self):
         return f"Validation for {self.prediction}"
+
+    @classmethod
+    def get_status_for_prediction(cls, prediction_id):
+        """
+        Get the current simulation status for a prediction.
+        This method provides a unified status that considers both ValidationMetric and JobQueue.
+        """
+        # Get the latest ValidationMetric for this prediction
+        latest_vm = (
+            cls.objects.filter(prediction_id=prediction_id)
+            .order_by("-validation_date")
+            .first()
+        )
+
+        if not latest_vm:
+            return {
+                "status": "not_found",
+                "simulation_status": None,
+                "message": "No simulation found for this prediction",
+            }
+
+        # Check for associated JobQueue entries
+        job = (
+            JobQueue.objects.filter(
+                job_parameters__prediction_id=str(prediction_id),
+                job_type="gromacs_simulation",
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+        # Determine real status based on ValidationMetric and JobQueue state
+        real_status = cls._determine_real_status(latest_vm, job)
+
+        return {
+            "status": "success",
+            "simulation_status": real_status,
+            "date": latest_vm.validation_date,
+            "trajectory_path": latest_vm.trajectory_path,
+            "notes": latest_vm.validation_notes,
+            "metric_id": str(latest_vm.metric_id),
+            "job_id": str(job.job_id) if job else None,
+            "rmsd": latest_vm.rmsd,
+            "rg": latest_vm.rg,
+            "energy": latest_vm.energy,
+            "stability_score": latest_vm.stability_score,
+        }
+
+    @classmethod
+    def _determine_real_status(cls, validation_metric, job):
+        """
+        Determine the real status considering both ValidationMetric and JobQueue states.
+        """
+        if not validation_metric:
+            return "not_found"
+
+        vm_status = validation_metric.status
+
+        # If no job exists but VM exists, trust VM status unless it's inconsistent
+        if not job:
+            # If VM shows pending/running but no job exists, mark as failed
+            if vm_status in ["pending", "running"]:
+                validation_metric.status = "failed"
+                validation_metric.validation_notes = f"{validation_metric.validation_notes or ''}\nMarked as failed: No associated job found"
+                validation_metric.save()
+                return "failed"
+            return vm_status
+
+        job_status = job.status
+
+        # If job is failed/completed, trust that over VM status
+        if job_status == "failed":
+            if vm_status not in ["failed"]:
+                validation_metric.status = "failed"
+                validation_metric.validation_notes = f"{validation_metric.validation_notes or ''}\nUpdated status based on job failure"
+                validation_metric.save()
+            return "failed"
+
+        if job_status == "completed":
+            if vm_status not in ["completed"]:
+                validation_metric.status = "completed"
+                validation_metric.save()
+            return "completed"
+
+        # If job is running, VM should be running too
+        if job_status == "running":
+            if vm_status not in ["running", "pending"]:
+                validation_metric.status = "running"
+                validation_metric.save()
+            return "running"
+
+        # For any other cases, trust VM status
+        return vm_status
+
+    def sync_with_job_queue(self):
+        """
+        Synchronize this ValidationMetric status with its associated JobQueue entry.
+        """
+        job = (
+            JobQueue.objects.filter(
+                job_parameters__prediction_id=str(self.prediction.prediction_id),
+                job_type="gromacs_simulation",
+            )
+            .order_by("-created_at")
+            .first()
+        )
+
+        if job:
+            real_status = self._determine_real_status(self, job)
+            if real_status != self.status:
+                self.status = real_status
+                self.save()
+                return True
+        return False
+
+    def cleanup_stale_simulations(self):
+        """
+        Clean up stale simulations that have been running too long without updates.
+        """
+        from django.utils import timezone
+        from datetime import timedelta
+
+        stale_threshold = timezone.now() - timedelta(minutes=15)
+
+        if (
+            self.status in ["pending", "running"]
+            and self.modified_date < stale_threshold
+        ):
+
+            self.status = "failed"
+            self.validation_notes = f"{self.validation_notes or ''}\nMarked as failed due to inactivity (stale simulation cleanup)"
+            self.save()
+
+            # Also update associated job if it exists
+            job = JobQueue.objects.filter(
+                job_parameters__prediction_id=str(self.prediction.prediction_id),
+                job_type="gromacs_simulation",
+            ).first()
+
+            if job and job.status in ["pending", "running"]:
+                job.status = "failed"
+                job.completed_at = timezone.now()
+                job.save()
+
+            return True
+        return False
 
 
 class MLRanking(models.Model):
@@ -405,3 +556,79 @@ class JobQueue(models.Model):
 
     def __str__(self):
         return f"{self.job_type} - {self.status}"
+
+
+# Signal handlers for ValidationMetric/JobQueue synchronization
+@receiver(post_delete, sender=JobQueue)
+def handle_job_deletion(sender, instance, **kwargs):
+    """
+    When a JobQueue entry is deleted, update associated ValidationMetric status.
+    """
+    if instance.job_type == "gromacs_simulation":
+        prediction_id = instance.job_parameters.get("prediction_id")
+        if prediction_id:
+            try:
+                vm = (
+                    ValidationMetric.objects.filter(
+                        prediction_id=prediction_id, status__in=["pending", "running"]
+                    )
+                    .order_by("-validation_date")
+                    .first()
+                )
+
+                if vm:
+                    vm.status = "failed"
+                    vm.validation_notes = f"{vm.validation_notes or ''}\nSimulation failed: Associated job was deleted"
+                    vm.save()
+            except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error updating ValidationMetric after job deletion: {e}")
+
+
+@receiver(post_save, sender=JobQueue)
+def handle_job_status_change(sender, instance, created, **kwargs):
+    """
+    When a JobQueue status changes, synchronize ValidationMetric status.
+    """
+    if instance.job_type == "gromacs_simulation":
+        prediction_id = instance.job_parameters.get("prediction_id")
+        if prediction_id:
+            try:
+                vm = (
+                    ValidationMetric.objects.filter(prediction_id=prediction_id)
+                    .order_by("-validation_date")
+                    .first()
+                )
+
+                if vm:
+                    status_changed = False
+
+                    if instance.status == "failed" and vm.status not in [
+                        "failed",
+                        "completed",
+                    ]:
+                        vm.status = "failed"
+                        vm.validation_notes = (
+                            f"{vm.validation_notes or ''}\nJob status updated to failed"
+                        )
+                        status_changed = True
+
+                    elif instance.status == "running" and vm.status == "pending":
+                        vm.status = "running"
+                        vm.validation_notes = (
+                            f"{vm.validation_notes or ''}\nSimulation started"
+                        )
+                        status_changed = True
+
+                    if status_changed:
+                        vm.save()
+
+            except Exception as e:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    f"Error synchronizing ValidationMetric with job status: {e}"
+                )

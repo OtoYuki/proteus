@@ -1,13 +1,15 @@
 from django.shortcuts import render, redirect, get_object_or_404
-from django.http import FileResponse, Http404, JsonResponse
+from django.http import FileResponse, Http404, JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.utils import timezone
-from .forms import SequenceForm, SignupForm
-from .models import ProteinSequence, Prediction, ValidationMetric
+from .forms import SequenceForm, SignupForm, ProfileUpdateForm, CustomPasswordChangeForm
+from .models import ProteinSequence, Prediction, ValidationMetric, JobQueue
 from .tasks import run_colabfold, run_gromacs_simulation  # Importing the Tasks
 import os
 import logging
+import zipfile
+import tempfile
 from django.contrib.auth import login
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -63,11 +65,34 @@ def submit_sequence(request):
 
 def prediction_list(request):
     """
-    View to list all predictions (from the current user).
-    This view will be used to display the predictions made by the user.
+    View to list predictions separated into 'Your Predictions' and 'Public Predictions'.
+    Since this is an open platform, all predictions are public.
     """
-    predictions = Prediction.objects.all().order_by("-prediction_date")
-    return render(request, "prediction_list.html", {"predictions": predictions})
+    if request.user.is_authenticated:
+        # Get user's own predictions
+        user_predictions = Prediction.objects.filter(
+            sequence__user=request.user
+        ).order_by("-prediction_date")
+
+        # Get all other users' predictions (public predictions)
+        public_predictions = Prediction.objects.exclude(
+            sequence__user=request.user
+        ).order_by("-prediction_date")
+    else:
+        # For anonymous users, show no personal predictions and all as public
+        user_predictions = Prediction.objects.none()
+        public_predictions = Prediction.objects.all().order_by("-prediction_date")
+
+    return render(
+        request,
+        "prediction_list.html",
+        {
+            "user_predictions": user_predictions,
+            "public_predictions": public_predictions,
+            "user_predictions_count": user_predictions.count(),
+            "public_predictions_count": public_predictions.count(),
+        },
+    )
 
 
 def prediction_detail(request, prediction_id):
@@ -150,6 +175,17 @@ def start_gromacs_simulation(request, prediction_id):
                 sim.save()
                 logger.info(f"Auto-marked stalled simulation {sim.metric_id} as failed")
 
+        # 2.5. Also clean up any stuck JobQueue entries
+        stuck_jobs = JobQueue.objects.filter(
+            job_type="gromacs_simulation",
+            status__in=["running", "pending"],
+            started_at__lt=stalled_time,
+        )
+        for job in stuck_jobs:
+            job.status = "failed"
+            job.save()
+            logger.info(f"Auto-marked stuck job {job.job_id} as failed")
+
         # 3. Check for any remaining active simulations after cleanup
         active_sims = ValidationMetric.objects.filter(
             prediction=prediction, status__in=["running", "pending"]
@@ -193,19 +229,15 @@ def start_gromacs_simulation(request, prediction_id):
 # A view to check the status of the GROMACS simulation
 def simulation_status(request, prediction_id):
     """
-    View to check the status of the GROMACS simulation.
+    View to check the status of the GROMACS simulation with enhanced synchronization.
     """
     try:
         prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
 
-        # Get the latest simulation for this prediction
-        latest_sim = (
-            ValidationMetric.objects.filter(prediction=prediction)
-            .order_by("-validation_date")
-            .first()
-        )
+        # Use the enhanced status management from ValidationMetric
+        status_info = ValidationMetric.get_status_for_prediction(prediction_id)
 
-        if not latest_sim:
+        if status_info["status"] == "not_found":
             return JsonResponse(
                 {
                     "status": "not_found",
@@ -213,22 +245,81 @@ def simulation_status(request, prediction_id):
                 }
             )
 
-        return JsonResponse(
-            {
-                "status": "success",
-                "simulation_status": latest_sim.status,
-                "date": latest_sim.validation_date,
-                "trajectory_path": latest_sim.trajectory_path,
-                "notes": latest_sim.validation_notes,
-            }
+        # Clean up any stale simulations
+        latest_vm = (
+            ValidationMetric.objects.filter(prediction=prediction)
+            .order_by("-validation_date")
+            .first()
         )
 
+        if latest_vm:
+            latest_vm.cleanup_stale_simulations()
+            # Re-fetch status after cleanup
+            status_info = ValidationMetric.get_status_for_prediction(prediction_id)
+
+        return JsonResponse(status_info)
+
     except Exception as e:
+        logger.error(f"Error in simulation_status view: {e}")
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+
+
+def simulation_status_realtime(request, prediction_id):
+    """
+    Enhanced real-time simulation status endpoint with automatic cleanup and synchronization.
+    """
+    try:
+        prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
+
+        # First, clean up any stale simulations
+        ValidationMetric.objects.filter(
+            prediction=prediction, status__in=["pending", "running"]
+        ).update(
+            modified_date=timezone.now()
+        )  # Touch to update modified_date
+
+        # Get enhanced status
+        status_info = ValidationMetric.get_status_for_prediction(prediction_id)
+
+        # Add additional metadata for frontend
+        if status_info["status"] == "success":
+            # Check if there are any recent logs
+            from .models import Log
+
+            recent_logs = Log.objects.filter(
+                details__icontains=str(prediction_id), component="simulation_engine"
+            ).order_by("-timestamp")[:3]
+
+            status_info["recent_logs"] = [
+                f"{log.timestamp.strftime('%H:%M:%S')}: {log.action} - {log.details[:150]}"
+                for log in recent_logs
+            ]
+
+            # Add progress information if available
+            if status_info["simulation_status"] == "running":
+                latest_vm = (
+                    ValidationMetric.objects.filter(prediction=prediction)
+                    .order_by("-validation_date")
+                    .first()
+                )
+
+                if latest_vm and latest_vm.validation_notes:
+                    # Extract step information from validation notes
+                    notes = latest_vm.validation_notes
+                    if "step" in notes.lower():
+                        status_info["progress_info"] = notes.split("\n")[
+                            -1
+                        ]  # Last line usually has progress
+
+        return JsonResponse(status_info)
+
+    except Exception as e:
+        logger.error(f"Error in simulation_status_realtime view: {e}")
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
 
 
 def download_trajectory(request, prediction_id):
-    """View to serve trajectory files for the NGL viewer."""
+    """View to serve both trajectory and structure files as a ZIP archive for PyMOL visualization."""
     try:
         prediction = get_object_or_404(Prediction, prediction_id=prediction_id)
 
@@ -241,47 +332,112 @@ def download_trajectory(request, prediction_id):
             .first()
         )
 
-        if (
-            not latest_sim
-            or not latest_sim.trajectory_path
-            or not os.path.exists(latest_sim.trajectory_path)
-        ):
-            raise Http404("Trajectory file not found")
+        if not latest_sim:
+            raise Http404("No completed simulation found")
 
-        # Get file information
-        file_path = latest_sim.trajectory_path
-        file_size = os.path.getsize(file_path)
+        # Check if required files exist
+        files_to_include = []
 
-        # Debug: Check file type by reading first few bytes
-        with open(file_path, "rb") as f:
-            header_bytes = f.read(8)  # Read first 8 bytes
-            logger.info(f"File header (hex): {header_bytes.hex()}")
+        # Add trajectory file (.trr or .xtc)
+        if latest_sim.trajectory_path and os.path.exists(latest_sim.trajectory_path):
+            trajectory_filename = os.path.basename(latest_sim.trajectory_path)
+            # Change extension to .trr for PyMOL compatibility if it's .xtc
+            if trajectory_filename.endswith(".xtc"):
+                # Look for a .trr file in the same directory
+                trr_path = latest_sim.trajectory_path.replace(".xtc", ".trr")
+                if os.path.exists(trr_path):
+                    files_to_include.append((trr_path, "trajectory.trr"))
+                    logger.info(
+                        f"Using .trr file for better PyMOL compatibility: {trr_path}"
+                    )
+                else:
+                    files_to_include.append(
+                        (latest_sim.trajectory_path, "trajectory.xtc")
+                    )
+                    logger.info(f"Using .xtc file: {latest_sim.trajectory_path}")
+            else:
+                files_to_include.append(
+                    (latest_sim.trajectory_path, trajectory_filename)
+                )
+        else:
+            logger.warning(f"Trajectory file not found: {latest_sim.trajectory_path}")
 
-        # Open the file for streaming
-        file_handle = open(file_path, "rb")
+        # Add structure file (.gro)
+        if latest_sim.structure_path and os.path.exists(latest_sim.structure_path):
+            files_to_include.append((latest_sim.structure_path, "structure.gro"))
+            logger.info(f"Including structure file: {latest_sim.structure_path}")
+        else:
+            logger.warning(f"Structure file not found: {latest_sim.structure_path}")
 
-        # Create response with appropriate headers
-        response = FileResponse(
-            file_handle,
-            content_type="application/octet-stream",
-            as_attachment=False,
-            filename="trajectory.xtc",
-        )
+        if not files_to_include:
+            raise Http404("No simulation files found")
 
-        # Add headers that help with file identification and caching
-        response["Content-Disposition"] = 'inline; filename="trajectory.xtc"'
-        response["Content-Length"] = str(file_size)
-        response["X-File-Format"] = "xtc"
-        response["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response["Pragma"] = "no-cache"
-        response["Expires"] = "0"
+        # Create a temporary ZIP file
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
 
-        # Log successful file serving for debugging
-        logger.info(f"Serving trajectory file: {file_path} (size: {file_size} bytes)")
+        try:
+            with zipfile.ZipFile(temp_zip.name, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for file_path, archive_name in files_to_include:
+                    zipf.write(file_path, archive_name)
+                    logger.info(f"Added {archive_name} to ZIP archive")
 
-        return response
+                # Add a README with instructions
+                readme_content = """PyMOL Simulation Files
+======================
+
+This archive contains:
+- structure.gro: Final MD structure with all atoms in correct order (required for PyMOL)
+- trajectory.trr/.xtc: Full precision MD trajectory data
+
+To visualize in PyMOL:
+1. Load structure.gro first: File > Open > structure.gro
+2. Then load trajectory: File > Open > trajectory.trr (or trajectory.xtc)
+3. Use the trajectory controls to play the animation
+
+For best visualization:
+- Use trajectory.trr if available (higher precision)
+- The structure.gro file ensures proper atom ordering
+"""
+                zipf.writestr("README.txt", readme_content)
+
+            # Serve the ZIP file
+            temp_zip.seek(0)
+            response = FileResponse(
+                open(temp_zip.name, "rb"),
+                content_type="application/zip",
+                as_attachment=True,
+                filename=f"simulation_files_{prediction_id}.zip",
+            )
+
+            response["Content-Disposition"] = (
+                f'attachment; filename="simulation_files_{prediction_id}.zip"'
+            )
+
+            # Clean up temp file after response (Django will handle this)
+            def cleanup():
+                try:
+                    os.unlink(temp_zip.name)
+                except OSError:
+                    pass
+
+            # Store cleanup function for later execution
+            response._cleanup = cleanup
+
+            logger.info(
+                f"Serving ZIP archive with {len(files_to_include)} files for prediction {prediction_id}"
+            )
+            return response
+
+        except Exception as e:
+            # Clean up temp file on error
+            try:
+                os.unlink(temp_zip.name)
+            except OSError:
+                pass
+            raise e
+
     except Exception as e:
-        logger.error(f"Error serving trajectory file: {e}")
+        logger.error(f"Error serving simulation files: {e}")
         raise Http404(f"Error: {str(e)}")
 
 
@@ -342,3 +498,63 @@ def signup_view(request):
 @login_required
 def signup_success_view(request):
     return render(request, "registration/signup_success.html")
+
+
+@login_required
+def profile_view(request):
+    """
+    View for user profile management.
+    """
+    if request.method == "POST":
+        if "update_profile" in request.POST:
+            # Handle profile update
+            profile_form = ProfileUpdateForm(
+                request.POST, instance=request.user, user=request.user
+            )
+            password_form = CustomPasswordChangeForm(request.user)
+
+            if profile_form.is_valid():
+                profile_form.save()
+                messages.success(request, "Your profile has been updated successfully!")
+                return redirect("profile")
+            else:
+                messages.error(request, "Please correct the errors below.")
+
+        elif "change_password" in request.POST:
+            # Handle password change
+            profile_form = ProfileUpdateForm(instance=request.user, user=request.user)
+            password_form = CustomPasswordChangeForm(request.user, request.POST)
+
+            if password_form.is_valid():
+                password_form.save()
+                messages.success(
+                    request, "Your password has been changed successfully!"
+                )
+                return redirect("profile")
+            else:
+                messages.error(request, "Please correct the password errors below.")
+    else:
+        profile_form = ProfileUpdateForm(instance=request.user, user=request.user)
+        password_form = CustomPasswordChangeForm(request.user)
+
+    # Get user statistics
+    user_predictions = Prediction.objects.filter(sequence__user=request.user)
+    stats = {
+        "total_predictions": user_predictions.count(),
+        "completed_predictions": user_predictions.filter(status="completed").count(),
+        "pending_predictions": user_predictions.filter(status="pending").count(),
+        "running_predictions": user_predictions.filter(status="running").count(),
+        "failed_predictions": user_predictions.filter(status="failed").count(),
+    }
+
+    # Get recent predictions
+    recent_predictions = user_predictions.order_by("-prediction_date")[:5]
+
+    context = {
+        "profile_form": profile_form,
+        "password_form": password_form,
+        "stats": stats,
+        "recent_predictions": recent_predictions,
+    }
+
+    return render(request, "profile.html", context)

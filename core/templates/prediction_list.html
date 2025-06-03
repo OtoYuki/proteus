@@ -214,11 +214,89 @@
         background: rgba(255, 255, 255, 0.3);
     }
     
-    /* Responsive adjustments */
-    @media (max-width: 768px) {
-        .prediction-table {
-            font-size: 0.875rem;
-        }
+    /* Tab styling */
+    .tab-container {
+        margin-bottom: 1.5rem;
+    }
+    
+    .tab-nav {
+        display: flex;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 1.5rem;
+    }
+    
+    .tab-button {
+        padding: 0.75rem 1.5rem;
+        border: none;
+        background: transparent;
+        color: rgba(0, 0, 0, 0.6);
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        border-bottom: 2px solid transparent;
+        margin-bottom: -2px;
+        font-family: 'JetBrains Mono', monospace;
+        position: relative;
+    }
+    
+    .tab-button:hover {
+        color: rgba(0, 0, 0, 0.8);
+        background-color: rgba(0, 0, 0, 0.02);
+    }
+    
+    .tab-button.active {
+        color: var(--primary, #3b82f6);
+        border-bottom-color: var(--primary, #3b82f6);
+        background-color: rgba(59, 130, 246, 0.05);
+    }
+    
+    .tab-badge {
+        background-color: rgba(0, 0, 0, 0.1);
+        color: rgba(0, 0, 0, 0.7);
+        font-size: 0.75rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 0.75rem;
+        margin-left: 0.5rem;
+        font-weight: 600;
+    }
+    
+    .tab-button.active .tab-badge {
+        background-color: var(--primary, #3b82f6);
+        color: white;
+    }
+    
+    .tab-content {
+        display: none;
+    }
+    
+    .tab-content.active {
+        display: block;
+    }
+    
+    .section-header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 1rem;
+        padding: 0 0.5rem;
+    }
+    
+    .section-icon {
+        width: 1.25rem;
+        height: 1.25rem;
+        color: var(--primary, #3b82f6);
+    }
+    
+    .section-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: rgba(0, 0, 0, 0.8);
+    }
+    
+    .section-description {
+        font-size: 0.875rem;
+        color: rgba(0, 0, 0, 0.6);
+        margin-left: auto;
     }
 </style>
 {% endblock %}
@@ -247,6 +325,26 @@
         </div>
     </div>
     
+    <!-- Tab Navigation -->
+    <div class="tab-nav mx-6">
+        {% if user.is_authenticated %}
+        <button class="tab-button active" id="yourPredictionsTab" data-tab="your-predictions">
+            <svg xmlns="http://www.w3.org/2000/svg" class="section-icon" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+            </svg>
+            Your Predictions
+            <span class="tab-badge">{{ user_predictions_count }}</span>
+        </button>
+        {% endif %}
+        <button class="tab-button {% if not user.is_authenticated %}active{% endif %}" id="publicPredictionsTab" data-tab="public-predictions">
+            <svg xmlns="http://www.w3.org/2000/svg" class="section-icon" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM4.332 8.027a6.012 6.012 0 011.912-2.706C6.512 5.73 6.974 6 7.5 6A1.5 1.5 0 019 7.5V8a2 2 0 004 0 2 2 0 011.523-1.943A5.977 5.977 0 0116 10c0 .34-.028.675-.083 1H15a2 2 0 00-2 2v2.197A5.973 5.973 0 0110 16v-2a2 2 0 00-2-2 2 2 0 01-2-2 2 2 0 00-1.668-1.973z" clip-rule="evenodd" />
+            </svg>
+            Public Predictions
+            <span class="tab-badge">{{ public_predictions_count }}</span>
+        </button>
+    </div>
+
     <!-- Search and filter section -->
     <div class="filter-controls p-4 mx-6 mb-4">
         <div class="flex flex-wrap gap-3">
@@ -279,162 +377,379 @@
         </div>
     </div>
     
-    <!-- Table section -->
-    <div class="overflow-x-auto px-6 pb-6">
-        <table class="table table-zebra w-full prediction-table">
-            <thead>
-                <tr>
-                    <th class="sortable" id="sortCol0">
-                        Sequence Name
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                    </th>
-                    <th class="sortable" id="sortCol1">
-                        Date
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                    </th>
-                    <th class="sortable" id="sortCol2">
-                        Status
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                    </th>
-                    <th class="sortable" id="sortCol3">
-                        Length
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                    </th>
-                    <th class="sortable" id="sortCol4">
-                        pLDDT Score
-                        <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
-                        </svg>
-                    </th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="predictionTable">
-                {% for prediction in predictions %}
-                <tr>
-                    <td class="font-medium text-center">{{ prediction.sequence.sequence_name }}</td>
-                    <td class="text-center" data-date="{{ prediction.prediction_date|date:'Y-m-d H:i:s' }}">
-                        <div>{{ prediction.prediction_date|date:"M d, Y" }}</div>
-                        <div class="text-xs opacity-70">{{ prediction.prediction_date|date:"H:i" }}</div>
-                    </td>
-                    <td class="text-center" data-status="{{ prediction.status }}">
-                        {% if prediction.status == "pending" %}
-                        <div class="status-badge bg-warning/10 text-warning">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
-                            </svg>
-                            Pending
-                        </div>
-                        {% elif prediction.status == "running" %}
-                        <div class="status-badge bg-info/10 text-info">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
-                            </svg>
-                            Running
-                        </div>
-                        {% elif prediction.status == "completed" %}
-                        <div class="status-badge bg-success/10 text-success">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
-                            </svg>
-                            Completed
-                        </div>
-                        {% elif prediction.status == "failed" %}
-                        <div class="status-badge bg-error/10 text-error">
-                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
-                            </svg>
-                            Failed
-                        </div>
-                        {% else %}
-                        <div class="status-badge bg-base-200 text-base-content">{{ prediction.status }}</div>
-                        {% endif %}
-                    </td>
-                    <td class="text-center" data-length="{{ prediction.sequence.sequence_length }}">
-                        <span class="font-mono font-medium">{{ prediction.sequence.sequence_length }}</span>
-                        <div class="text-xs opacity-70">amino acids</div>
-                    </td>
-                    <td class="text-center" data-score="{{ prediction.plddt_score|default_if_none:0 }}">
-                        {% if prediction.plddt_score %}
-                            {% with raw_score=prediction.plddt_score %}
-                            <div class="plddt-pill
-                                {% if raw_score >= 90 %}plddt-high
-                                {% elif raw_score >= 70 %}plddt-confident
-                                {% elif raw_score >= 50 %}plddt-low
-                                {% else %}plddt-very-low{% endif %}">
-                                <span class="font-mono">{{ raw_score|floatformat:1 }}</span>
-                            </div>
-                            <div class="plddt-label">
-                                {% if raw_score >= 90 %}High Confidence
-                                {% elif raw_score >= 70 %}Confident
-                                {% elif raw_score >= 50 %}Low Confidence
-                                {% else %}Very Low Confidence{% endif %}
-                            </div>
-                            {% endwith %}
-                        {% else %}
-                            <div class="font-mono text-base-content/50">—</div>
-                        {% endif %}
-                    </td>
-                    <td class="text-center">
-                        <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
-                           class="btn btn-sm btn-primary glassmorphic">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
-                                <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
-                                <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
-                            </svg>
-                            View
-                        </a>
-                    </td>
-                </tr>
-                {% empty %}
-                <tr id="emptyRow">
-                    <td colspan="6">
-                        <div class="empty-state">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                            <p class="text-lg font-medium font-header mt-3">No predictions available yet</p>
-                            <p class="mt-1 mb-4 font-mono opacity-70">Submit your first protein sequence to get started</p>
-                            <a href="{% url 'submit_sequence' %}" class="btn btn-primary glassmorphic font-mono">Submit a Sequence</a>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        
-        <!-- No results message (hidden by default) -->
-        <div id="noResults" class="empty-state hidden">
-            <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <p class="text-lg font-medium font-header mt-3">No matching predictions found</p>
-            <p class="mt-1 mb-4 font-mono opacity-70">Try adjusting your search criteria</p>
-            <button class="btn btn-outline glassmorphic font-mono" id="resetButtonAlt">Clear Filters</button>
+    <!-- Tab Content -->
+    <div class="px-6 pb-6">
+        <!-- Your Predictions Tab -->
+        {% if user.is_authenticated %}
+        <div id="your-predictions" class="tab-content active">
+            <div class="section-header">
+                <svg xmlns="http://www.w3.org/2000/svg" class="section-icon" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+                </svg>
+                <span class="section-title">Your Predictions</span>
+                <span class="section-description">{{ user_predictions_count }} prediction{{ user_predictions_count|pluralize }}</span>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full prediction-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-column="0" data-tab="your">
+                                Sequence Name
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="1" data-tab="your">
+                                Date
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="2" data-tab="your">
+                                Status
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="3" data-tab="your">
+                                Length
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="4" data-tab="your">
+                                pLDDT Score
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="yourPredictionTable">
+                        {% for prediction in user_predictions %}
+                        <tr data-prediction-type="user">
+                            <td class="font-medium text-center">{{ prediction.sequence.sequence_name }}</td>
+                            <td class="text-center" data-date="{{ prediction.prediction_date|date:'Y-m-d H:i:s' }}">
+                                <div>{{ prediction.prediction_date|date:"M d, Y" }}</div>
+                                <div class="text-xs opacity-70">{{ prediction.prediction_date|date:"H:i" }}</div>
+                            </td>
+                            <td class="text-center" data-status="{{ prediction.status }}">
+                                {% if prediction.status == "pending" %}
+                                <div class="status-badge bg-warning/10 text-warning">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+                                    </svg>
+                                    Pending
+                                </div>
+                                {% elif prediction.status == "running" %}
+                                <div class="status-badge bg-info/10 text-info">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                                    </svg>
+                                    Running
+                                </div>
+                                {% elif prediction.status == "completed" %}
+                                <div class="status-badge bg-success/10 text-success">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                                    </svg>
+                                    Completed
+                                </div>
+                                {% elif prediction.status == "failed" %}
+                                <div class="status-badge bg-error/10 text-error">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                                    </svg>
+                                    Failed
+                                </div>
+                                {% else %}
+                                <div class="status-badge bg-base-200 text-base-content">{{ prediction.status }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="text-center" data-length="{{ prediction.sequence.sequence_length }}">
+                                <span class="font-mono font-medium">{{ prediction.sequence.sequence_length }}</span>
+                                <div class="text-xs opacity-70">amino acids</div>
+                            </td>
+                            <td class="text-center" data-score="{{ prediction.plddt_score|default_if_none:0 }}">
+                                {% if prediction.plddt_score %}
+                                    {% with raw_score=prediction.plddt_score %}
+                                    <div class="plddt-pill
+                                        {% if raw_score >= 90 %}plddt-high
+                                        {% elif raw_score >= 70 %}plddt-confident
+                                        {% elif raw_score >= 50 %}plddt-low
+                                        {% else %}plddt-very-low{% endif %}">
+                                        <span class="font-mono">{{ raw_score|floatformat:1 }}</span>
+                                    </div>
+                                    <div class="plddt-label">
+                                        {% if raw_score >= 90 %}High Confidence
+                                        {% elif raw_score >= 70 %}Confident
+                                        {% elif raw_score >= 50 %}Low Confidence
+                                        {% else %}Very Low Confidence{% endif %}
+                                    </div>
+                                    {% endwith %}
+                                {% else %}
+                                    <div class="font-mono text-base-content/50">—</div>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
+                                   class="btn btn-sm btn-primary glassmorphic">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                                        <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+                                    </svg>
+                                    View
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr id="yourEmptyRow">
+                            <td colspan="6">
+                                <div class="empty-state">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                    </svg>
+                                    <p class="text-lg font-medium font-header mt-3">No predictions available yet</p>
+                                    <p class="mt-1 mb-4 font-mono opacity-70">Submit your first protein sequence to get started</p>
+                                    <a href="{% url 'submit_sequence' %}" class="btn btn-primary glassmorphic font-mono">Submit a Sequence</a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- No results message for your predictions -->
+            <div id="yourNoResults" class="empty-state hidden">
+                <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <p class="text-lg font-medium font-header mt-3">No matching predictions found</p>
+                <p class="mt-1 mb-4 font-mono opacity-70">Try adjusting your search criteria</p>
+                <button class="btn btn-outline glassmorphic font-mono" onclick="resetFilters()">Clear Filters</button>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Public Predictions Tab -->
+        <div id="public-predictions" class="tab-content {% if not user.is_authenticated %}active{% endif %}">
+            <div class="section-header">
+                <svg xmlns="http://www.w3.org/2000/svg" class="section-icon" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM4.332 8.027a6.012 6.012 0 011.912-2.706C6.512 5.73 6.974 6 7.5 6A1.5 1.5 0 019 7.5V8a2 2 0 004 0 2 2 0 011.523-1.943A5.977 5.977 0 0116 10c0 .34-.028.675-.083 1H15a2 2 0 00-2 2v2.197A5.973 5.973 0 0110 16v-2a2 2 0 00-2-2 2 2 0 01-2-2 2 2 0 00-1.668-1.973z" clip-rule="evenodd" />
+                </svg>
+                <span class="section-title">Public Predictions</span>
+                <span class="section-description">{{ public_predictions_count }} prediction{{ public_predictions_count|pluralize }}</span>
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full prediction-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-column="0" data-tab="public">
+                                Sequence Name
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="1" data-tab="public">
+                                Date
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="2" data-tab="public">
+                                Status
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="3" data-tab="public">
+                                Length
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th class="sortable" data-column="4" data-tab="public">
+                                pLDDT Score
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                </svg>
+                            </th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="publicPredictionTable">
+                        {% for prediction in public_predictions %}
+                        <tr data-prediction-type="public">
+                            <td class="font-medium text-center">{{ prediction.sequence.sequence_name }}</td>
+                            <td class="text-center" data-date="{{ prediction.prediction_date|date:'Y-m-d H:i:s' }}">
+                                <div>{{ prediction.prediction_date|date:"M d, Y" }}</div>
+                                <div class="text-xs opacity-70">{{ prediction.prediction_date|date:"H:i" }}</div>
+                            </td>
+                            <td class="text-center" data-status="{{ prediction.status }}">
+                                {% if prediction.status == "pending" %}
+                                <div class="status-badge bg-warning/10 text-warning">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+                                    </svg>
+                                    Pending
+                                </div>
+                                {% elif prediction.status == "running" %}
+                                <div class="status-badge bg-info/10 text-info">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                                    </svg>
+                                    Running
+                                </div>
+                                {% elif prediction.status == "completed" %}
+                                <div class="status-badge bg-success/10 text-success">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                                    </svg>
+                                    Completed
+                                </div>
+                                {% elif prediction.status == "failed" %}
+                                <div class="status-badge bg-error/10 text-error">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd" />
+                                    </svg>
+                                    Failed
+                                </div>
+                                {% else %}
+                                <div class="status-badge bg-base-200 text-base-content">{{ prediction.status }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="text-center" data-length="{{ prediction.sequence.sequence_length }}">
+                                <span class="font-mono font-medium">{{ prediction.sequence.sequence_length }}</span>
+                                <div class="text-xs opacity-70">amino acids</div>
+                            </td>
+                            <td class="text-center" data-score="{{ prediction.plddt_score|default_if_none:0 }}">
+                                {% if prediction.plddt_score %}
+                                    {% with raw_score=prediction.plddt_score %}
+                                    <div class="plddt-pill
+                                        {% if raw_score >= 90 %}plddt-high
+                                        {% elif raw_score >= 70 %}plddt-confident
+                                        {% elif raw_score >= 50 %}plddt-low
+                                        {% else %}plddt-very-low{% endif %}">
+                                        <span class="font-mono">{{ raw_score|floatformat:1 }}</span>
+                                    </div>
+                                    <div class="plddt-label">
+                                        {% if raw_score >= 90 %}High Confidence
+                                        {% elif raw_score >= 70 %}Confident
+                                        {% elif raw_score >= 50 %}Low Confidence
+                                        {% else %}Very Low Confidence{% endif %}
+                                    </div>
+                                    {% endwith %}
+                                {% else %}
+                                    <div class="font-mono text-base-content/50">—</div>
+                                {% endif %}
+                            </td>
+                            <td class="text-center">
+                                <a href="{% url 'prediction_detail' prediction.prediction_id %}" 
+                                   class="btn btn-sm btn-primary glassmorphic">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                        <path d="M10 12a2 2 0 100-4 2 2 0 000 4z" />
+                                        <path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+                                    </svg>
+                                    View
+                                </a>
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr id="publicEmptyRow">
+                            <td colspan="6">
+                                <div class="empty-state">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                                    </svg>
+                                    <p class="text-lg font-medium font-header mt-3">No public predictions available</p>
+                                    <p class="mt-1 mb-4 font-mono opacity-70">Be the first to share a protein prediction!</p>
+                                    <a href="{% url 'submit_sequence' %}" class="btn btn-primary glassmorphic font-mono">Submit a Sequence</a>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- No results message for public predictions -->
+            <div id="publicNoResults" class="empty-state hidden">
+                <svg xmlns="http://www.w3.org/2000/svg" class="empty-icon h-16 w-16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                </svg>
+                <p class="text-lg font-medium font-header mt-3">No matching predictions found</p>
+                <p class="mt-1 mb-4 font-mono opacity-70">Try adjusting your search criteria</p>
+                <button class="btn btn-outline glassmorphic font-mono" onclick="resetFilters()">Clear Filters</button>
+            </div>
         </div>
     </div>
 </div>
 
 <!-- Include the script directly in the content block -->
 <script>
-    // Table sorting
     let currentSortColumn = -1;
     let currentSortDirection = 'asc';
+    let currentActiveTab = 'your-predictions';
     
-    function sortTable(columnIndex) {
-        const table = document.getElementById('predictionTable');
-        const rows = Array.from(table.getElementsByTagName('tr'));
-        const icons = document.querySelectorAll('.sort-icon');
+    // Tab functionality
+    function switchTab(tabId) {
+        // Update active tab
+        currentActiveTab = tabId;
         
-        // Reset all icons
+        // Hide all tab contents
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        
+        // Remove active class from all tab buttons
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.classList.remove('active');
+        });
+        
+        // Show selected tab content
+        const selectedContent = document.getElementById(tabId);
+        if (selectedContent) {
+            selectedContent.classList.add('active');
+        }
+        
+        // Add active class to selected tab button
+        const selectedButton = document.querySelector(`[data-tab="${tabId}"]`);
+        if (selectedButton) {
+            selectedButton.classList.add('active');
+        }
+        
+        // Reset filters when switching tabs
+        resetFilters();
+        
+        // Reset sorting state
+        currentSortColumn = -1;
+        document.querySelectorAll('.sort-icon').forEach(icon => {
+            icon.classList.remove('asc', 'desc');
+        });
+    }
+    
+    function getCurrentTableId() {
+        return currentActiveTab === 'your-predictions' ? 'yourPredictionTable' : 'publicPredictionTable';
+    }
+    
+    function sortTable(columnIndex, tabType = null) {
+        // Determine which table to sort based on current active tab or explicit tab type
+        const tableId = tabType ? (tabType === 'your' ? 'yourPredictionTable' : 'publicPredictionTable') : getCurrentTableId();
+        const table = document.getElementById(tableId);
+        
+        if (!table) return;
+        
+        const rows = Array.from(table.getElementsByTagName('tr'));
+        
+        // Get icons for the current active tab only
+        const activeTabContent = document.querySelector('.tab-content.active');
+        const icons = activeTabContent ? activeTabContent.querySelectorAll('.sort-icon') : [];
+        
+        // Reset all icons in current tab
         icons.forEach(icon => {
             icon.classList.remove('asc', 'desc');
         });
@@ -490,7 +805,7 @@
             table.appendChild(row);
         }
         
-        // Hide empty row if we have results
+        // Update empty state for current tab
         updateEmptyState();
     }
     
@@ -498,8 +813,12 @@
     function applyFilters() {
         const searchText = document.getElementById('searchInput').value.toLowerCase();
         const statusFilter = document.getElementById('statusFilter').value.toLowerCase();
-        const rows = Array.from(document.getElementById('predictionTable').getElementsByTagName('tr'));
+        const tableId = getCurrentTableId();
+        const table = document.getElementById(tableId);
         
+        if (!table) return;
+        
+        const rows = Array.from(table.getElementsByTagName('tr'));
         let visibleCount = 0;
         
         rows.forEach(row => {
@@ -524,17 +843,25 @@
         document.getElementById('searchInput').value = '';
         document.getElementById('statusFilter').value = '';
         
-        const rows = document.getElementById('predictionTable').getElementsByTagName('tr');
-        for (let row of rows) {
-            row.classList.remove('hidden');
+        const tableId = getCurrentTableId();
+        const table = document.getElementById(tableId);
+        
+        if (table) {
+            const rows = table.getElementsByTagName('tr');
+            for (let row of rows) {
+                row.classList.remove('hidden');
+            }
         }
         
         updateEmptyState();
     }
     
     function updateEmptyState(noResults = false) {
-        const emptyRow = document.getElementById('emptyRow');
-        const noResultsMsg = document.getElementById('noResults');
+        const activeTab = document.querySelector('.tab-content.active');
+        if (!activeTab) return;
+        
+        const emptyRow = activeTab.querySelector('[id$="EmptyRow"]');
+        const noResultsMsg = activeTab.querySelector('[id$="NoResults"]');
         
         // Original empty state (no predictions at all)
         if (emptyRow) {
@@ -542,35 +869,38 @@
         }
         
         // No results from search
-        if (noResults) {
-            noResultsMsg.classList.remove('hidden');
-        } else {
-            noResultsMsg.classList.add('hidden');
+        if (noResultsMsg) {
+            if (noResults) {
+                noResultsMsg.classList.remove('hidden');
+            } else {
+                noResultsMsg.classList.add('hidden');
+            }
         }
     }
     
     // Initialize when document is loaded
     document.addEventListener('DOMContentLoaded', function() {
-        // Add event listeners to the column headers
-        document.getElementById('sortCol0').addEventListener('click', function() { sortTable(0); });
-        document.getElementById('sortCol1').addEventListener('click', function() { sortTable(1); });
-        document.getElementById('sortCol2').addEventListener('click', function() { sortTable(2); });
-        document.getElementById('sortCol3').addEventListener('click', function() { sortTable(3); });
-        document.getElementById('sortCol4').addEventListener('click', function() { sortTable(4); });
+        // Set up tab switching
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.addEventListener('click', function() {
+                const tabId = this.getAttribute('data-tab');
+                switchTab(tabId);
+            });
+        });
+        
+        // Set up sortable headers for both tables
+        document.querySelectorAll('.sortable').forEach(header => {
+            header.addEventListener('click', function() {
+                const columnIndex = parseInt(this.getAttribute('data-column'));
+                const tabType = this.getAttribute('data-tab');
+                sortTable(columnIndex, tabType);
+            });
+        });
         
         // Add event listeners for search and filter
         document.getElementById('searchButton').addEventListener('click', applyFilters);
         document.getElementById('statusFilter').addEventListener('change', applyFilters);
         document.getElementById('resetButton').addEventListener('click', resetFilters);
-        
-        // Additional reset button in the "no results" message
-        const resetButtonAlt = document.getElementById('resetButtonAlt');
-        if (resetButtonAlt) {
-            resetButtonAlt.addEventListener('click', resetFilters);
-        }
-        
-        // Default sort by date (newest first)
-        setTimeout(() => sortTable(1), 100);
         
         // Add enter key listener for search
         document.getElementById('searchInput').addEventListener('keyup', function(event) {
@@ -578,6 +908,24 @@
                 applyFilters();
             }
         });
+        
+        // Set initial active tab
+        const isAuthenticated = {{ user.is_authenticated|yesno:"true,false" }};
+        if (isAuthenticated) {
+            currentActiveTab = 'your-predictions';
+        } else {
+            currentActiveTab = 'public-predictions';
+            switchTab('public-predictions');
+        }
+        
+        // Default sort by date (newest first) for the active tab
+        setTimeout(() => {
+            if (currentActiveTab === 'your-predictions') {
+                sortTable(1, 'your');
+            } else {
+                sortTable(1, 'public');
+            }
+        }, 100);
     });
 </script>
 {% endblock %}
