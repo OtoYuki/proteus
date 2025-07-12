@@ -171,4 +171,3 @@ Proteus is expected to deliver significant benefits:
 
 ---
 
-This README aims to provide a comprehensive overview of the Proteus project. For more specific details, please refer to the source code and any accompanying documentation.
