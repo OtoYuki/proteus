@@ -166,6 +166,14 @@ pub fn analyze_pdb_file(
         None
     };
 
+    // Normalize pLDDT if model wrote it in [0.0, 1.0] range (e.g. ESMFold)
+    let max_plddt = plddts.iter().copied().fold(f64::MIN, f64::max);
+    if max_plddt <= 1.0 && max_plddt > 0.0 {
+        for v in &mut plddts {
+            *v *= 100.0;
+        }
+    }
+
     // pLDDT statistics
     let n_plddt = plddts.len() as f64;
     let mean_plddt = plddts.iter().sum::<f64>() / n_plddt;

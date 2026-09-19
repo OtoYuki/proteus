@@ -57,6 +57,10 @@ impl OciRunner {
     pub fn socket_path(&self) -> &str {
         &self.socket_path
     }
+
+    pub async fn has_image(&self, image: &str) -> bool {
+        self.docker.inspect_image(image).await.is_ok()
+    }
 }
 
 fn users_uid() -> u32 {
@@ -80,6 +84,12 @@ impl ComputeRunner for OciRunner {
             PipelineTier::HighFidelity => "ghcr.io/sokrypton/colabfold:1.5.5",
             PipelineTier::FullValidation => "gromacs/gromacs:latest",
         };
+
+        if !self.has_image(image).await {
+            return Err(EngineError::Container(format!(
+                "Required container image '{image}' is not available locally. Pull it with 'podman pull {image}', or run with '--runner esm-api' for live ESMFold folding or '--runner simulated'."
+            )));
+        }
 
         let container_name = format!("proteus-{}-{}", job.tier_slug(), job.id);
         tokio::fs::create_dir_all(work_dir).await?;

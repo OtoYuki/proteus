@@ -8,7 +8,7 @@ use proteus_core::models::PipelineTier;
 use proteus_core::sequence::validate_and_parse_fasta;
 use proteus_engine::oci::OciRunner;
 use proteus_engine::simulated::SimulatedRunner;
-use proteus_engine::{ComputeRunner, PipelineScheduler};
+use proteus_engine::{AutoRunner, ComputeRunner, EsmApiRunner, PipelineScheduler};
 use proteus_server::run_server;
 use proteus_storage::create_sqlite_pool;
 use proteus_storage::repository::ProteusRepository;
@@ -42,6 +42,10 @@ enum Commands {
         /// Computational tier
         #[arg(short, long, value_enum, default_value_t = CliTier::Fast)]
         tier: CliTier,
+
+        /// Compute runner mode
+        #[arg(long, value_enum, default_value_t = RunnerMode::Auto)]
+        runner: RunnerMode,
 
         /// Run synchronously and wait for completion
         #[arg(long, default_value_t = true)]
@@ -109,6 +113,19 @@ enum RunnerMode {
     Auto,
     Oci,
     Simulated,
+    EsmApi,
+}
+
+fn resolve_runner(mode: RunnerMode) -> Result<Arc<dyn ComputeRunner>> {
+    match mode {
+        RunnerMode::Auto => Ok(Arc::new(AutoRunner::new())),
+        RunnerMode::Simulated => Ok(Arc::new(SimulatedRunner::new())),
+        RunnerMode::EsmApi => Ok(Arc::new(EsmApiRunner::new())),
+        RunnerMode::Oci => {
+            let oci = OciRunner::new().context("Failed to initialize OCI container runner")?;
+            Ok(Arc::new(oci))
+        }
+    }
 }
 
 fn get_default_data_dir() -> PathBuf {
@@ -137,6 +154,7 @@ async fn main() -> Result<()> {
             file,
             fasta,
             tier,
+            runner,
             wait,
         } => {
             let fasta_content = if let Some(path) = file {
@@ -188,15 +206,8 @@ async fn main() -> Result<()> {
                 pb.set_message("Executing bio-compute pipeline...");
                 pb.enable_steady_tick(std::time::Duration::from_millis(80));
 
-                let runner: Arc<dyn ComputeRunner> = match OciRunner::new() {
-                    Ok(oci) => Arc::new(oci),
-                    Err(_) => {
-                        pb.println("Container runtime socket unavailable. Falling back to SimulatedRunner.");
-                        Arc::new(SimulatedRunner::new())
-                    }
-                };
-
-                let scheduler = PipelineScheduler::new(repo.clone(), runner, artifacts_dir);
+                let compute_runner = resolve_runner(runner)?;
+                let scheduler = PipelineScheduler::new(repo.clone(), compute_runner, artifacts_dir);
                 scheduler.process_job(job_id).await?;
 
                 pb.finish_with_message("Pipeline completed successfully!");
@@ -302,28 +313,7 @@ async fn main() -> Result<()> {
         Commands::Serve { port, host, runner } => {
             let pool = create_sqlite_pool(&db_path).await?;
             let repo = ProteusRepository::new(pool);
-
-            let compute_runner: Arc<dyn ComputeRunner> = match runner {
-                RunnerMode::Simulated => {
-                    println!("Runner mode: Simulated");
-                    Arc::new(SimulatedRunner::new())
-                }
-                RunnerMode::Oci => {
-                    println!("Runner mode: OCI Container Runner");
-                    Arc::new(OciRunner::new()?)
-                }
-                RunnerMode::Auto => match OciRunner::new() {
-                    Ok(oci) => {
-                        println!("Auto-detected container engine at: {}", oci.socket_path());
-                        Arc::new(oci)
-                    }
-                    Err(_) => {
-                        println!("No container runtime found. Using SimulatedRunner.");
-                        Arc::new(SimulatedRunner::new())
-                    }
-                },
-            };
-
+            let compute_runner = resolve_runner(runner)?;
             let scheduler = PipelineScheduler::new(repo, compute_runner, artifacts_dir);
             let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
             run_server(addr, scheduler).await?;

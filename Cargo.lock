@@ -2093,6 +2093,7 @@ dependencies = [
  "futures-util",
  "proteus-core",
  "proteus-storage",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
