@@ -20,11 +20,13 @@
 .DS_Store
 
 # Coverage and test reports
+.coverage
 /coverage/
 /.nyc_output/
 /reports/
 
 # IDE files (if not already ignored in .idea/.gitignore)
+.idea/
 .vscode/
 *.iml
 *.ipr
