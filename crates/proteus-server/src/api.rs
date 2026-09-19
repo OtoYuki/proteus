@@ -293,3 +293,76 @@ pub async fn get_metrics(
             .into_response(),
     }
 }
+
+pub async fn get_prediction_pdb(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+) -> Response {
+    match state.scheduler.repo().get_prediction_by_job(job_id).await {
+        Ok(Some(pred)) => match tokio::fs::read_to_string(&pred.pdb_path).await {
+            Ok(content) => (
+                [(axum::http::header::CONTENT_TYPE, "chemical/x-pdb")],
+                content,
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read PDB artifact: {e}"),
+            )
+                .into_response(),
+        },
+        Ok(None) => (StatusCode::NOT_FOUND, "Prediction not found").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn view_structure(Path(job_id): Path<Uuid>) -> axum::response::Html<String> {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Proteus 3D Structure Viewer</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.css" />
+    <script type="text/javascript" src="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.js"></script>
+    <style>
+        body, html {{ width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #111; color: #fff; }}
+        #app {{ width: 100%; height: 100%; position: absolute; }}
+        #header {{ position: absolute; top: 12px; left: 16px; z-index: 1000; background: rgba(0,0,0,0.75); padding: 8px 16px; border-radius: 8px; backdrop-filter: blur(8px); border: 1px solid #333; }}
+        #header h1 {{ margin: 0; font-size: 14px; font-weight: 600; color: #4ade80; }}
+        #header p {{ margin: 2px 0 0 0; font-size: 11px; color: #aaa; }}
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>Proteus Bio-Compute 3D Viewer</h1>
+        <p>Job ID: {job_id}</p>
+    </div>
+    <div id="app"></div>
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {{
+            const viewer = await molstar.Viewer.create('app', {{
+                layoutIsExpanded: false,
+                layoutShowControls: true,
+                layoutShowRemoteState: false,
+                layoutShowSequence: true,
+                layoutShowLog: false,
+                viewportShowExpand: false,
+            }});
+            await viewer.loadStructureFromUrl('/api/v1/predictions/by-job/{job_id}/pdb', 'pdb', false, {{
+                representationStyle: {{
+                    type: 'cartoon',
+                    color: 'plddt',
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>"#
+    );
+    axum::response::Html(html)
+}

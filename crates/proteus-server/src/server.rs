@@ -1,6 +1,6 @@
 use crate::api::{
-    enqueue_job, get_job, get_metrics, get_prediction, get_sequence, health_check,
-    stream_job_events, submit_sequence, ApiDoc,
+    enqueue_job, get_job, get_metrics, get_prediction, get_prediction_pdb, get_sequence,
+    health_check, stream_job_events, submit_sequence, view_structure, ApiDoc,
 };
 use axum::routing::{get, post};
 use axum::Router;
@@ -31,9 +31,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/jobs/{id}/events", get(stream_job_events))
         .route("/api/v1/predictions/by-job/{job_id}", get(get_prediction))
         .route(
+            "/api/v1/predictions/by-job/{job_id}/pdb",
+            get(get_prediction_pdb),
+        )
+        .route(
             "/api/v1/metrics/by-prediction/{prediction_id}",
             get(get_metrics),
         )
+        .route("/view/{job_id}", get(view_structure))
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
