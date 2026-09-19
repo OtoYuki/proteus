@@ -1,0 +1,32 @@
+[package]
+name = "proteus-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "proteus"
+path = "src/main.rs"
+
+[dependencies]
+proteus-core = { workspace = true }
+proteus-storage = { workspace = true }
+proteus-engine = { workspace = true }
+proteus-server = { workspace = true }
+clap = { workspace = true }
+indicatif = { workspace = true }
+comfy-table = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

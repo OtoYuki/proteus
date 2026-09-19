@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/proteus-core",
+    "crates/proteus-storage",
+    "crates/proteus-engine",
+    "crates/proteus-server",
+    "crates/proteus-cli",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+authors = ["Proteus Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/OtoYuki/proteus"
+
+[workspace.dependencies]
+# Internal workspace crates
+proteus-core = { path = "crates/proteus-core" }
+proteus-storage = { path = "crates/proteus-storage" }
+proteus-engine = { path = "crates/proteus-engine" }
+proteus-server = { path = "crates/proteus-server" }
+
+# Async runtime & networking
+tokio = { version = "1.43", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures-util = "0.3"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serialization & Models
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.13", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Database & Storage
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "uuid", "chrono", "migrate"] }
+
+# Container Orchestration
+bollard = "0.18"
+
+# Scientific & Math
+pdbtbx = "0.11"
+nalgebra = "0.33"
+
+# CLI & UX
+clap = { version = "4.5", features = ["derive", "env"] }
+indicatif = "0.17"
+comfy-table = "7.1"
+
+# Diagnostics & Docs
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2.0"
+anyhow = "1.0"
+tempfile = "3.17"
+utoipa = { version = "5.3", features = ["uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

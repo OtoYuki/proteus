@@ -1,0 +1,24 @@
+[package]
+name = "proteus-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+pdbtbx = { workspace = true }
+nalgebra = { workspace = true }
+tracing = { workspace = true }
+utoipa = { workspace = true, optional = true }
+
+[features]
+default = []
+openapi = ["dep:utoipa"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
