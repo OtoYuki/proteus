@@ -40,7 +40,13 @@ use uuid::Uuid;
             proteus_core::models::JobStatus,
             proteus_core::models::Prediction,
             proteus_core::models::BiophysicalMetrics,
-            proteus_core::models::PlddtDistribution
+            proteus_core::models::PlddtDistribution,
+            proteus_core::structure::SecondaryStructureSummary,
+            proteus_core::structure::SecondaryStructure,
+            proteus_core::structure::RamachandranStats,
+            proteus_core::clash::ClashStats,
+            proteus_core::clash::StericClash,
+            proteus_core::sasa::SasaMetrics
         )
     ),
     tags(

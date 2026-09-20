@@ -160,6 +160,14 @@ pub async fn save_screening_dataset(
     records: &[ScreeningRecord],
     path: &Path,
 ) -> Result<(), StorageError> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(StorageError::IoError)?;
+        }
+    }
+
     match path.extension().and_then(|s| s.to_str()) {
         Some("json") => {
             let content =
@@ -279,5 +287,12 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap();
         assert!((clash_col.value(0) - 1.25).abs() < 1e-5);
+
+        // Test nested directory automatic creation
+        let nested_path = dir.path().join("sub/nested/dir/results.parquet");
+        save_screening_dataset(&records, &nested_path)
+            .await
+            .unwrap();
+        assert!(nested_path.exists());
     }
 }

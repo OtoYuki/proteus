@@ -62,7 +62,9 @@ pub fn vdw_radius(element: &str, atom_name: &str) -> f64 {
 
 /// Internal representation of an atom for clash detection.
 struct ClashAtom {
+    chain_id: String,
     res_idx: usize,
+    res_seq: isize,
     res_name: String,
     atom_name: String,
     pos: Vector3<f64>,
@@ -75,37 +77,45 @@ struct ClashAtom {
 /// `overlap = r_vdw(A) + r_vdw(B) - distance > 0.40 Å`
 pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
     let mut atoms: Vec<ClashAtom> = Vec::new();
+    let mut global_res_idx = 0;
 
-    for (res_idx, residue) in pdb.residues().enumerate() {
-        let res_name = residue
-            .name()
-            .map(|n| n.trim().to_string())
-            .unwrap_or_else(|| "UNK".to_string());
+    for chain in pdb.chains() {
+        let chain_id = chain.id().to_string();
+        for residue in chain.residues() {
+            let res_seq = residue.serial_number();
+            let res_name = residue
+                .name()
+                .map(|n| n.trim().to_string())
+                .unwrap_or_else(|| "UNK".to_string());
 
-        for atom in residue.atoms() {
-            let atom_name = atom.name().trim().to_string();
-            let elem_symbol = atom
-                .element()
-                .map(|e| e.symbol().to_string())
-                .unwrap_or_else(|| atom_name.chars().next().unwrap_or('C').to_string());
+            for atom in residue.atoms() {
+                let atom_name = atom.name().trim().to_string();
+                let elem_symbol = atom
+                    .element()
+                    .map(|e| e.symbol().to_string())
+                    .unwrap_or_else(|| atom_name.chars().next().unwrap_or('C').to_string());
 
-            // Exclude explicit hydrogens if present to match standard heavy-atom clashscore
-            if elem_symbol.eq_ignore_ascii_case("H") {
-                continue;
+                // Exclude explicit hydrogens if present to match standard heavy-atom clashscore
+                if elem_symbol.eq_ignore_ascii_case("H") {
+                    continue;
+                }
+
+                let is_bb = matches!(atom_name.as_str(), "N" | "CA" | "C" | "O");
+                let radius = vdw_radius(&elem_symbol, &atom_name);
+                let pos = Vector3::new(atom.x(), atom.y(), atom.z());
+
+                atoms.push(ClashAtom {
+                    chain_id: chain_id.clone(),
+                    res_idx: global_res_idx,
+                    res_seq,
+                    res_name: res_name.clone(),
+                    atom_name,
+                    pos,
+                    radius,
+                    is_backbone: is_bb,
+                });
             }
-
-            let is_bb = matches!(atom_name.as_str(), "N" | "CA" | "C" | "O");
-            let radius = vdw_radius(&elem_symbol, &atom_name);
-            let pos = Vector3::new(atom.x(), atom.y(), atom.z());
-
-            atoms.push(ClashAtom {
-                res_idx,
-                res_name: res_name.clone(),
-                atom_name,
-                pos,
-                radius,
-                is_backbone: is_bb,
-            });
+            global_res_idx += 1;
         }
     }
 
@@ -172,16 +182,19 @@ pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
                                 continue;
                             }
 
-                            // Exclusion 2: Adjacent residue backbone and Proline pyrrolidine ring linkages
-                            let res_diff =
-                                (atom_a.res_idx as isize - atom_b.res_idx as isize).abs();
-                            if res_diff == 1 {
-                                let is_bb_a = atom_a.is_backbone
-                                    || (atom_a.res_name == "PRO" && atom_a.atom_name == "CD");
-                                let is_bb_b = atom_b.is_backbone
-                                    || (atom_b.res_name == "PRO" && atom_b.atom_name == "CD");
-                                if is_bb_a && is_bb_b {
-                                    continue;
+                            // Exclusion 2: Adjacent residue backbone and Proline pyrrolidine ring linkages (same chain only)
+                            if atom_a.chain_id == atom_b.chain_id {
+                                let res_diff =
+                                    (atom_a.res_idx as isize - atom_b.res_idx as isize).abs();
+                                let seq_diff = (atom_a.res_seq - atom_b.res_seq).abs();
+                                if res_diff == 1 || seq_diff == 1 {
+                                    let is_bb_a = atom_a.is_backbone
+                                        || (atom_a.res_name == "PRO" && atom_a.atom_name == "CD");
+                                    let is_bb_b = atom_b.is_backbone
+                                        || (atom_b.res_name == "PRO" && atom_b.atom_name == "CD");
+                                    if is_bb_a && is_bb_b {
+                                        continue;
+                                    }
                                 }
                             }
 
