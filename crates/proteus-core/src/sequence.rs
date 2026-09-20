@@ -156,6 +156,19 @@ pub fn validate_and_parse_multi_fasta(content: &str) -> Result<Vec<Sequence>, Co
     Ok(sequences)
 }
 
+/// Serializes an array of `Sequence` models into standard multi-FASTA string format.
+pub fn format_multi_fasta(sequences: &[Sequence]) -> String {
+    let mut out = String::new();
+    for seq in sequences {
+        out.push('>');
+        out.push_str(&seq.header);
+        out.push('\n');
+        out.push_str(&seq.fasta);
+        out.push('\n');
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +217,10 @@ FVNQHLCGSHLVEALYLVCGERGFFYTPKT
         assert_eq!(seqs[1].header, "seq2");
         assert_eq!(seqs[2].header, "seq3");
         assert_eq!(seqs[0].length, 76);
+
+        let formatted = format_multi_fasta(&seqs);
+        let parsed_again = validate_and_parse_multi_fasta(&formatted).expect("Should roundtrip");
+        assert_eq!(parsed_again.len(), 3);
+        assert_eq!(parsed_again[0].fasta, seqs[0].fasta);
     }
 }

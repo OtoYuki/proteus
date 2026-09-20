@@ -13,7 +13,7 @@ use proteus_server::run_server;
 use proteus_storage::create_sqlite_pool;
 use proteus_storage::repository::ProteusRepository;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -105,11 +105,44 @@ enum Commands {
         height: Option<usize>,
     },
 
+    /// In-silico Deep Mutational Scanning (DMS) variant library generator
+    Mutate {
+        /// Path to scaffold FASTA file (or '-' for stdin)
+        scaffold: String,
+
+        /// Mutagenesis mode
+        #[arg(short, long, value_enum, default_value_t = CliMutagenesisMode::Alanine)]
+        mode: CliMutagenesisMode,
+
+        /// 1-indexed window start position (inclusive)
+        #[arg(long)]
+        start: Option<usize>,
+
+        /// 1-indexed window end position (inclusive)
+        #[arg(long)]
+        end: Option<usize>,
+
+        /// Maximum number of mutant variants to generate
+        #[arg(long)]
+        max_variants: Option<usize>,
+
+        /// Exclude the unmutated wildtype scaffold from output library
+        #[arg(long)]
+        no_wt: bool,
+
+        /// Custom prefix for variant sequence headers
+        #[arg(long)]
+        prefix: Option<String>,
+
+        /// Optional output file path for multi-FASTA library (writes to stdout if omitted)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// High-throughput library screening funnel: batch folding, Pareto ranking, and leaderboard
     Screen {
-        /// Path to multi-sequence FASTA library file
-        #[arg(short, long)]
-        library: PathBuf,
+        /// Path to multi-sequence FASTA library file (or '-' for stdin)
+        library: String,
 
         /// Computational tier
         #[arg(short, long, value_enum, default_value_t = CliTier::Fast)]
@@ -130,6 +163,10 @@ enum Commands {
         /// Number of top ranked candidates to display in leaderboard
         #[arg(long, default_value_t = 10)]
         top: usize,
+
+        /// Optional path to export structured screening dataset (.csv or .json)
+        #[arg(short, long)]
+        export: Option<PathBuf>,
     },
 
     /// Run the headless background daemon (proteusd)
@@ -161,6 +198,27 @@ impl From<CliTier> for PipelineTier {
             CliTier::Fast => PipelineTier::FastScreening,
             CliTier::Sota => PipelineTier::HighFidelity,
             CliTier::Full => PipelineTier::FullValidation,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum CliMutagenesisMode {
+    #[value(name = "alanine")]
+    Alanine,
+    #[value(name = "saturation")]
+    Saturation,
+}
+
+impl From<CliMutagenesisMode> for proteus_core::mutagenesis::MutagenesisMode {
+    fn from(m: CliMutagenesisMode) -> Self {
+        match m {
+            CliMutagenesisMode::Alanine => {
+                proteus_core::mutagenesis::MutagenesisMode::AlanineScanning
+            }
+            CliMutagenesisMode::Saturation => {
+                proteus_core::mutagenesis::MutagenesisMode::Saturation
+            }
         }
     }
 }
@@ -574,6 +632,63 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::Mutate {
+            scaffold,
+            mode,
+            start,
+            end,
+            max_variants,
+            no_wt,
+            prefix,
+            output,
+        } => {
+            let content: String = if scaffold == "-" {
+                use tokio::io::AsyncReadExt;
+                let mut buf = String::new();
+                tokio::io::stdin()
+                    .read_to_string(&mut buf)
+                    .await
+                    .context("Failed to read scaffold FASTA from stdin")?;
+                buf
+            } else {
+                let p = Path::new(&scaffold);
+                tokio::fs::read_to_string(p)
+                    .await
+                    .with_context(|| format!("Failed to read scaffold file at {:?}", p))?
+            };
+
+            let seq = proteus_core::sequence::validate_and_parse_fasta(&content)
+                .context("Scaffold sequence validation failed")?;
+
+            let config = proteus_core::mutagenesis::MutagenesisConfig {
+                mode: mode.into(),
+                window_start: start,
+                window_end: end,
+                max_variants,
+                include_wildtype: !no_wt,
+                prefix,
+            };
+
+            let library = proteus_core::mutagenesis::generate_mutant_library(&seq, &config)
+                .context("Mutant variant generation failed")?;
+
+            let formatted = proteus_core::sequence::format_multi_fasta(&library);
+
+            if let Some(out_path) = output {
+                tokio::fs::write(&out_path, &formatted)
+                    .await
+                    .with_context(|| format!("Failed to write mutant library to {:?}", out_path))?;
+                eprintln!(
+                    "Generated {} variant sequences (scaffold len: {}) -> {:?}",
+                    library.len(),
+                    seq.length,
+                    out_path
+                );
+            } else {
+                print!("{formatted}");
+            }
+        }
+
         Commands::Screen {
             library,
             tier,
@@ -581,17 +696,30 @@ async fn main() -> Result<()> {
             workers,
             min_plddt,
             top,
+            export,
         } => {
-            println!("Reading sequence library from: {:?}", library);
-            let content = tokio::fs::read_to_string(&library)
-                .await
-                .with_context(|| format!("Failed to read library file at {:?}", library))?;
+            let content: String = if library == "-" {
+                eprintln!("Reading sequence library from standard input (stdin)...");
+                use tokio::io::AsyncReadExt;
+                let mut buf = String::new();
+                tokio::io::stdin()
+                    .read_to_string(&mut buf)
+                    .await
+                    .context("Failed to read multi-FASTA library from stdin")?;
+                buf
+            } else {
+                let p = Path::new(&library);
+                eprintln!("Reading sequence library from: {:?}", p);
+                tokio::fs::read_to_string(p)
+                    .await
+                    .with_context(|| format!("Failed to read library file at {:?}", p))?
+            };
 
             let sequences = proteus_core::sequence::validate_and_parse_multi_fasta(&content)
                 .context("Multi-FASTA library parsing failed")?;
 
             let total_seqs = sequences.len();
-            println!("Loaded {total_seqs} candidate sequences for screening funnel");
+            eprintln!("Loaded {total_seqs} candidate sequences for screening funnel");
 
             let pool = create_sqlite_pool(&db_path).await?;
             let repo = ProteusRepository::new(pool);
@@ -634,7 +762,7 @@ async fn main() -> Result<()> {
             pb.finish_with_message("Screening batch execution complete!");
 
             let successful_count = results.iter().filter(|r| r.is_ok()).count();
-            println!(
+            eprintln!(
                 "\nCompleted: {}/{} successful ({} parallel workers)",
                 successful_count, total_seqs, workers
             );
@@ -649,6 +777,9 @@ async fn main() -> Result<()> {
                 hydrophobic_burial: f64,
                 helix_pct: f64,
                 strand_pct: f64,
+                coil_pct: f64,
+                favored_rama: f64,
+                rama_outliers: usize,
                 fitness: f64,
             }
 
@@ -663,11 +794,19 @@ async fn main() -> Result<()> {
                                 .sasa_metrics
                                 .as_ref()
                                 .map_or(0.0, |s| s.hydrophobic_burial_ratio * 100.0);
-                            let (helix, strand) = metrics
+                            let (helix, strand, coil) = metrics
                                 .secondary_structure_summary
                                 .as_ref()
-                                .map_or((0.0, 0.0), |s| {
-                                    (s.helix_fraction * 100.0, s.strand_fraction * 100.0)
+                                .map_or((0.0, 0.0, 0.0), |s| {
+                                    (
+                                        s.helix_fraction * 100.0,
+                                        s.strand_fraction * 100.0,
+                                        s.coil_fraction * 100.0,
+                                    )
+                                });
+                            let (favored_rama, rama_outliers) =
+                                metrics.ramachandran_stats.as_ref().map_or((0.0, 0), |r| {
+                                    (r.favored_fraction * 100.0, r.outlier_count)
                                 });
                             let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
 
@@ -680,6 +819,9 @@ async fn main() -> Result<()> {
                                 hydrophobic_burial: burial,
                                 helix_pct: helix,
                                 strand_pct: strand,
+                                coil_pct: coil,
+                                favored_rama,
+                                rama_outliers,
                                 fitness,
                             });
                         }
@@ -732,6 +874,35 @@ async fn main() -> Result<()> {
                 println!(
                     "\nTop Candidate: '{}' (Fitness: {:.1})\nView structure in terminal: proteus view {}",
                     winner.header, winner.fitness, winner.job_id
+                );
+            }
+
+            if let Some(export_path) = export {
+                let mut records = Vec::with_capacity(candidates.len());
+                for (idx, c) in candidates.iter().enumerate() {
+                    records.push(proteus_storage::ScreeningRecord {
+                        rank: idx + 1,
+                        job_id: c.job_id,
+                        header: c.header.clone(),
+                        length: c.length,
+                        plddt: c.plddt,
+                        rg: c.rg,
+                        hydrophobic_burial_pct: c.hydrophobic_burial,
+                        helix_pct: c.helix_pct,
+                        strand_pct: c.strand_pct,
+                        coil_pct: c.coil_pct,
+                        favored_ramachandran_pct: c.favored_rama,
+                        rama_outliers: c.rama_outliers,
+                        fitness: c.fitness,
+                    });
+                }
+                proteus_storage::save_screening_dataset(&records, &export_path)
+                    .await
+                    .with_context(|| format!("Failed to export dataset to {:?}", export_path))?;
+                eprintln!(
+                    "Successfully exported {} ranked candidates -> {:?}",
+                    records.len(),
+                    export_path
                 );
             }
         }
