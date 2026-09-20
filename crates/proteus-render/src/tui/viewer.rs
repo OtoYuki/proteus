@@ -5,12 +5,14 @@ use crate::rasterizer::camera::OrbitCamera;
 use crate::rasterizer::pipeline::Rasterizer;
 use crate::rasterizer::shader::ColorScheme;
 use crate::terminal::halfblock::HalfBlockRenderer;
+use crate::tui::dashboard::{DashboardData, DashboardRenderer};
 use crossterm::cursor::{Hide, MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use std::fmt::Write as _;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
@@ -30,6 +32,8 @@ pub struct ViewerConfig {
     pub secondary_mesh: Option<(TriangleMesh, ColorRGB)>,
     pub rmsd: Option<f64>,
     pub disulfide_mesh: Option<TriangleMesh>,
+    pub dashboard_enabled: bool,
+    pub dashboard_data: Option<DashboardData>,
 }
 
 impl Default for ViewerConfig {
@@ -41,6 +45,8 @@ impl Default for ViewerConfig {
             secondary_mesh: None,
             rmsd: None,
             disulfide_mesh: None,
+            dashboard_enabled: false,
+            dashboard_data: None,
         }
     }
 }
@@ -60,11 +66,25 @@ pub fn run_interactive_viewer(
     let (mut term_cols, mut term_rows) =
         crossterm::terminal::size().map_err(|e| RenderError::Terminal(e.to_string()))?;
 
+    let mut dashboard_mode = config.dashboard_enabled && config.dashboard_data.is_some();
+    let dashboard_renderer = DashboardRenderer::new();
+
+    let mut left_cols = if dashboard_mode && term_cols >= 90 {
+        (term_cols * 58) / 100
+    } else {
+        term_cols
+    };
+    let mut right_cols = if dashboard_mode && term_cols >= 90 {
+        term_cols.saturating_sub(left_cols + 1)
+    } else {
+        0
+    };
+
     // Reserve 2 rows at the bottom for HUD and controls
     let hud_height = 2u16;
     let render_rows = term_rows.saturating_sub(hud_height).max(10);
     // Halfblock resolution: 1 character row = 2 pixel rows
-    let mut fb = Framebuffer::new(term_cols as usize, (render_rows * 2) as usize);
+    let mut fb = Framebuffer::new(left_cols as usize, (render_rows * 2) as usize);
 
     let mut rasterizer = Rasterizer::new(config.initial_color_scheme);
     let mut compositor = HalfBlockRenderer::new();
@@ -87,6 +107,27 @@ pub fn run_interactive_viewer(
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Char(' ') => auto_rotate = !auto_rotate,
+                    KeyCode::Tab | KeyCode::Char('b') => {
+                        if config.dashboard_data.is_some() {
+                            dashboard_mode = !dashboard_mode;
+                            left_cols = if dashboard_mode && term_cols >= 90 {
+                                (term_cols * 58) / 100
+                            } else {
+                                term_cols
+                            };
+                            right_cols = if dashboard_mode && term_cols >= 90 {
+                                term_cols.saturating_sub(left_cols + 1)
+                            } else {
+                                0
+                            };
+                            let new_render_rows = term_rows.saturating_sub(hud_height).max(10);
+                            fb.resize(left_cols as usize, (new_render_rows * 2) as usize);
+                            let _ = execute!(
+                                stdout,
+                                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                            );
+                        }
+                    }
                     KeyCode::Char('c') => {
                         color_scheme = match color_scheme {
                             ColorScheme::Plddt => ColorScheme::SecondaryStructure,
@@ -118,8 +159,18 @@ pub fn run_interactive_viewer(
                 Event::Resize(new_cols, new_rows) => {
                     term_cols = new_cols;
                     term_rows = new_rows;
+                    left_cols = if dashboard_mode && term_cols >= 90 {
+                        (term_cols * 58) / 100
+                    } else {
+                        term_cols
+                    };
+                    right_cols = if dashboard_mode && term_cols >= 90 {
+                        term_cols.saturating_sub(left_cols + 1)
+                    } else {
+                        0
+                    };
                     let new_render_rows = term_rows.saturating_sub(hud_height).max(10);
-                    fb.resize(term_cols as usize, (new_render_rows * 2) as usize);
+                    fb.resize(left_cols as usize, (new_render_rows * 2) as usize);
                     let _ = execute!(
                         stdout,
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
@@ -168,6 +219,26 @@ pub fn run_interactive_viewer(
         out_buf.clear();
         compositor.render_differential(&fb, &mut out_buf, 0, 0);
 
+        // Render side-by-side biophysical dashboard if enabled
+        if dashboard_mode && right_cols >= 20 {
+            if let Some(ref d_data) = config.dashboard_data {
+                // Draw vertical separator column at left_cols
+                let sep_col = left_cols + 1;
+                for r in 0..render_rows {
+                    let row_pos = r + 1;
+                    let _ = write!(out_buf, "\x1b[{row_pos};{sep_col}H\x1b[38;5;240m│\x1b[0m");
+                }
+                dashboard_renderer.render_to_buffer(
+                    d_data,
+                    &mut out_buf,
+                    left_cols + 1,
+                    0,
+                    right_cols as usize,
+                    render_rows as usize,
+                );
+            }
+        }
+
         // Draw HUD status lines
         let hud_scheme = match color_scheme {
             ColorScheme::Plddt => "pLDDT Confidence",
@@ -193,6 +264,15 @@ pub fn run_interactive_viewer(
         } else {
             "N/A"
         };
+        let dash_status = if config.dashboard_data.is_some() {
+            if dashboard_mode {
+                "ON "
+            } else {
+                "OFF"
+            }
+        } else {
+            "N/A"
+        };
         let total_triangles = mesh.triangle_count()
             + config
                 .secondary_mesh
@@ -209,16 +289,23 @@ pub fn run_interactive_viewer(
 
         let status_row1 = if let Some(rmsd) = config.rmsd {
             format!(
-                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | FX: {} | Spin: {} | {:.0} FPS",
-                config.title, rmsd, total_triangles, fx_status, auto_status, fps
+                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | Dash: {} | FX: {} | Spin: {} | {:.0} FPS",
+                config.title, rmsd, total_triangles, dash_status, fx_status, auto_status, fps
             )
         } else {
             format!(
-                " {} | Tris: {} | Color: {} | S-S: {} | FX: {} | Spin: {} | {:.0} FPS",
-                config.title, total_triangles, hud_scheme, ds_status, fx_status, auto_status, fps
+                " {} | Tris: {} | Color: {} | S-S: {} | Dash: {} | FX: {} | Spin: {} | {:.0} FPS",
+                config.title,
+                total_triangles,
+                hud_scheme,
+                ds_status,
+                dash_status,
+                fx_status,
+                auto_status,
+                fps
             )
         };
-        let status_row2 = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [c] Color | [o] SSAO/Outlines | [d] Disulfides | [r] Reset | [q] Quit";
+        let status_row2 = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [Tab] Dashboard | [c] Color | [o] FX | [d] S-S | [r] Reset | [q] Quit";
 
         let _ = execute!(
             stdout,

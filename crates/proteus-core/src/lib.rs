@@ -15,3 +15,4 @@ pub use mutagenesis::*;
 pub use ranking::*;
 pub use sasa::*;
 pub use structure::*;
+pub use uuid;

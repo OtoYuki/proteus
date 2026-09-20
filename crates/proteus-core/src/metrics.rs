@@ -141,6 +141,17 @@ pub fn compute_contact_density(coords: &[Vector3<f64>], threshold_angstrom: f64)
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DetailedBiophysicalAnalysis {
+    pub metrics: BiophysicalMetrics,
+    pub plddts: Vec<f64>,
+    pub ramachandran_points: Vec<(
+        Option<f64>,
+        Option<f64>,
+        crate::structure::RamachandranRegion,
+    )>,
+}
+
 /// Extract C-alpha coordinates and b-factors (pLDDT) from a PDB file.
 pub fn analyze_pdb_file(
     path: &Path,
@@ -152,6 +163,35 @@ pub fn analyze_pdb_file(
     let (pdb, _errors) = open(path_str, StrictnessLevel::Loose)
         .map_err(|e| CoreError::StructureParseError(format!("Failed to open PDB file: {e:?}")))?;
 
+    let ref_pdb = if let Some(ref_p) = reference_path {
+        let ref_str = ref_p.to_str().ok_or_else(|| {
+            CoreError::StructureParseError("Invalid UTF-8 in reference path".into())
+        })?;
+        let (p, _) = open(ref_str, StrictnessLevel::Loose).map_err(|e| {
+            CoreError::StructureParseError(format!("Failed to open reference PDB file: {e:?}"))
+        })?;
+        Some(p)
+    } else {
+        None
+    };
+
+    let detailed = analyze_pdb_detailed(&pdb, ref_pdb.as_ref())?;
+    Ok(detailed.metrics)
+}
+
+/// Comprehensive biophysical analysis on an open PDB structure.
+pub fn analyze_pdb_structure(
+    pdb: &pdbtbx::PDB,
+    reference_pdb: Option<&pdbtbx::PDB>,
+) -> Result<BiophysicalMetrics, CoreError> {
+    Ok(analyze_pdb_detailed(pdb, reference_pdb)?.metrics)
+}
+
+/// Detailed biophysical analysis on an open PDB structure with per-residue profiles.
+pub fn analyze_pdb_detailed(
+    pdb: &pdbtbx::PDB,
+    reference_pdb: Option<&pdbtbx::PDB>,
+) -> Result<DetailedBiophysicalAnalysis, CoreError> {
     let mut ca_coords: Vec<Vector3<f64>> = Vec::new();
     let mut plddts: Vec<f64> = Vec::new();
     let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
@@ -215,13 +255,7 @@ pub fn analyze_pdb_file(
     let contact_density = compute_contact_density(&ca_coords, 8.0);
 
     // RMSD to reference if provided
-    let rmsd = if let Some(ref_p) = reference_path {
-        let ref_str = ref_p.to_str().ok_or_else(|| {
-            CoreError::StructureParseError("Invalid UTF-8 in reference path".into())
-        })?;
-        let (ref_pdb, _) = open(ref_str, StrictnessLevel::Loose).map_err(|e| {
-            CoreError::StructureParseError(format!("Failed to open reference PDB file: {e:?}"))
-        })?;
+    let rmsd = if let Some(ref_pdb) = reference_pdb {
         let ref_ca: Vec<Vector3<f64>> = ref_pdb
             .residues()
             .flat_map(|r| r.atoms())
@@ -253,6 +287,7 @@ pub fn analyze_pdb_file(
 
     // Ramachandran backbone dihedral angles with MolProbity residue-specific context
     let mut phi_psi_context = Vec::new();
+    let mut ramachandran_points = Vec::new();
     let n_res = backbones.len();
     for i in 0..n_res {
         let next_name = if i + 1 < n_res {
@@ -292,6 +327,13 @@ pub fn analyze_pdb_file(
             None
         };
 
+        let region = if let (Some(p_val), Some(s_val)) = (phi, psi) {
+            crate::structure::classify_ramachandran_context(p_val, s_val, context)
+        } else {
+            crate::structure::RamachandranRegion::Outlier
+        };
+
+        ramachandran_points.push((phi, psi, region));
         phi_psi_context.push((phi, psi, context));
     }
 
@@ -320,7 +362,11 @@ pub fn analyze_pdb_file(
     let fitness = crate::ranking::evaluate_candidate_fitness(&metrics, ca_coords.len());
     metrics.candidate_fitness_score = Some(fitness.total_score);
 
-    Ok(metrics)
+    Ok(DetailedBiophysicalAnalysis {
+        metrics,
+        plddts,
+        ramachandran_points,
+    })
 }
 
 #[cfg(test)]

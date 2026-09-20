@@ -2141,6 +2141,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

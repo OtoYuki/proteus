@@ -35,6 +35,13 @@ pub struct StructureRenderData {
     pub camera: OrbitCamera,
     pub num_residues: usize,
     pub num_disulfides: usize,
+    pub metrics: Option<proteus_core::models::BiophysicalMetrics>,
+    pub plddts: Vec<f64>,
+    pub ramachandran_points: Vec<(
+        Option<f64>,
+        Option<f64>,
+        proteus_core::structure::RamachandranRegion,
+    )>,
 }
 
 /// Detect disulfide bonds by checking CYS sulfur-sulfur proximity (1.7Å - 2.6Å).
@@ -174,12 +181,22 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         None
     };
 
+    let analysis = proteus_core::metrics::analyze_pdb_detailed(&pdb, None).ok();
+    let (metrics, detailed_plddts, rama_points) = if let Some(a) = analysis {
+        (Some(a.metrics), a.plddts, a.ramachandran_points)
+    } else {
+        (None, plddts.clone(), Vec::new())
+    };
+
     Ok(StructureRenderData {
         ribbon_mesh,
         disulfide_mesh,
         camera,
         num_residues: ca_coords.len(),
         num_disulfides,
+        metrics,
+        plddts: detailed_plddts,
+        ramachandran_points: rama_points,
     })
 }
 

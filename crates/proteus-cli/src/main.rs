@@ -88,6 +88,10 @@ enum Commands {
         #[arg(short, long)]
         interactive: bool,
 
+        /// Enable side-by-side live biophysical telemetry dashboard (Ramachandran, pLDDT, SASA)
+        #[arg(long)]
+        dashboard: bool,
+
         /// Terminal rendering backend
         #[arg(short, long, value_enum, default_value_t = CliBackend::HalfBlock)]
         backend: CliBackend,
@@ -513,6 +517,7 @@ async fn main() -> Result<()> {
             target,
             compare,
             interactive,
+            dashboard,
             backend,
             color,
             width,
@@ -584,6 +589,8 @@ async fn main() -> Result<()> {
                         )),
                         rmsd: Some(sup_data.rmsd),
                         disulfide_mesh: None,
+                        dashboard_enabled: false,
+                        dashboard_data: None,
                     };
                     proteus_render::tui::run_interactive_viewer(
                         &sup_data.target_mesh,
@@ -607,9 +614,19 @@ async fn main() -> Result<()> {
                         rmsd
                     );
                 }
-            } else if interactive {
+            } else if interactive || dashboard {
                 let structure_data = proteus_render::parse_pdb_structure(&pdb_content)
                     .context("Failed to parse structure for 3D rendering")?;
+
+                let dashboard_data = Some(proteus_render::tui::DashboardData {
+                    title: title.clone(),
+                    num_residues: structure_data.num_residues,
+                    num_disulfides: structure_data.num_disulfides,
+                    metrics: structure_data.metrics,
+                    plddts: structure_data.plddts,
+                    ramachandran_points: structure_data.ramachandran_points,
+                });
+
                 let config = proteus_render::tui::ViewerConfig {
                     title,
                     initial_color_scheme: render_color,
@@ -617,6 +634,8 @@ async fn main() -> Result<()> {
                     secondary_mesh: None,
                     rmsd: None,
                     disulfide_mesh: structure_data.disulfide_mesh,
+                    dashboard_enabled: dashboard || term_cols >= 100,
+                    dashboard_data,
                 };
                 proteus_render::tui::run_interactive_viewer(
                     &structure_data.ribbon_mesh,
