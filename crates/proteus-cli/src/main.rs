@@ -307,6 +307,48 @@ async fn main() -> Result<()> {
                 ]);
             }
 
+            if let Some(ref ss) = metrics.secondary_structure_summary {
+                table.add_row(vec![
+                    Cell::new("Secondary Structure Composition"),
+                    Cell::new(format!(
+                        "α-Helix: {:.1}% | β-Strand: {:.1}% | Coil: {:.1}%",
+                        ss.helix_fraction * 100.0,
+                        ss.strand_fraction * 100.0,
+                        ss.coil_fraction * 100.0
+                    )),
+                ]);
+            }
+
+            if let Some(ref rama) = metrics.ramachandran_stats {
+                table.add_row(vec![
+                    Cell::new("Ramachandran Conformation"),
+                    Cell::new(format!(
+                        "Favored: {:.1}% | Allowed: {:.1}% | Outliers: {}",
+                        rama.favored_fraction * 100.0,
+                        rama.allowed_fraction * 100.0,
+                        rama.outlier_count
+                    )),
+                ]);
+            }
+
+            if let Some(ref sasa) = metrics.sasa_metrics {
+                table.add_row(vec![
+                    Cell::new("Solvent Accessible Surface Area"),
+                    Cell::new(format!(
+                        "Total: {:.1} Å² (Hydrophobic Burial: {:.1}%)",
+                        sasa.total_sasa,
+                        sasa.hydrophobic_burial_ratio * 100.0
+                    )),
+                ]);
+            }
+
+            if let Some(fitness) = metrics.candidate_fitness_score {
+                table.add_row(vec![
+                    Cell::new("Candidate Fitness Score"),
+                    Cell::new(format!("{:.1} / 100", fitness)),
+                ]);
+            }
+
             println!("{table}");
         }
 
@@ -378,6 +420,47 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
         )),
         Cell::new("Reliable backbone"),
     ]);
+
+    if let Some(ref ss) = metrics.secondary_structure_summary {
+        table.add_row(vec![
+            Cell::new("Secondary Structure"),
+            Cell::new(format!(
+                "H: {:.1}% | E: {:.1}% | C: {:.1}%",
+                ss.helix_fraction * 100.0,
+                ss.strand_fraction * 100.0,
+                ss.coil_fraction * 100.0
+            )),
+            Cell::new("P-SEA assignment"),
+        ]);
+    }
+
+    if let Some(ref rama) = metrics.ramachandran_stats {
+        table.add_row(vec![
+            Cell::new("Ramachandran Regions"),
+            Cell::new(format!(
+                "Favored: {:.1}% | Outliers: {}",
+                rama.favored_fraction * 100.0,
+                rama.outlier_count
+            )),
+            Cell::new("Backbone stereochemistry"),
+        ]);
+    }
+
+    if let Some(ref sasa) = metrics.sasa_metrics {
+        table.add_row(vec![
+            Cell::new("Hydrophobic Core Burial"),
+            Cell::new(format!("{:.1}%", sasa.hydrophobic_burial_ratio * 100.0)),
+            Cell::new("Shrake-Rupley SASA"),
+        ]);
+    }
+
+    if let Some(fitness) = metrics.candidate_fitness_score {
+        table.add_row(vec![
+            Cell::new("Candidate Fitness Score"),
+            Cell::new(format!("{:.1} / 100", fitness)),
+            Cell::new("Multi-objective ranking"),
+        ]);
+    }
 
     println!("{table}");
     Ok(())

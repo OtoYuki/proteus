@@ -128,13 +128,47 @@ pub fn analyze_pdb_file(
 
     let mut ca_coords: Vec<Vector3<f64>> = Vec::new();
     let mut plddts: Vec<f64> = Vec::new();
+    let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
+
+    struct ResidueBackbone {
+        n: Option<Vector3<f64>>,
+        ca: Option<Vector3<f64>>,
+        c: Option<Vector3<f64>>,
+    }
+
+    let mut backbones: Vec<ResidueBackbone> = Vec::new();
 
     for residue in pdb.residues() {
+        let mut cur_bb = ResidueBackbone {
+            n: None,
+            ca: None,
+            c: None,
+        };
+
         for atom in residue.atoms() {
-            if atom.name() == "CA" {
-                ca_coords.push(Vector3::new(atom.x(), atom.y(), atom.z()));
+            let coord = Vector3::new(atom.x(), atom.y(), atom.z());
+            let name = atom.name().trim();
+
+            if name == "CA" {
+                ca_coords.push(coord);
                 plddts.push(atom.b_factor());
+                cur_bb.ca = Some(coord);
+            } else if name == "N" {
+                cur_bb.n = Some(coord);
+            } else if name == "C" {
+                cur_bb.c = Some(coord);
             }
+
+            let elem_symbol = atom
+                .element()
+                .map(|e| e.symbol().to_string())
+                .unwrap_or_else(|| name.chars().next().unwrap_or('C').to_string());
+
+            all_atoms.push(crate::sasa::AtomDescriptor::new(coord, elem_symbol));
+        }
+
+        if cur_bb.ca.is_some() {
+            backbones.push(cur_bb);
         }
     }
 
@@ -184,7 +218,48 @@ pub fn analyze_pdb_file(
     let high_conf = plddts.iter().filter(|&&v| v >= 70.0).count() as f64 / n_plddt;
     let very_high_conf = plddts.iter().filter(|&&v| v >= 90.0).count() as f64 / n_plddt;
 
-    Ok(BiophysicalMetrics {
+    // Ramachandran backbone dihedral angles
+    let mut phi_psi_angles = Vec::new();
+    let n_res = backbones.len();
+    for i in 0..n_res {
+        let phi = if i > 0 {
+            if let (Some(prev_c), Some(cur_n), Some(cur_ca), Some(cur_c)) = (
+                backbones[i - 1].c,
+                backbones[i].n,
+                backbones[i].ca,
+                backbones[i].c,
+            ) {
+                crate::structure::compute_dihedral(&prev_c, &cur_n, &cur_ca, &cur_c).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let psi = if i + 1 < n_res {
+            if let (Some(cur_n), Some(cur_ca), Some(cur_c), Some(next_n)) = (
+                backbones[i].n,
+                backbones[i].ca,
+                backbones[i].c,
+                backbones[i + 1].n,
+            ) {
+                crate::structure::compute_dihedral(&cur_n, &cur_ca, &cur_c, &next_n).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        phi_psi_angles.push((phi, psi));
+    }
+
+    let ss_summary = crate::structure::assign_secondary_structure(&ca_coords);
+    let rama_stats = crate::structure::evaluate_ramachandran_angles(&phi_psi_angles);
+    let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
+
+    let mut metrics = BiophysicalMetrics {
         id: Uuid::new_v4(),
         prediction_id: Uuid::new_v4(),
         radius_of_gyration: rg,
@@ -196,7 +271,16 @@ pub fn analyze_pdb_file(
             high_confidence_fraction: high_conf,
             very_high_confidence_fraction: very_high_conf,
         },
-    })
+        secondary_structure_summary: Some(ss_summary),
+        ramachandran_stats: Some(rama_stats),
+        sasa_metrics: Some(sasa_metrics),
+        candidate_fitness_score: None,
+    };
+
+    let fitness = crate::ranking::evaluate_candidate_fitness(&metrics, ca_coords.len());
+    metrics.candidate_fitness_score = Some(fitness.total_score);
+
+    Ok(metrics)
 }
 
 #[cfg(test)]

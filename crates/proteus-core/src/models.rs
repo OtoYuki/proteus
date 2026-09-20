@@ -1,3 +1,5 @@
+use crate::sasa::SasaMetrics;
+use crate::structure::{RamachandranStats, SecondaryStructureSummary};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -5,9 +7,12 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum PipelineTier {
-    FastScreening,  // ESMFold
-    HighFidelity,   // Boltz-1 / ColabFold
-    FullValidation, // GROMACS Molecular Dynamics
+    /// Fast single-sequence transformer screening (ESMFold / ESM-2)
+    FastScreening,
+    /// SOTA all-atom diffusion biomolecular structure prediction (Boltz-1)
+    HighFidelity,
+    /// Molecular mechanics relaxation and thermodynamic equilibration (OpenMM / Amber)
+    FullValidation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,8 +54,8 @@ impl PipelineJob {
     pub fn tier_slug(&self) -> &'static str {
         match self.tier {
             PipelineTier::FastScreening => "fast",
-            PipelineTier::HighFidelity => "sota",
-            PipelineTier::FullValidation => "md",
+            PipelineTier::HighFidelity => "boltz",
+            PipelineTier::FullValidation => "relax",
         }
     }
 }
@@ -75,6 +80,10 @@ pub struct BiophysicalMetrics {
     pub rmsd_to_reference: Option<f64>,
     pub contact_density: f64,
     pub plddt_distribution: PlddtDistribution,
+    pub secondary_structure_summary: Option<SecondaryStructureSummary>,
+    pub ramachandran_stats: Option<RamachandranStats>,
+    pub sasa_metrics: Option<SasaMetrics>,
+    pub candidate_fitness_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

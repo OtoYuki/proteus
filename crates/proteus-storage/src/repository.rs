@@ -328,7 +328,7 @@ impl ProteusRepository {
         let row = sqlx::query(
             "SELECT id, prediction_id, radius_of_gyration, rmsd_to_reference,
                    contact_density, mean_plddt, median_plddt, high_conf_fraction,
-                   very_high_conf_fraction
+                   very_high_conf_fraction, metrics_json
             FROM metrics
             WHERE prediction_id = ?",
         )
@@ -337,6 +337,13 @@ impl ProteusRepository {
         .await?;
 
         if let Some(r) = row {
+            let metrics_json: Option<String> = r.get("metrics_json");
+            if let Some(ref json_str) = metrics_json {
+                if let Ok(deserialized) = serde_json::from_str::<BiophysicalMetrics>(json_str) {
+                    return Ok(Some(deserialized));
+                }
+            }
+
             let id_str: String = r.get("id");
             let p_id_str: String = r.get("prediction_id");
             let radius_of_gyration: f64 = r.get("radius_of_gyration");
@@ -363,6 +370,10 @@ impl ProteusRepository {
                     high_confidence_fraction: high_conf_fraction,
                     very_high_confidence_fraction: very_high_conf_fraction,
                 },
+                secondary_structure_summary: None,
+                ramachandran_stats: None,
+                sasa_metrics: None,
+                candidate_fitness_score: None,
             }))
         } else {
             Ok(None)
@@ -497,6 +508,10 @@ mod tests {
                 high_confidence_fraction: 0.9,
                 very_high_confidence_fraction: 0.4,
             },
+            secondary_structure_summary: None,
+            ramachandran_stats: None,
+            sasa_metrics: None,
+            candidate_fitness_score: Some(88.5),
         };
         repo.insert_metrics(&metrics).await.unwrap();
 
