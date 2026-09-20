@@ -7,6 +7,7 @@ pub enum ColorScheme {
     Plddt,
     SecondaryStructure,
     Rainbow,
+    Solid(ColorRGB),
 }
 
 /// Map AlphaFold / ESMFold pLDDT score (0.0 - 100.0) to standard colors:

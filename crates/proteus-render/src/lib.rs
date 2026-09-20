@@ -110,6 +110,157 @@ pub fn render_pdb_snapshot(
     }
 }
 
+/// Data bundle for dual-structure superposition rendering.
+pub struct SuperpositionRenderData {
+    pub target_mesh: TriangleMesh,
+    pub ref_mesh: TriangleMesh,
+    pub camera: OrbitCamera,
+    pub rmsd: f64,
+}
+
+/// Parse and superimpose two PDB structures using Kabsch optimal alignment.
+pub fn prepare_superposition_for_rendering(
+    target_pdb: &str,
+    reference_pdb: &str,
+) -> Result<SuperpositionRenderData, RenderError> {
+    let cursor_tgt = std::io::Cursor::new(target_pdb.as_bytes());
+    let (tgt_pdb, _) = open_raw(std::io::BufReader::new(cursor_tgt), StrictnessLevel::Loose)
+        .map_err(|e| RenderError::PdbParse(format!("Target PDB parse failed: {e:?}")))?;
+
+    let cursor_ref = std::io::Cursor::new(reference_pdb.as_bytes());
+    let (ref_pdb, _) = open_raw(std::io::BufReader::new(cursor_ref), StrictnessLevel::Loose)
+        .map_err(|e| RenderError::PdbParse(format!("Reference PDB parse failed: {e:?}")))?;
+
+    let mut tgt_ca = Vec::new();
+    let mut tgt_plddts = Vec::new();
+    for r in tgt_pdb.residues() {
+        for a in r.atoms() {
+            if a.name().trim() == "CA" {
+                tgt_ca.push(Vector3::new(a.x(), a.y(), a.z()));
+                tgt_plddts.push(a.b_factor());
+            }
+        }
+    }
+
+    let mut ref_ca = Vec::new();
+    let mut ref_plddts = Vec::new();
+    for r in ref_pdb.residues() {
+        for a in r.atoms() {
+            if a.name().trim() == "CA" {
+                ref_ca.push(Vector3::new(a.x(), a.y(), a.z()));
+                ref_plddts.push(a.b_factor());
+            }
+        }
+    }
+
+    let common_len = tgt_ca.len().min(ref_ca.len());
+    if common_len < 2 {
+        return Err(RenderError::PdbParse(
+            "Both structures must contain at least 2 C-alpha atoms for superposition".into(),
+        ));
+    }
+
+    // Align target onto reference frame using Kabsch algorithm
+    let sup = proteus_core::metrics::compute_kabsch_superposition(
+        &tgt_ca[..common_len],
+        &ref_ca[..common_len],
+    )
+    .map_err(|e| RenderError::Geometry(e.to_string()))?;
+
+    let aligned_tgt_ca = sup.aligned_coords;
+    let tgt_ss = assign_secondary_structure(&aligned_tgt_ca);
+    let ref_ss = assign_secondary_structure(&ref_ca[..common_len]);
+
+    let target_mesh = generate_cartoon_mesh(
+        &aligned_tgt_ca,
+        &tgt_ss.assignment,
+        &tgt_plddts[..common_len],
+        4,
+    );
+    let ref_mesh = generate_cartoon_mesh(
+        &ref_ca[..common_len],
+        &ref_ss.assignment,
+        &ref_plddts[..common_len],
+        4,
+    );
+
+    // Compute bounding center and radius over the combined structures
+    let n = common_len as f64;
+    let sum_pos: Vector3<f64> = ref_ca[..common_len].iter().sum();
+    let center_f64 = sum_pos / n;
+    let center = Vector3::new(
+        center_f64.x as f32,
+        center_f64.y as f32,
+        center_f64.z as f32,
+    );
+
+    let max_radius = ref_ca[..common_len]
+        .iter()
+        .map(|p| (p - center_f64).norm())
+        .fold(0.0f64, f64::max) as f32;
+
+    let camera = OrbitCamera::new(center, max_radius * 1.15);
+
+    Ok(SuperpositionRenderData {
+        target_mesh,
+        ref_mesh,
+        camera,
+        rmsd: sup.rmsd,
+    })
+}
+
+/// Render a single static snapshot string of two superimposed structures.
+/// Target is rendered in Cyan (#06B6D4), Reference is rendered in Ruby (#F43F5E).
+pub fn render_superposition_snapshot(
+    target_pdb: &str,
+    reference_pdb: &str,
+    width: usize,
+    height: usize,
+    backend: TerminalBackend,
+) -> Result<(String, f64), RenderError> {
+    let data = prepare_superposition_for_rendering(target_pdb, reference_pdb)?;
+
+    let (px_width, px_height) = match backend {
+        TerminalBackend::HalfBlock => (width, height * 2),
+        TerminalBackend::Braille => (width * 2, height * 4),
+        TerminalBackend::Kitty => (width * 8, height * 16),
+    };
+
+    let mut fb = Framebuffer::new(px_width, px_height);
+    fb.clear(ColorRGB::BLACK);
+
+    let mut rasterizer = Rasterizer::new(ColorScheme::Plddt);
+    // 1. Render reference in Ruby
+    let ref_color = ColorRGB::new(244, 63, 94);
+    rasterizer.render_with_scheme(
+        &data.ref_mesh,
+        &data.camera,
+        &mut fb,
+        ColorScheme::Solid(ref_color),
+    );
+
+    // 2. Render aligned target in Cyan into the same depth buffer
+    let target_color = ColorRGB::new(6, 182, 212);
+    rasterizer.render_with_scheme(
+        &data.target_mesh,
+        &data.camera,
+        &mut fb,
+        ColorScheme::Solid(target_color),
+    );
+
+    let output_str = match backend {
+        TerminalBackend::HalfBlock => HalfBlockRenderer::render_snapshot(&fb),
+        TerminalBackend::Braille => BrailleRenderer::render_snapshot(&fb),
+        TerminalBackend::Kitty => {
+            let mut out = Vec::new();
+            KittyRenderer::render(&fb, &mut out)?;
+            String::from_utf8(out).map_err(|e| RenderError::Terminal(e.to_string()))?
+        }
+    };
+
+    Ok((output_str, data.rmsd))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +309,20 @@ mod tests {
 
         assert!(!snapshot.is_empty());
         assert!(snapshot.contains("\x1b_Ga=T"));
+    }
+
+    #[test]
+    fn test_render_superposition_snapshot() {
+        let (snapshot, rmsd) = render_superposition_snapshot(
+            CRAMBIN_PDB,
+            CRAMBIN_PDB,
+            80,
+            24,
+            TerminalBackend::Braille,
+        )
+        .expect("Failed to render superposition snapshot");
+
+        assert!(!snapshot.is_empty());
+        assert!(rmsd < 1e-6); // Identical structures have 0.0 RMSD
     }
 }

@@ -40,8 +40,133 @@ impl AtomDescriptor {
     }
 }
 
+/// 3D Spatial Voxel Grid for O(N) neighbor lookup in Shrake-Rupley SASA.
+/// Eliminates the classic O(N^2) pairwise distance bottleneck using a cell-linked list.
+struct SpatialCellList {
+    min: Vector3<f64>,
+    inv_cell_size: f64,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    head: Vec<i32>,
+    next: Vec<i32>,
+}
+
+impl SpatialCellList {
+    fn build(coords: &[Vector3<f64>], cell_size: f64) -> Self {
+        let n = coords.len();
+        if n == 0 {
+            return Self {
+                min: Vector3::zeros(),
+                inv_cell_size: 1.0 / cell_size,
+                nx: 1,
+                ny: 1,
+                nz: 1,
+                head: vec![-1],
+                next: Vec::new(),
+            };
+        }
+
+        let mut min = coords[0];
+        let mut max = coords[0];
+        for c in coords.iter().skip(1) {
+            min.x = min.x.min(c.x);
+            min.y = min.y.min(c.y);
+            min.z = min.z.min(c.z);
+            max.x = max.x.max(c.x);
+            max.y = max.y.max(c.y);
+            max.z = max.z.max(c.z);
+        }
+
+        // Small padding to prevent out-of-bounds on max edge
+        min -= Vector3::new(0.01, 0.01, 0.01);
+        max += Vector3::new(0.01, 0.01, 0.01);
+
+        let inv_cell_size = 1.0 / cell_size;
+        let nx = (((max.x - min.x) * inv_cell_size).floor() as usize + 1).max(1);
+        let ny = (((max.y - min.y) * inv_cell_size).floor() as usize + 1).max(1);
+        let nz = (((max.z - min.z) * inv_cell_size).floor() as usize + 1).max(1);
+
+        let total_cells = nx.saturating_mul(ny).saturating_mul(nz).min(2_000_000);
+        let mut head = vec![-1i32; total_cells];
+        let mut next = vec![-1i32; n];
+
+        for i in 0..n {
+            let cx = (((coords[i].x - min.x) * inv_cell_size).floor() as usize).min(nx - 1);
+            let cy = (((coords[i].y - min.y) * inv_cell_size).floor() as usize).min(ny - 1);
+            let cz = (((coords[i].z - min.z) * inv_cell_size).floor() as usize).min(nz - 1);
+
+            let cell_idx = cx + cy * nx + cz * nx * ny;
+            if cell_idx < total_cells {
+                next[i] = head[cell_idx];
+                head[cell_idx] = i as i32;
+            }
+        }
+
+        Self {
+            min,
+            inv_cell_size,
+            nx,
+            ny,
+            nz,
+            head,
+            next,
+        }
+    }
+
+    /// Query neighbor atom indices within the 27 adjacent grid cells of atom `atom_idx`.
+    fn find_neighbors(
+        &self,
+        atom_idx: usize,
+        coords: &[Vector3<f64>],
+        radii: &[f64],
+        max_dist_sq: f64,
+        neighbors_out: &mut Vec<(Vector3<f64>, f64)>,
+    ) {
+        neighbors_out.clear();
+        let coord = coords[atom_idx];
+        let r_i = radii[atom_idx];
+
+        let cx = (((coord.x - self.min.x) * self.inv_cell_size).floor() as isize)
+            .clamp(0, self.nx as isize - 1) as usize;
+        let cy = (((coord.y - self.min.y) * self.inv_cell_size).floor() as isize)
+            .clamp(0, self.ny as isize - 1) as usize;
+        let cz = (((coord.z - self.min.z) * self.inv_cell_size).floor() as isize)
+            .clamp(0, self.nz as isize - 1) as usize;
+
+        let min_x = cx.saturating_sub(1);
+        let max_x = (cx + 1).min(self.nx - 1);
+        let min_y = cy.saturating_sub(1);
+        let max_y = (cy + 1).min(self.ny - 1);
+        let min_z = cz.saturating_sub(1);
+        let max_z = (cz + 1).min(self.nz - 1);
+
+        for z in min_z..=max_z {
+            let z_offset = z * self.nx * self.ny;
+            for y in min_y..=max_y {
+                let yz_offset = y * self.nx + z_offset;
+                for x in min_x..=max_x {
+                    let cell_idx = x + yz_offset;
+                    let mut curr = self.head[cell_idx];
+                    while curr >= 0 {
+                        let j = curr as usize;
+                        if j != atom_idx {
+                            let d_sq = (coord - coords[j]).norm_squared();
+                            let max_d = r_i + radii[j];
+                            if d_sq < max_d * max_d && d_sq < max_dist_sq {
+                                neighbors_out.push((coords[j], radii[j]));
+                            }
+                        }
+                        curr = self.next[j];
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Shrake-Rupley Solvent Accessible Surface Area (SASA) numerical calculation.
-/// Uses a 96-point Fibonacci sphere and 1.4A water probe radius.
+/// Uses an O(N) 3D spatial cell-list, a 96-point Fibonacci sphere, and 1.40Å probe radius.
 pub fn compute_sasa(atoms: &[AtomDescriptor]) -> SasaMetrics {
     if atoms.is_empty() {
         return SasaMetrics {
@@ -56,20 +181,27 @@ pub fn compute_sasa(atoms: &[AtomDescriptor]) -> SasaMetrics {
     let n_points = 96usize;
     let sphere_points = generate_fibonacci_sphere(n_points);
 
-    let mut total_sasa = 0.0;
-    let mut polar_sasa = 0.0;
-    let mut apolar_sasa = 0.0;
-    let mut total_apolar_isolated = 0.0;
-
     let n = atoms.len();
+    let coords: Vec<Vector3<f64>> = atoms.iter().map(|a| a.coord).collect();
     let expanded_radii: Vec<f64> = atoms
         .iter()
         .map(|a| a.vdw_radius() + probe_radius)
         .collect();
 
+    // Maximum possible sphere-sphere overlap distance: 2 * (1.80 + 1.40) = 6.40Å
+    let cell_size = 6.40;
+    let cell_list = SpatialCellList::build(&coords, cell_size);
+
+    let mut total_sasa = 0.0;
+    let mut polar_sasa = 0.0;
+    let mut apolar_sasa = 0.0;
+    let mut total_apolar_isolated = 0.0;
+
+    let mut neighbors = Vec::with_capacity(64);
+
     for i in 0..n {
         let r_i = expanded_radii[i];
-        let c_i = atoms[i].coord;
+        let c_i = coords[i];
         let is_polar = atoms[i].is_polar();
 
         // Theoretical isolated surface area
@@ -78,17 +210,14 @@ pub fn compute_sasa(atoms: &[AtomDescriptor]) -> SasaMetrics {
             total_apolar_isolated += isolated_area;
         }
 
-        // Find candidate neighbor atoms within (r_i + max_neighbor_radius)
-        let mut neighbors = Vec::new();
-        for j in 0..n {
-            if i != j {
-                let d_sq = (c_i - atoms[j].coord).norm_squared();
-                let max_d = r_i + expanded_radii[j];
-                if d_sq < max_d * max_d {
-                    neighbors.push((atoms[j].coord, expanded_radii[j]));
-                }
-            }
-        }
+        // O(1) query of neighboring atoms within spatial cell list
+        cell_list.find_neighbors(
+            i,
+            &coords,
+            &expanded_radii,
+            cell_size * cell_size,
+            &mut neighbors,
+        );
 
         let mut accessible_points = 0usize;
         for pt in &sphere_points {

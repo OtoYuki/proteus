@@ -80,6 +80,10 @@ enum Commands {
         /// Target PDB file path or job UUID
         target: String,
 
+        /// Optional reference PDB file path for 3D structural superposition and RMSD calculation
+        #[arg(long)]
+        compare: Option<PathBuf>,
+
         /// Run interactive 60 FPS TUI viewer with orbit camera controls
         #[arg(short, long)]
         interactive: bool,
@@ -99,6 +103,33 @@ enum Commands {
         /// Terminal viewport height (defaults to terminal height or 30)
         #[arg(long)]
         height: Option<usize>,
+    },
+
+    /// High-throughput library screening funnel: batch folding, Pareto ranking, and leaderboard
+    Screen {
+        /// Path to multi-sequence FASTA library file
+        #[arg(short, long)]
+        library: PathBuf,
+
+        /// Computational tier
+        #[arg(short, long, value_enum, default_value_t = CliTier::Fast)]
+        tier: CliTier,
+
+        /// Compute runner mode
+        #[arg(long, value_enum, default_value_t = RunnerMode::Auto)]
+        runner: RunnerMode,
+
+        /// Maximum concurrent worker threads
+        #[arg(short, long, default_value_t = 4)]
+        workers: usize,
+
+        /// Minimum pLDDT cutoff threshold to pass screening
+        #[arg(long, default_value_t = 70.0)]
+        min_plddt: f64,
+
+        /// Number of top ranked candidates to display in leaderboard
+        #[arg(long, default_value_t = 10)]
+        top: usize,
     },
 
     /// Run the headless background daemon (proteusd)
@@ -422,6 +453,7 @@ async fn main() -> Result<()> {
 
         Commands::View {
             target,
+            compare,
             interactive,
             backend,
             color,
@@ -460,22 +492,75 @@ async fn main() -> Result<()> {
             let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
             let render_color: proteus_render::rasterizer::ColorScheme = color.into();
 
-            if interactive {
+            let (term_cols, term_rows): (u16, u16) =
+                crossterm::terminal::size().unwrap_or((80, 24));
+            let w = width.unwrap_or(term_cols as usize);
+            let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
+
+            if let Some(ref_path) = compare {
+                let ref_content = tokio::fs::read_to_string(&ref_path)
+                    .await
+                    .with_context(|| format!("Failed to read reference PDB at {:?}", ref_path))?;
+
+                if interactive {
+                    let sup_data = proteus_render::prepare_superposition_for_rendering(
+                        &pdb_content,
+                        &ref_content,
+                    )
+                    .context("Failed to superimpose structures for 3D rendering")?;
+
+                    let ref_name = ref_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Reference");
+                    let dual_title = format!("{title} (Cyan) vs {ref_name} (Ruby)");
+                    let config = proteus_render::tui::ViewerConfig {
+                        title: dual_title,
+                        initial_color_scheme: proteus_render::rasterizer::ColorScheme::Solid(
+                            proteus_render::rasterizer::ColorRGB::new(6, 182, 212),
+                        ),
+                        auto_rotate: true,
+                        secondary_mesh: Some((
+                            sup_data.ref_mesh,
+                            proteus_render::rasterizer::ColorRGB::new(244, 63, 94),
+                        )),
+                        rmsd: Some(sup_data.rmsd),
+                    };
+                    proteus_render::tui::run_interactive_viewer(
+                        &sup_data.target_mesh,
+                        sup_data.camera,
+                        config,
+                    )
+                    .context("Interactive dual-structure 3D viewer error")?;
+                } else {
+                    let (snapshot, rmsd) = proteus_render::render_superposition_snapshot(
+                        &pdb_content,
+                        &ref_content,
+                        w,
+                        h,
+                        render_backend,
+                    )
+                    .context("Failed to render superposition snapshot")?;
+
+                    println!("{snapshot}");
+                    println!(
+                        "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[32mRMSD: {:.3} Å\x1b[0m",
+                        rmsd
+                    );
+                }
+            } else if interactive {
                 let (mesh, camera) = proteus_render::parse_pdb_for_rendering(&pdb_content)
                     .context("Failed to parse structure for 3D rendering")?;
                 let config = proteus_render::tui::ViewerConfig {
                     title,
                     initial_color_scheme: render_color,
                     auto_rotate: true,
+                    secondary_mesh: None,
+                    rmsd: None,
                 };
                 proteus_render::tui::run_interactive_viewer(&mesh, camera, config)
                     .context("Interactive 3D viewer error")?;
             } else {
-                let (term_cols, term_rows): (u16, u16) =
-                    crossterm::terminal::size().unwrap_or((80, 24));
-                let w = width.unwrap_or(term_cols as usize);
-                let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
-
                 let snapshot = proteus_render::render_pdb_snapshot(
                     &pdb_content,
                     w,
@@ -486,6 +571,168 @@ async fn main() -> Result<()> {
                 .context("Failed to render 3D snapshot")?;
 
                 println!("{snapshot}");
+            }
+        }
+
+        Commands::Screen {
+            library,
+            tier,
+            runner,
+            workers,
+            min_plddt,
+            top,
+        } => {
+            println!("Reading sequence library from: {:?}", library);
+            let content = tokio::fs::read_to_string(&library)
+                .await
+                .with_context(|| format!("Failed to read library file at {:?}", library))?;
+
+            let sequences = proteus_core::sequence::validate_and_parse_multi_fasta(&content)
+                .context("Multi-FASTA library parsing failed")?;
+
+            let total_seqs = sequences.len();
+            println!("Loaded {total_seqs} candidate sequences for screening funnel");
+
+            let pool = create_sqlite_pool(&db_path).await?;
+            let repo = ProteusRepository::new(pool);
+
+            let mut job_ids = Vec::with_capacity(total_seqs);
+            let pipeline_tier: PipelineTier = tier.into();
+
+            for seq in &sequences {
+                repo.insert_sequence(seq).await?;
+                let job_id = Uuid::new_v4();
+                let job = proteus_core::models::PipelineJob {
+                    id: job_id,
+                    sequence_id: seq.id,
+                    tier: pipeline_tier.clone(),
+                    status: proteus_core::models::JobStatus::Queued,
+                    priority: 1,
+                    created_at: chrono::Utc::now(),
+                    started_at: None,
+                    completed_at: None,
+                    error_log: None,
+                };
+                repo.insert_job(&job).await?;
+                job_ids.push(job_id);
+            }
+
+            let pb = ProgressBar::new(total_seqs as u64);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template(
+                        "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}",
+                    )?
+                    .progress_chars("█▓▒░"),
+            );
+            pb.set_message("Screening candidate library in parallel...");
+
+            let compute_runner = resolve_runner(runner)?;
+            let scheduler = PipelineScheduler::new(repo.clone(), compute_runner, artifacts_dir);
+
+            let results = scheduler.process_batch(&job_ids, workers).await;
+            pb.finish_with_message("Screening batch execution complete!");
+
+            let successful_count = results.iter().filter(|r| r.is_ok()).count();
+            println!(
+                "\nCompleted: {}/{} successful ({} parallel workers)",
+                successful_count, total_seqs, workers
+            );
+
+            // Fetch predictions and metrics for ranking
+            struct CandidateRank {
+                job_id: Uuid,
+                header: String,
+                length: usize,
+                plddt: f64,
+                rg: f64,
+                hydrophobic_burial: f64,
+                helix_pct: f64,
+                strand_pct: f64,
+                fitness: f64,
+            }
+
+            let mut candidates: Vec<CandidateRank> = Vec::new();
+
+            for (seq, &job_id) in sequences.iter().zip(job_ids.iter()) {
+                if let Ok(Some(pred)) = repo.get_prediction_by_job(job_id).await {
+                    if let Ok(Some(metrics)) = repo.get_metrics_by_prediction(pred.id).await {
+                        let plddt = pred.plddt.unwrap_or(metrics.plddt_distribution.mean);
+                        if plddt >= min_plddt {
+                            let burial = metrics
+                                .sasa_metrics
+                                .as_ref()
+                                .map_or(0.0, |s| s.hydrophobic_burial_ratio * 100.0);
+                            let (helix, strand) = metrics
+                                .secondary_structure_summary
+                                .as_ref()
+                                .map_or((0.0, 0.0), |s| {
+                                    (s.helix_fraction * 100.0, s.strand_fraction * 100.0)
+                                });
+                            let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
+
+                            candidates.push(CandidateRank {
+                                job_id,
+                                header: seq.header.clone(),
+                                length: seq.length,
+                                plddt,
+                                rg: metrics.radius_of_gyration,
+                                hydrophobic_burial: burial,
+                                helix_pct: helix,
+                                strand_pct: strand,
+                                fitness,
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Rank by composite fitness score descending
+            candidates.sort_by(|a, b| {
+                b.fitness
+                    .partial_cmp(&a.fitness)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            println!(
+                "\n=== Screening Funnel Leaderboard (Cutoff: pLDDT >= {:.1}) ===",
+                min_plddt
+            );
+            let mut table = Table::new();
+            table.load_preset(UTF8_FULL);
+            table.set_header(vec![
+                "Rank",
+                "Candidate Header",
+                "Len",
+                "pLDDT",
+                "Rg (Å)",
+                "Core Burial",
+                "H / E (%)",
+                "Fitness / 100",
+                "Job ID",
+            ]);
+
+            for (idx, c) in candidates.iter().take(top).enumerate() {
+                table.add_row(vec![
+                    Cell::new(format!("#{}", idx + 1)),
+                    Cell::new(&c.header),
+                    Cell::new(c.length),
+                    Cell::new(format!("{:.2}", c.plddt)),
+                    Cell::new(format!("{:.2}", c.rg)),
+                    Cell::new(format!("{:.1}%", c.hydrophobic_burial)),
+                    Cell::new(format!("{:.0} / {:.0}", c.helix_pct, c.strand_pct)),
+                    Cell::new(format!("{:.1}", c.fitness)),
+                    Cell::new(c.job_id.to_string()),
+                ]);
+            }
+
+            println!("{table}");
+
+            if let Some(winner) = candidates.first() {
+                println!(
+                    "\nTop Candidate: '{}' (Fitness: {:.1})\nView structure in terminal: proteus view {}",
+                    winner.header, winner.fitness, winner.job_id
+                );
             }
         }
 

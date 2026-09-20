@@ -180,6 +180,39 @@ impl PipelineScheduler {
         info!("Job {} completed successfully", job_id);
         Ok(())
     }
+
+    /// Process a batch of jobs concurrently with a bounded worker pool.
+    pub async fn process_batch(
+        &self,
+        job_ids: &[Uuid],
+        max_concurrency: usize,
+    ) -> Vec<Result<(), EngineError>> {
+        let concurrency = max_concurrency.max(1);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+        let mut handles = Vec::with_capacity(job_ids.len());
+
+        for &id in job_ids {
+            let sched = self.clone();
+            let sem = semaphore.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = sem.acquire().await.map_err(|e| {
+                    EngineError::Pipeline(format!("Semaphore acquisition failed: {e}"))
+                })?;
+                sched.process_job(id).await
+            }));
+        }
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            match handle.await {
+                Ok(res) => results.push(res),
+                Err(e) => results.push(Err(EngineError::Pipeline(format!(
+                    "Worker task panicked or was cancelled: {e}"
+                )))),
+            }
+        }
+        results
+    }
 }
 
 fn categorize_plddt(score: f64) -> String {
@@ -274,5 +307,52 @@ mod tests {
         assert!(event_types.contains(&"Started"));
         assert!(event_types.contains(&"Progress"));
         assert!(event_types.contains(&"Completed"));
+    }
+
+    #[tokio::test]
+    async fn test_pipeline_scheduler_concurrent_batch() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let runner = Arc::new(SimulatedRunner::new());
+        let tmp = tempdir().unwrap();
+
+        let scheduler = PipelineScheduler::new(repo.clone(), runner, tmp.path().to_path_buf());
+
+        let mut job_ids = Vec::new();
+        for i in 0..4 {
+            let seq = Sequence {
+                id: Uuid::new_v4(),
+                header: format!("batch_seq_{i}"),
+                fasta: "ACDEFGHIKLMNPQRSTVWY".into(),
+                length: 20,
+                created_at: Utc::now(),
+            };
+            repo.insert_sequence(&seq).await.unwrap();
+
+            let job = proteus_core::models::PipelineJob {
+                id: Uuid::new_v4(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status: JobStatus::Queued,
+                priority: 1,
+                created_at: Utc::now(),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            };
+            repo.insert_job(&job).await.unwrap();
+            job_ids.push(job.id);
+        }
+
+        let results = scheduler.process_batch(&job_ids, 2).await;
+        assert_eq!(results.len(), 4);
+        for res in results {
+            assert!(res.is_ok());
+        }
+
+        for id in job_ids {
+            let job = repo.get_job(id).await.unwrap().unwrap();
+            assert_eq!(job.status, JobStatus::Completed);
+        }
     }
 }

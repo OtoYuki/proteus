@@ -21,8 +21,19 @@ impl Rasterizer {
         }
     }
 
-    /// Render a triangle mesh to the framebuffer using the given orbit camera.
+    /// Render a triangle mesh to the framebuffer using the current color scheme.
     pub fn render(&mut self, mesh: &TriangleMesh, camera: &OrbitCamera, fb: &mut Framebuffer) {
+        self.render_with_scheme(mesh, camera, fb, self.color_scheme);
+    }
+
+    /// Render a triangle mesh using an explicit color scheme (e.g. Solid color for superposition).
+    pub fn render_with_scheme(
+        &mut self,
+        mesh: &TriangleMesh,
+        camera: &OrbitCamera,
+        fb: &mut Framebuffer,
+        scheme: ColorScheme,
+    ) {
         if mesh.vertices.is_empty() || mesh.indices.is_empty() {
             return;
         }
@@ -40,23 +51,38 @@ impl Rasterizer {
             .unwrap_or(1)
             + 1;
 
-        // 1. Vertex transform and Gouraud lighting pass
+        // 1. Vertex transform pass and depth range calculation
+        let mut min_z = f32::INFINITY;
+        let mut max_z = f32::NEG_INFINITY;
+
         for (i, v) in mesh.vertices.iter().enumerate() {
             let (sx, sy, sz) = camera.project(v.position, &rot_mat, fb.width, fb.height);
             self.projected[i] = Vector3::new(sx, sy, sz);
+            min_z = min_z.min(sz);
+            max_z = max_z.max(sz);
+        }
 
-            // Transform normal to camera view space
+        let z_range = (max_z - min_z).max(1e-3);
+
+        // Gouraud lighting with atmospheric depth cueing (fog)
+        for (i, v) in mesh.vertices.iter().enumerate() {
+            let sz = self.projected[i].z;
+            let depth_fraction = ((sz - min_z) / z_range).clamp(0.0, 1.0);
+            // Linear depth cueing: foreground is 100% brightness, background dims gracefully to 55%
+            let fog_factor = 1.0 - 0.45 * depth_fraction;
+
             let view_normal = rot_mat * v.normal;
-
-            let base_color = match self.color_scheme {
+            let base_color = match scheme {
                 ColorScheme::Plddt => plddt_to_color(v.plddt),
                 ColorScheme::SecondaryStructure => {
                     secondary_structure_to_color(v.secondary_structure)
                 }
                 ColorScheme::Rainbow => rainbow_color(v.residue_index, total_residues),
+                ColorScheme::Solid(c) => c,
             };
 
-            self.shaded_colors[i] = shade_blinn_phong(base_color, view_normal);
+            let lit = shade_blinn_phong(base_color, view_normal);
+            self.shaded_colors[i] = lit.scale(fog_factor);
         }
 
         // 2. Triangle rasterization pass

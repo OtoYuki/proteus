@@ -28,11 +28,19 @@ pub fn compute_radius_of_gyration(coords: &[Vector3<f64>]) -> Result<f64, CoreEr
     Ok((sq_dist_sum / (coords.len() as f64)).sqrt())
 }
 
-/// Compute Kabsch optimal superposition and C-alpha RMSD between two aligned sets of coordinates.
-pub fn compute_kabsch_rmsd(
+#[derive(Debug, Clone)]
+pub struct KabschSuperpositionResult {
+    pub rmsd: f64,
+    pub rotation: Matrix3<f64>,
+    pub translation: Vector3<f64>,
+    pub aligned_coords: Vec<Vector3<f64>>,
+}
+
+/// Compute Kabsch optimal superposition and transformation between two aligned coordinate sets.
+pub fn compute_kabsch_superposition(
     p_coords: &[Vector3<f64>],
     q_coords: &[Vector3<f64>],
-) -> Result<f64, CoreError> {
+) -> Result<KabschSuperpositionResult, CoreError> {
     if p_coords.len() != q_coords.len() {
         return Err(CoreError::AnalysisError(format!(
             "Coordinate length mismatch for RMSD: {} vs {}",
@@ -76,15 +84,33 @@ pub fn compute_kabsch_rmsd(
     }
 
     let rotation = v * d * u.transpose();
+    let translation = q_com - rotation * p_com;
 
-    // Compute RMSD with rotated P
+    // Compute RMSD and transformed coordinates P' = rotation * (P - COM_p) + COM_q
     let mut sum_sq_diff = 0.0;
+    let mut aligned_coords = Vec::with_capacity(n);
     for (p, q) in p_centered.iter().zip(q_centered.iter()) {
         let p_rotated = rotation * p;
         sum_sq_diff += (p_rotated - q).norm_squared();
+        aligned_coords.push(p_rotated + q_com);
     }
 
-    Ok((sum_sq_diff / (n as f64)).sqrt())
+    let rmsd = (sum_sq_diff / (n as f64)).sqrt();
+
+    Ok(KabschSuperpositionResult {
+        rmsd,
+        rotation,
+        translation,
+        aligned_coords,
+    })
+}
+
+/// Compute Kabsch optimal superposition C-alpha RMSD between two aligned sets of coordinates.
+pub fn compute_kabsch_rmsd(
+    p_coords: &[Vector3<f64>],
+    q_coords: &[Vector3<f64>],
+) -> Result<f64, CoreError> {
+    Ok(compute_kabsch_superposition(p_coords, q_coords)?.rmsd)
 }
 
 /// Compute residue contact density (non-consecutive residues |i-j| >= 4 with C-alpha distance <= 8.0 A).
@@ -131,6 +157,7 @@ pub fn analyze_pdb_file(
     let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
 
     struct ResidueBackbone {
+        name: String,
         n: Option<Vector3<f64>>,
         ca: Option<Vector3<f64>>,
         c: Option<Vector3<f64>>,
@@ -139,7 +166,13 @@ pub fn analyze_pdb_file(
     let mut backbones: Vec<ResidueBackbone> = Vec::new();
 
     for residue in pdb.residues() {
+        let res_name = residue
+            .name()
+            .map(|n| n.trim().to_string())
+            .unwrap_or_default();
+
         let mut cur_bb = ResidueBackbone {
+            name: res_name,
             n: None,
             ca: None,
             c: None,
@@ -218,10 +251,17 @@ pub fn analyze_pdb_file(
     let high_conf = plddts.iter().filter(|&&v| v >= 70.0).count() as f64 / n_plddt;
     let very_high_conf = plddts.iter().filter(|&&v| v >= 90.0).count() as f64 / n_plddt;
 
-    // Ramachandran backbone dihedral angles
-    let mut phi_psi_angles = Vec::new();
+    // Ramachandran backbone dihedral angles with MolProbity residue-specific context
+    let mut phi_psi_context = Vec::new();
     let n_res = backbones.len();
     for i in 0..n_res {
+        let next_name = if i + 1 < n_res {
+            Some(backbones[i + 1].name.as_str())
+        } else {
+            None
+        };
+        let context = crate::structure::ResidueContext::from_names(&backbones[i].name, next_name);
+
         let phi = if i > 0 {
             if let (Some(prev_c), Some(cur_n), Some(cur_ca), Some(cur_c)) = (
                 backbones[i - 1].c,
@@ -252,11 +292,11 @@ pub fn analyze_pdb_file(
             None
         };
 
-        phi_psi_angles.push((phi, psi));
+        phi_psi_context.push((phi, psi, context));
     }
 
     let ss_summary = crate::structure::assign_secondary_structure(&ca_coords);
-    let rama_stats = crate::structure::evaluate_ramachandran_angles(&phi_psi_angles);
+    let rama_stats = crate::structure::evaluate_ramachandran_with_context(&phi_psi_context);
     let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
 
     let mut metrics = BiophysicalMetrics {
@@ -343,6 +383,12 @@ mod tests {
             "Rotated/translated RMSD must be ~0 after Kabsch alignment, got {}",
             rmsd_rot
         );
+
+        let sup = compute_kabsch_superposition(&p, &q).unwrap();
+        assert!(sup.rmsd < 1e-7);
+        for (aligned, target) in sup.aligned_coords.iter().zip(q.iter()) {
+            assert!((aligned - target).norm() < 1e-6);
+        }
     }
 
     #[test]

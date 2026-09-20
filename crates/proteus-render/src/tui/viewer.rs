@@ -27,6 +27,8 @@ pub struct ViewerConfig {
     pub title: String,
     pub initial_color_scheme: ColorScheme,
     pub auto_rotate: bool,
+    pub secondary_mesh: Option<(TriangleMesh, ColorRGB)>,
+    pub rmsd: Option<f64>,
 }
 
 impl Default for ViewerConfig {
@@ -35,6 +37,8 @@ impl Default for ViewerConfig {
             title: "Proteus 3D Viewer".to_string(),
             initial_color_scheme: ColorScheme::Plddt,
             auto_rotate: true,
+            secondary_mesh: None,
+            rmsd: None,
         }
     }
 }
@@ -85,6 +89,7 @@ pub fn run_interactive_viewer(
                             ColorScheme::Plddt => ColorScheme::SecondaryStructure,
                             ColorScheme::SecondaryStructure => ColorScheme::Rainbow,
                             ColorScheme::Rainbow => ColorScheme::Plddt,
+                            ColorScheme::Solid(_) => ColorScheme::Plddt,
                         };
                         rasterizer.color_scheme = color_scheme;
                     }
@@ -132,6 +137,16 @@ pub fn run_interactive_viewer(
         fb.clear(ColorRGB::BLACK);
         rasterizer.render(mesh, &camera, &mut fb);
 
+        // Render superimposed secondary mesh if present
+        if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
+            rasterizer.render_with_scheme(
+                sec_mesh,
+                &camera,
+                &mut fb,
+                ColorScheme::Solid(sec_color),
+            );
+        }
+
         // Compose to terminal
         out_buf.clear();
         compositor.render_differential(&fb, &mut out_buf, 0, 0);
@@ -141,17 +156,27 @@ pub fn run_interactive_viewer(
             ColorScheme::Plddt => "pLDDT Confidence",
             ColorScheme::SecondaryStructure => "Secondary Structure",
             ColorScheme::Rainbow => "N->C Rainbow",
+            ColorScheme::Solid(_) => "Solid",
         };
 
         let auto_status = if auto_rotate { "ON " } else { "OFF" };
-        let status_row1 = format!(
-            " {} | Triangles: {} | Color: {} | Spin: {} | {:.0} FPS",
-            config.title,
-            mesh.triangle_count(),
-            hud_scheme,
-            auto_status,
-            fps
-        );
+        let total_triangles = mesh.triangle_count()
+            + config
+                .secondary_mesh
+                .as_ref()
+                .map_or(0, |(m, _)| m.triangle_count());
+
+        let status_row1 = if let Some(rmsd) = config.rmsd {
+            format!(
+                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | Spin: {} | {:.0} FPS",
+                config.title, rmsd, total_triangles, auto_status, fps
+            )
+        } else {
+            format!(
+                " {} | Triangles: {} | Color: {} | Spin: {} | {:.0} FPS",
+                config.title, total_triangles, hud_scheme, auto_status, fps
+            )
+        };
         let status_row2 = " [h/j/k/l/arrows] Orbit | [+/-] Zoom | [Space] Spin | [c] Color | [r] Reset | [q] Quit";
 
         let _ = execute!(

@@ -64,6 +64,98 @@ pub fn validate_and_parse_fasta(content: &str) -> Result<Sequence, CoreError> {
     })
 }
 
+/// Validate and parse a multi-sequence FASTA file (library for high-throughput screening).
+pub fn validate_and_parse_multi_fasta(content: &str) -> Result<Vec<Sequence>, CoreError> {
+    let normalized = content.replace("\\n", "\n");
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::InvalidFasta("Empty FASTA content".into()));
+    }
+
+    let mut sequences = Vec::new();
+    let mut current_header: Option<String> = None;
+    let mut current_seq = String::new();
+
+    for line in trimmed.lines() {
+        let l = line.trim();
+        if l.is_empty() {
+            continue;
+        }
+
+        if let Some(stripped) = l.strip_prefix('>') {
+            if let Some(hdr) = current_header.take() {
+                if current_seq.is_empty() {
+                    return Err(CoreError::InvalidFasta(format!(
+                        "Empty sequence for entry '{hdr}'"
+                    )));
+                }
+                let upper = current_seq.to_uppercase();
+                for c in upper.chars() {
+                    if !STANDARD_AMINO_ACIDS.contains(&c) {
+                        return Err(CoreError::InvalidFasta(format!(
+                            "Invalid amino acid character: '{c}' in entry '{hdr}'"
+                        )));
+                    }
+                }
+                sequences.push(Sequence {
+                    id: Uuid::new_v4(),
+                    header: hdr,
+                    fasta: upper.clone(),
+                    length: upper.len(),
+                    created_at: Utc::now(),
+                });
+                current_seq.clear();
+            }
+
+            let hdr = stripped.trim().to_string();
+            if hdr.is_empty() {
+                return Err(CoreError::InvalidFasta(
+                    "Empty header string in multi-FASTA".into(),
+                ));
+            }
+            current_header = Some(hdr);
+        } else {
+            if current_header.is_none() {
+                return Err(CoreError::InvalidFasta(
+                    "Sequence data found before any FASTA header".into(),
+                ));
+            }
+            current_seq.push_str(l);
+        }
+    }
+
+    if let Some(hdr) = current_header {
+        if current_seq.is_empty() {
+            return Err(CoreError::InvalidFasta(format!(
+                "Empty sequence for final entry '{hdr}'"
+            )));
+        }
+        let upper = current_seq.to_uppercase();
+        for c in upper.chars() {
+            if !STANDARD_AMINO_ACIDS.contains(&c) {
+                return Err(CoreError::InvalidFasta(format!(
+                    "Invalid amino acid character: '{c}' in final entry '{hdr}'"
+                )));
+            }
+        }
+        sequences.push(Sequence {
+            id: Uuid::new_v4(),
+            header: hdr,
+            fasta: upper.clone(),
+            length: upper.len(),
+            created_at: Utc::now(),
+        });
+    }
+
+    if sequences.is_empty() {
+        return Err(CoreError::InvalidFasta(
+            "No valid FASTA entries found".into(),
+        ));
+    }
+
+    Ok(sequences)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +187,22 @@ mod tests {
     fn test_missing_header() {
         let input = "MKTLLILTCLVAVALARPK";
         assert!(validate_and_parse_fasta(input).is_err());
+    }
+
+    #[test]
+    fn test_valid_multi_fasta_parsing() {
+        let library = r#">seq1
+MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG
+>seq2
+GIVEQCCTSICSLYQLENYCN
+>seq3
+FVNQHLCGSHLVEALYLVCGERGFFYTPKT
+"#;
+        let seqs = validate_and_parse_multi_fasta(library).expect("Should parse multi-FASTA");
+        assert_eq!(seqs.len(), 3);
+        assert_eq!(seqs[0].header, "seq1");
+        assert_eq!(seqs[1].header, "seq2");
+        assert_eq!(seqs[2].header, "seq3");
+        assert_eq!(seqs[0].length, 76);
     }
 }

@@ -184,47 +184,150 @@ pub fn assign_secondary_structure(ca_coords: &[Vector3<f64>]) -> SecondaryStruct
     }
 }
 
-/// Classify a single (phi, psi) pair into Ramachandran conformational basins.
-pub fn classify_ramachandran(phi: f64, psi: f64) -> RamachandranRegion {
-    // Core Alpha-Helix
-    if (-100.0..=-30.0).contains(&phi) && (-70.0..=-10.0).contains(&psi) {
-        return RamachandranRegion::CoreHelix;
-    }
-
-    // Core Beta-Sheet / Extended
-    if ((-180.0..=-45.0).contains(&phi) && (90.0..=180.0).contains(&psi))
-        || ((-180.0..=-45.0).contains(&phi) && (-180.0..=-150.0).contains(&psi))
-    {
-        return RamachandranRegion::CoreStrand;
-    }
-
-    // Left-handed Alpha-Helix
-    if (30.0..=90.0).contains(&phi) && (10.0..=70.0).contains(&psi) {
-        return RamachandranRegion::LeftHandedHelix;
-    }
-
-    // Allowed outer basins
-    if ((-120.0..=-20.0).contains(&phi) && (-90.0..=20.0).contains(&psi))
-        || ((-180.0..=-30.0).contains(&phi) && (60.0..=180.0).contains(&psi))
-        || ((20.0..=100.0).contains(&phi) && (-10.0..=80.0).contains(&psi))
-    {
-        return RamachandranRegion::Allowed;
-    }
-
-    RamachandranRegion::Outlier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResidueContext {
+    #[default]
+    General,
+    Glycine,
+    Proline,
+    PreProline,
 }
 
-/// Evaluate Ramachandran statistics over a sequence of (phi, psi) angle pairs.
+impl ResidueContext {
+    pub fn from_names(curr_name: &str, next_name: Option<&str>) -> Self {
+        if next_name.is_some_and(|n| n.eq_ignore_ascii_case("PRO")) {
+            Self::PreProline
+        } else if curr_name.eq_ignore_ascii_case("GLY") {
+            Self::Glycine
+        } else if curr_name.eq_ignore_ascii_case("PRO") {
+            Self::Proline
+        } else {
+            Self::General
+        }
+    }
+}
+
+/// Classify a single (phi, psi) pair into Ramachandran conformational basins using generic boundaries.
+pub fn classify_ramachandran(phi: f64, psi: f64) -> RamachandranRegion {
+    classify_ramachandran_context(phi, psi, ResidueContext::General)
+}
+
+/// Classify a (phi, psi) pair under residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline)
+/// per the MolProbity (Lovell et al. 2003) crystallographic standard.
+pub fn classify_ramachandran_context(
+    phi: f64,
+    psi: f64,
+    context: ResidueContext,
+) -> RamachandranRegion {
+    match context {
+        ResidueContext::General => {
+            // Core Alpha-Helix
+            if (-100.0..=-30.0).contains(&phi) && (-70.0..=-10.0).contains(&psi) {
+                return RamachandranRegion::CoreHelix;
+            }
+
+            // Core Beta-Sheet / Extended
+            if ((-180.0..=-45.0).contains(&phi) && (90.0..=180.0).contains(&psi))
+                || ((-180.0..=-45.0).contains(&phi) && (-180.0..=-150.0).contains(&psi))
+            {
+                return RamachandranRegion::CoreStrand;
+            }
+
+            // Left-handed Alpha-Helix
+            if (30.0..=90.0).contains(&phi) && (10.0..=70.0).contains(&psi) {
+                return RamachandranRegion::LeftHandedHelix;
+            }
+
+            // Allowed outer basins
+            if ((-120.0..=-20.0).contains(&phi) && (-90.0..=20.0).contains(&psi))
+                || ((-180.0..=-30.0).contains(&phi) && (60.0..=180.0).contains(&psi))
+                || ((20.0..=100.0).contains(&phi) && (-10.0..=80.0).contains(&psi))
+                || ((-90.0..=-45.0).contains(&phi) && (120.0..=175.0).contains(&psi))
+            {
+                return RamachandranRegion::Allowed;
+            }
+
+            RamachandranRegion::Outlier
+        }
+        ResidueContext::Glycine => {
+            // Glycine lacks C-beta sidechain: symmetric conformations across all 4 quadrants
+            if ((-140.0..=-40.0).contains(&phi) && (-80.0..=40.0).contains(&psi))
+                || ((-180.0..=-50.0).contains(&phi) && (120.0..=180.0).contains(&psi))
+            {
+                return RamachandranRegion::CoreHelix;
+            }
+            if ((40.0..=140.0).contains(&phi) && (-40.0..=80.0).contains(&psi))
+                || ((50.0..=180.0).contains(&phi) && (-180.0..=-120.0).contains(&psi))
+            {
+                return RamachandranRegion::LeftHandedHelix;
+            }
+            if ((-180.0..=0.0).contains(&phi) && (-100.0..=180.0).contains(&psi))
+                || ((0.0..=180.0).contains(&phi) && (-180.0..=100.0).contains(&psi))
+            {
+                return RamachandranRegion::Allowed;
+            }
+
+            RamachandranRegion::Outlier
+        }
+        ResidueContext::Proline => {
+            // Rigid pyrrolidine ring restricts phi strictly into [-80, -50]
+            if (-80.0..=-50.0).contains(&phi) {
+                if (-60.0..=-10.0).contains(&psi) {
+                    return RamachandranRegion::CoreHelix;
+                }
+                if (100.0..=180.0).contains(&psi) || (-180.0..=-160.0).contains(&psi) {
+                    return RamachandranRegion::CoreStrand;
+                }
+            }
+            if (-95.0..=-35.0).contains(&phi)
+                && (((-80.0..=30.0).contains(&psi)) || ((80.0..=180.0).contains(&psi)))
+            {
+                return RamachandranRegion::Allowed;
+            }
+
+            RamachandranRegion::Outlier
+        }
+        ResidueContext::PreProline => {
+            // Residues preceding Proline: steric clash with C-delta atom
+            if (-100.0..=-50.0).contains(&phi) && (-60.0..=-20.0).contains(&psi) {
+                return RamachandranRegion::CoreHelix;
+            }
+            if (-180.0..=-50.0).contains(&phi) && (100.0..=180.0).contains(&psi) {
+                return RamachandranRegion::CoreStrand;
+            }
+            if ((-180.0..=-30.0).contains(&phi) && (60.0..=180.0).contains(&psi))
+                || ((-120.0..=-40.0).contains(&phi) && (-80.0..=20.0).contains(&psi))
+            {
+                return RamachandranRegion::Allowed;
+            }
+
+            RamachandranRegion::Outlier
+        }
+    }
+}
+
+/// Evaluate Ramachandran statistics over a sequence of (phi, psi) angle pairs using generic boundaries.
 pub fn evaluate_ramachandran_angles(angles: &[(Option<f64>, Option<f64>)]) -> RamachandranStats {
+    let context_angles: Vec<(Option<f64>, Option<f64>, ResidueContext)> = angles
+        .iter()
+        .map(|&(phi, psi)| (phi, psi, ResidueContext::General))
+        .collect();
+    evaluate_ramachandran_with_context(&context_angles)
+}
+
+/// Evaluate Ramachandran statistics with MolProbity residue-specific context.
+pub fn evaluate_ramachandran_with_context(
+    angles: &[(Option<f64>, Option<f64>, ResidueContext)],
+) -> RamachandranStats {
     let mut favored = 0;
     let mut allowed = 0;
     let mut outliers = 0;
     let mut total = 0;
 
-    for &(phi_opt, psi_opt) in angles {
+    for &(phi_opt, psi_opt, context) in angles {
         if let (Some(phi), Some(psi)) = (phi_opt, psi_opt) {
             total += 1;
-            match classify_ramachandran(phi, psi) {
+            match classify_ramachandran_context(phi, psi, context) {
                 RamachandranRegion::CoreHelix
                 | RamachandranRegion::CoreStrand
                 | RamachandranRegion::LeftHandedHelix => favored += 1,
@@ -300,6 +403,35 @@ mod tests {
             summary.helix_fraction > 0.70,
             "Expected helix fraction > 70%, got {}",
             summary.helix_fraction
+        );
+    }
+
+    #[test]
+    fn test_molprobity_residue_contexts() {
+        // Glycine in positive phi quadrant is allowed, whereas general residue is outlier
+        assert_eq!(
+            classify_ramachandran_context(60.0, -40.0, ResidueContext::General),
+            RamachandranRegion::Outlier
+        );
+        assert_eq!(
+            classify_ramachandran_context(60.0, -40.0, ResidueContext::Glycine),
+            RamachandranRegion::LeftHandedHelix
+        );
+
+        // Proline strictly requires phi ~ -65 deg
+        assert_eq!(
+            classify_ramachandran_context(-65.0, -40.0, ResidueContext::Proline),
+            RamachandranRegion::CoreHelix
+        );
+        assert_eq!(
+            classify_ramachandran_context(-120.0, 140.0, ResidueContext::Proline),
+            RamachandranRegion::Outlier
+        );
+
+        // Pre-proline context
+        assert_eq!(
+            classify_ramachandran_context(-120.0, 140.0, ResidueContext::PreProline),
+            RamachandranRegion::CoreStrand
         );
     }
 }

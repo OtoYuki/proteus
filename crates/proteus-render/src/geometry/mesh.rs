@@ -66,6 +66,15 @@ pub fn generate_cartoon_mesh(
         ring_offsets.push((angle.cos(), angle.sin()));
     }
 
+    // Identify beta-strand terminations to generate Richardson arrowheads pointing towards C-terminus
+    let is_strand_terminus = |idx: usize| -> bool {
+        if ss_assignments.get(idx) == Some(&SecondaryStructure::Strand) {
+            idx + 1 >= n_res || ss_assignments.get(idx + 1) != Some(&SecondaryStructure::Strand)
+        } else {
+            false
+        }
+    };
+
     for (k, (s_pt, frame)) in spline_points.iter().zip(frames.iter()).enumerate() {
         let res_idx = s_pt.residue_index.min(n_res - 1);
         let ss = ss_assignments
@@ -77,7 +86,22 @@ pub fn generate_cartoon_mesh(
         // Radii depending on secondary structure
         let (rx, ry) = match ss {
             SecondaryStructure::Helix => (1.5, 0.45), // Wide helical ribbon
-            SecondaryStructure::Strand => (1.8, 0.25), // Flat beta sheet
+            SecondaryStructure::Strand => {
+                if is_strand_terminus(res_idx) {
+                    // Richardson beta-sheet arrowhead:
+                    // Flares to 2.8Å barb at u=0.25, then tapers to 0.2Å tip at u=1.0
+                    let u = s_pt.parameter.clamp(0.0, 1.0);
+                    let rx = if u <= 0.25 {
+                        1.8 + (2.8 - 1.8) * (u / 0.25)
+                    } else {
+                        2.8 - (2.8 - 0.2) * ((u - 0.25) / 0.75)
+                    };
+                    let ry = 0.25 * (1.0 - 0.4 * u);
+                    (rx, ry)
+                } else {
+                    (1.8, 0.25) // Flat beta sheet
+                }
+            }
             SecondaryStructure::Coil => (0.35, 0.35), // Thin flexible loop tube
         };
 
