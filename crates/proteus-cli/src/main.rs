@@ -583,6 +583,7 @@ async fn main() -> Result<()> {
                             proteus_render::rasterizer::ColorRGB::new(244, 63, 94),
                         )),
                         rmsd: Some(sup_data.rmsd),
+                        disulfide_mesh: None,
                     };
                     proteus_render::tui::run_interactive_viewer(
                         &sup_data.target_mesh,
@@ -607,7 +608,7 @@ async fn main() -> Result<()> {
                     );
                 }
             } else if interactive {
-                let (mesh, camera) = proteus_render::parse_pdb_for_rendering(&pdb_content)
+                let structure_data = proteus_render::parse_pdb_structure(&pdb_content)
                     .context("Failed to parse structure for 3D rendering")?;
                 let config = proteus_render::tui::ViewerConfig {
                     title,
@@ -615,9 +616,14 @@ async fn main() -> Result<()> {
                     auto_rotate: true,
                     secondary_mesh: None,
                     rmsd: None,
+                    disulfide_mesh: structure_data.disulfide_mesh,
                 };
-                proteus_render::tui::run_interactive_viewer(&mesh, camera, config)
-                    .context("Interactive 3D viewer error")?;
+                proteus_render::tui::run_interactive_viewer(
+                    &structure_data.ribbon_mesh,
+                    structure_data.camera,
+                    config,
+                )
+                .context("Interactive 3D viewer error")?;
             } else {
                 let snapshot = proteus_render::render_pdb_snapshot(
                     &pdb_content,

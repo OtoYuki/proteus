@@ -18,10 +18,103 @@ use terminal::halfblock::HalfBlockRenderer;
 use terminal::kitty::KittyRenderer;
 use terminal::TerminalBackend;
 
-/// Parse PDB string content and construct the 3D ribbon mesh and initial orbit camera.
-pub fn parse_pdb_for_rendering(
-    pdb_content: &str,
-) -> Result<(TriangleMesh, OrbitCamera), RenderError> {
+/// Disulfide bond connecting two cysteine residues via their sulfur atoms.
+#[derive(Debug, Clone)]
+pub struct DisulfideBond {
+    pub res1_idx: usize,
+    pub res2_idx: usize,
+    pub p1: Vector3<f32>,
+    pub p2: Vector3<f32>,
+}
+
+/// Structural rendering bundle containing the ribbon mesh, optional disulfide bridges, and camera.
+#[derive(Debug, Clone)]
+pub struct StructureRenderData {
+    pub ribbon_mesh: TriangleMesh,
+    pub disulfide_mesh: Option<TriangleMesh>,
+    pub camera: OrbitCamera,
+    pub num_residues: usize,
+    pub num_disulfides: usize,
+}
+
+/// Detect disulfide bonds by checking CYS sulfur-sulfur proximity (1.7Å - 2.6Å).
+pub fn extract_disulfide_bonds(pdb: &pdbtbx::PDB) -> Vec<DisulfideBond> {
+    let mut cys_sulfurs = Vec::new();
+
+    for (res_idx, residue) in pdb.residues().enumerate() {
+        let res_name = residue.name().map_or("", |s| s.trim());
+        if res_name == "CYS" {
+            for atom in residue.atoms() {
+                if atom.name().trim() == "SG" {
+                    cys_sulfurs.push((
+                        res_idx,
+                        Vector3::new(atom.x() as f32, atom.y() as f32, atom.z() as f32),
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut bonds = Vec::new();
+    let n = cys_sulfurs.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let dist = (cys_sulfurs[i].1 - cys_sulfurs[j].1).norm();
+            if (1.70..=2.60).contains(&dist) {
+                bonds.push(DisulfideBond {
+                    res1_idx: cys_sulfurs[i].0,
+                    res2_idx: cys_sulfurs[j].0,
+                    p1: cys_sulfurs[i].1,
+                    p2: cys_sulfurs[j].1,
+                });
+            }
+        }
+    }
+    bonds
+}
+
+/// Generate a triangle mesh of golden covalent cylinders and sulfur spheres for all disulfide bonds.
+pub fn generate_disulfide_mesh(bonds: &[DisulfideBond]) -> TriangleMesh {
+    let mut mesh = TriangleMesh::new();
+    for bond in bonds {
+        let cylinder = crate::geometry::mesh::generate_cylinder_mesh(
+            bond.p1,
+            bond.p2,
+            0.22,
+            8,
+            bond.res1_idx,
+            proteus_core::structure::SecondaryStructure::Coil,
+            95.0,
+        );
+        mesh.merge(cylinder);
+
+        let sphere1 = crate::geometry::mesh::generate_sphere_mesh(
+            bond.p1,
+            0.45,
+            6,
+            8,
+            bond.res1_idx,
+            proteus_core::structure::SecondaryStructure::Coil,
+            95.0,
+        );
+        let sphere2 = crate::geometry::mesh::generate_sphere_mesh(
+            bond.p2,
+            0.45,
+            6,
+            8,
+            bond.res2_idx,
+            proteus_core::structure::SecondaryStructure::Coil,
+            95.0,
+        );
+        mesh.merge(sphere1);
+        mesh.merge(sphere2);
+    }
+    mesh
+}
+
+/// Parse PDB string content into a high-fidelity structure bundle with ribbons and disulfides.
+pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, RenderError> {
     let cursor = std::io::Cursor::new(pdb_content.as_bytes());
     let reader = std::io::BufReader::new(cursor);
     let (pdb, _errors) = open_raw(reader, StrictnessLevel::Loose)
@@ -70,13 +163,35 @@ pub fn parse_pdb_for_rendering(
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let mesh = generate_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, 4);
+    let ribbon_mesh = generate_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, 4);
     let camera = OrbitCamera::new(center, max_radius);
 
-    Ok((mesh, camera))
+    let ds_bonds = extract_disulfide_bonds(&pdb);
+    let num_disulfides = ds_bonds.len();
+    let disulfide_mesh = if !ds_bonds.is_empty() {
+        Some(generate_disulfide_mesh(&ds_bonds))
+    } else {
+        None
+    };
+
+    Ok(StructureRenderData {
+        ribbon_mesh,
+        disulfide_mesh,
+        camera,
+        num_residues: ca_coords.len(),
+        num_disulfides,
+    })
 }
 
-/// Render a single static snapshot string from PDB content.
+/// Parse PDB string content and construct the 3D ribbon mesh and initial orbit camera.
+pub fn parse_pdb_for_rendering(
+    pdb_content: &str,
+) -> Result<(TriangleMesh, OrbitCamera), RenderError> {
+    let data = parse_pdb_structure(pdb_content)?;
+    Ok((data.ribbon_mesh, data.camera))
+}
+
+/// Render a single static snapshot string from PDB content with SSAO and disulfide bridges.
 pub fn render_pdb_snapshot(
     pdb_content: &str,
     width: usize,
@@ -84,7 +199,7 @@ pub fn render_pdb_snapshot(
     backend: TerminalBackend,
     scheme: ColorScheme,
 ) -> Result<String, RenderError> {
-    let (mesh, camera) = parse_pdb_for_rendering(pdb_content)?;
+    let structure = parse_pdb_structure(pdb_content)?;
 
     // Pixel dimensions based on backend
     let (px_width, px_height) = match backend {
@@ -97,7 +212,19 @@ pub fn render_pdb_snapshot(
     fb.clear(ColorRGB::BLACK);
 
     let mut rasterizer = Rasterizer::new(scheme);
-    rasterizer.render(&mesh, &camera, &mut fb);
+    rasterizer.rasterize_mesh(&structure.ribbon_mesh, &structure.camera, &mut fb, scheme);
+
+    if let Some(ref ds_mesh) = structure.disulfide_mesh {
+        let gold = ColorRGB::new(251, 191, 36);
+        rasterizer.rasterize_mesh(
+            ds_mesh,
+            &structure.camera,
+            &mut fb,
+            ColorScheme::Solid(gold),
+        );
+    }
+
+    rasterizer.apply_post_processing(&mut fb);
 
     match backend {
         TerminalBackend::HalfBlock => Ok(HalfBlockRenderer::render_snapshot(&fb)),
@@ -232,7 +359,7 @@ pub fn render_superposition_snapshot(
     let mut rasterizer = Rasterizer::new(ColorScheme::Plddt);
     // 1. Render reference in Ruby
     let ref_color = ColorRGB::new(244, 63, 94);
-    rasterizer.render_with_scheme(
+    rasterizer.rasterize_mesh(
         &data.ref_mesh,
         &data.camera,
         &mut fb,
@@ -241,12 +368,15 @@ pub fn render_superposition_snapshot(
 
     // 2. Render aligned target in Cyan into the same depth buffer
     let target_color = ColorRGB::new(6, 182, 212);
-    rasterizer.render_with_scheme(
+    rasterizer.rasterize_mesh(
         &data.target_mesh,
         &data.camera,
         &mut fb,
         ColorScheme::Solid(target_color),
     );
+
+    // 3. Screen-space ambient occlusion and silhouette cel outlines
+    rasterizer.apply_post_processing(&mut fb);
 
     let output_str = match backend {
         TerminalBackend::HalfBlock => HalfBlockRenderer::render_snapshot(&fb),
@@ -324,5 +454,31 @@ mod tests {
 
         assert!(!snapshot.is_empty());
         assert!(rmsd < 1e-6); // Identical structures have 0.0 RMSD
+    }
+
+    #[test]
+    fn test_disulfide_extraction_and_rendering() {
+        let structure = parse_pdb_structure(CRAMBIN_PDB)
+            .expect("Failed to parse Crambin structure for rendering");
+
+        // Crambin (1CRN) contains 3 invariant disulfide bridges:
+        // Cys3-Cys40, Cys4-Cys32, and Cys16-Cys26
+        assert_eq!(structure.num_disulfides, 3);
+        assert!(structure.disulfide_mesh.is_some());
+
+        let ds_mesh = structure.disulfide_mesh.as_ref().unwrap();
+        assert!(ds_mesh.triangle_count() > 0);
+        assert!(!ds_mesh.vertices.is_empty());
+
+        // Snapshot rendering with disulfides & SSAO enabled should complete successfully
+        let snapshot = render_pdb_snapshot(
+            CRAMBIN_PDB,
+            80,
+            24,
+            TerminalBackend::HalfBlock,
+            ColorScheme::SecondaryStructure,
+        )
+        .expect("Failed to render snapshot with disulfides");
+        assert!(!snapshot.is_empty());
     }
 }

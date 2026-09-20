@@ -8,6 +8,8 @@ use nalgebra::Vector3;
 
 pub struct Rasterizer {
     pub color_scheme: ColorScheme,
+    pub enable_ssao: bool,
+    pub enable_outlines: bool,
     projected: Vec<Vector3<f32>>,
     shaded_colors: Vec<ColorRGB>,
 }
@@ -16,18 +18,33 @@ impl Rasterizer {
     pub fn new(color_scheme: ColorScheme) -> Self {
         Self {
             color_scheme,
+            enable_ssao: true,
+            enable_outlines: true,
             projected: Vec::new(),
             shaded_colors: Vec::new(),
         }
     }
 
-    /// Render a triangle mesh to the framebuffer using the current color scheme.
+    /// Render a triangle mesh to the framebuffer with post-processing (SSAO & outlines).
     pub fn render(&mut self, mesh: &TriangleMesh, camera: &OrbitCamera, fb: &mut Framebuffer) {
         self.render_with_scheme(mesh, camera, fb, self.color_scheme);
     }
 
-    /// Render a triangle mesh using an explicit color scheme (e.g. Solid color for superposition).
+    /// Render a triangle mesh using an explicit color scheme and apply post-processing.
     pub fn render_with_scheme(
+        &mut self,
+        mesh: &TriangleMesh,
+        camera: &OrbitCamera,
+        fb: &mut Framebuffer,
+        scheme: ColorScheme,
+    ) {
+        self.rasterize_mesh(mesh, camera, fb, scheme);
+        self.apply_post_processing(fb);
+    }
+
+    /// Pure geometry and rasterization pass into z-buffer without applying post-processing.
+    /// Used when compositing multiple meshes (e.g. ribbon + disulfides or superposition) into a shared buffer.
+    pub fn rasterize_mesh(
         &mut self,
         mesh: &TriangleMesh,
         camera: &OrbitCamera,
@@ -152,6 +169,97 @@ impl Rasterizer {
                         let b = (w0 * c0_b + w1 * c1_b + w2 * c2_b).clamp(0.0, 255.0) as u8;
 
                         fb.set_pixel(x, y, ColorRGB::new(r, g, b), depth);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply Screen-Space Ambient Occlusion (SSAO) and silhouette edge darkening.
+    pub fn apply_post_processing(&self, fb: &mut Framebuffer) {
+        if !self.enable_ssao && !self.enable_outlines {
+            return;
+        }
+
+        let width = fb.width;
+        let height = fb.height;
+        if width < 3 || height < 3 {
+            return;
+        }
+
+        // 8 sample offsets on two concentric rings for SSAO
+        let ssao_offsets: [(isize, isize); 8] = [
+            (-2, 0),
+            (2, 0),
+            (0, -2),
+            (0, 2),
+            (-3, -3),
+            (3, 3),
+            (-3, 3),
+            (3, -3),
+        ];
+
+        // 4 cardinal offsets for silhouette edge detection
+        let edge_offsets: [(isize, isize); 4] = [(-1, 0), (1, 0), (0, -1), (0, 1)];
+
+        let orig_colors = fb.colors.clone();
+
+        for y in 0..height {
+            let y_i = y as isize;
+            for x in 0..width {
+                let x_i = x as isize;
+                let idx = y * width + x;
+                let depth = fb.depths[idx];
+
+                if depth >= f32::INFINITY {
+                    continue;
+                }
+
+                let mut is_edge = false;
+                if self.enable_outlines {
+                    for &(dx, dy) in &edge_offsets {
+                        let nx = x_i + dx;
+                        let ny = y_i + dy;
+                        if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
+                            let n_idx = (ny as usize) * width + (nx as usize);
+                            let n_depth = fb.depths[n_idx];
+                            if n_depth >= f32::INFINITY || (n_depth - depth).abs() > 4.0 {
+                                is_edge = true;
+                                break;
+                            }
+                        } else {
+                            is_edge = true;
+                            break;
+                        }
+                    }
+                }
+
+                if is_edge {
+                    fb.colors[idx] = orig_colors[idx].scale(0.35);
+                } else if self.enable_ssao {
+                    let mut occlusion = 0.0f32;
+                    let mut valid_samples = 0usize;
+
+                    for &(dx, dy) in &ssao_offsets {
+                        let nx = x_i + dx;
+                        let ny = y_i + dy;
+                        if nx >= 0 && nx < width as isize && ny >= 0 && ny < height as isize {
+                            let n_idx = (ny as usize) * width + (nx as usize);
+                            let n_depth = fb.depths[n_idx];
+                            if n_depth < f32::INFINITY {
+                                valid_samples += 1;
+                                let diff = depth - n_depth;
+                                if diff > 0.05 && diff < 8.0 {
+                                    occlusion += (diff / 4.0).min(1.0);
+                                }
+                            }
+                        }
+                    }
+
+                    if valid_samples > 0 {
+                        let occ_factor = (occlusion / valid_samples as f32) * 0.45;
+                        let ao = (1.0 - occ_factor).clamp(0.50, 1.0);
+                        fb.colors[idx] = orig_colors[idx].scale(ao);
                     }
                 }
             }

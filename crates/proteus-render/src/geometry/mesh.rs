@@ -30,6 +30,16 @@ impl TriangleMesh {
     pub fn triangle_count(&self) -> usize {
         self.indices.len()
     }
+
+    /// Merge another triangle mesh into this mesh, offsetting indices.
+    pub fn merge(&mut self, other: TriangleMesh) {
+        let base_idx = self.vertices.len() as u32;
+        self.vertices.extend(other.vertices);
+        for tri in other.indices {
+            self.indices
+                .push([tri[0] + base_idx, tri[1] + base_idx, tri[2] + base_idx]);
+        }
+    }
 }
 
 /// Extrude a Richardson cartoon ribbon mesh from protein C-alpha coordinates,
@@ -190,6 +200,117 @@ pub fn generate_cartoon_mesh(
     mesh
 }
 
+/// Generate a 3D cylindrical stick mesh connecting p1 to p2.
+/// Used for covalent disulfide bridges (S-S bonds) and sidechain sticks.
+pub fn generate_cylinder_mesh(
+    p1: Vector3<f32>,
+    p2: Vector3<f32>,
+    radius: f32,
+    sides: usize,
+    residue_index: usize,
+    secondary_structure: SecondaryStructure,
+    plddt: f32,
+) -> TriangleMesh {
+    let axis = p2 - p1;
+    let len = axis.norm();
+    if len < 1e-4 {
+        return TriangleMesh::new();
+    }
+    let dir = axis / len;
+
+    // Perpendicular coordinate frame
+    let up = if dir.x.abs() < 0.9 {
+        Vector3::new(1.0, 0.0, 0.0)
+    } else {
+        Vector3::new(0.0, 1.0, 0.0)
+    };
+    let u = dir.cross(&up).normalize();
+    let v = dir.cross(&u).normalize();
+
+    let mut mesh = TriangleMesh::new();
+    let ring_sides = sides.max(4);
+
+    // Ring 0 at p1, Ring 1 at p2
+    for &center in &[p1, p2] {
+        for i in 0..ring_sides {
+            let angle = (i as f32) * std::f32::consts::TAU / (ring_sides as f32);
+            let normal = u * angle.cos() + v * angle.sin();
+            let pos = center + normal * radius;
+            mesh.vertices.push(Vertex3D {
+                position: pos,
+                normal,
+                plddt,
+                secondary_structure,
+                residue_index,
+            });
+        }
+    }
+
+    // Side faces (quads connecting ring 0 to ring 1)
+    for i in 0..ring_sides {
+        let next_i = (i + 1) % ring_sides;
+        let p0 = i as u32;
+        let p1_idx = next_i as u32;
+        let c0 = (i + ring_sides) as u32;
+        let c1 = (next_i + ring_sides) as u32;
+
+        mesh.indices.push([p0, c0, c1]);
+        mesh.indices.push([p0, c1, p1_idx]);
+    }
+
+    mesh
+}
+
+/// Generate a UV sphere mesh at specified center and radius (for atomic beads and sulfur caps).
+pub fn generate_sphere_mesh(
+    center: Vector3<f32>,
+    radius: f32,
+    lat_bands: usize,
+    lon_bands: usize,
+    residue_index: usize,
+    secondary_structure: SecondaryStructure,
+    plddt: f32,
+) -> TriangleMesh {
+    let mut mesh = TriangleMesh::new();
+    let lats = lat_bands.max(3);
+    let lons = lon_bands.max(3);
+
+    for lat in 0..=lats {
+        let theta = (lat as f32) * std::f32::consts::PI / (lats as f32);
+        let sin_theta = theta.sin();
+        let cos_theta = theta.cos();
+
+        for lon in 0..=lons {
+            let phi = (lon as f32) * std::f32::consts::TAU / (lons as f32);
+            let sin_phi = phi.sin();
+            let cos_phi = phi.cos();
+
+            let normal = Vector3::new(cos_phi * sin_theta, cos_theta, sin_phi * sin_theta);
+            let pos = center + normal * radius;
+
+            mesh.vertices.push(Vertex3D {
+                position: pos,
+                normal,
+                plddt,
+                secondary_structure,
+                residue_index,
+            });
+        }
+    }
+
+    for lat in 0..lats {
+        for lon in 0..lons {
+            let first = (lat * (lons + 1) + lon) as u32;
+            let second = first + lons as u32 + 1;
+
+            mesh.indices.push([first, second, first + 1]);
+            mesh.indices.push([second, second + 1, first + 1]);
+        }
+    }
+
+    mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +329,22 @@ mod tests {
         let mesh = generate_cartoon_mesh(&ca_coords, &ss, &plddts, 4);
         assert!(mesh.vertex_count() > 50);
         assert!(mesh.triangle_count() > 50);
+    }
+
+    #[test]
+    fn test_cylinder_and_sphere_generation() {
+        let p1 = Vector3::new(0.0, 0.0, 0.0);
+        let p2 = Vector3::new(0.0, 2.0, 0.0);
+        let cylinder = generate_cylinder_mesh(p1, p2, 0.2, 8, 0, SecondaryStructure::Coil, 85.0);
+        assert_eq!(cylinder.vertex_count(), 16);
+        assert_eq!(cylinder.triangle_count(), 16);
+
+        let sphere = generate_sphere_mesh(p1, 0.5, 6, 8, 0, SecondaryStructure::Coil, 85.0);
+        assert!(sphere.vertex_count() > 0);
+        assert!(sphere.triangle_count() > 0);
+
+        let mut combined = cylinder;
+        combined.merge(sphere);
+        assert!(combined.vertex_count() > 16);
     }
 }

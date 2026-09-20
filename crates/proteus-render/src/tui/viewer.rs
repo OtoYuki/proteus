@@ -29,6 +29,7 @@ pub struct ViewerConfig {
     pub auto_rotate: bool,
     pub secondary_mesh: Option<(TriangleMesh, ColorRGB)>,
     pub rmsd: Option<f64>,
+    pub disulfide_mesh: Option<TriangleMesh>,
 }
 
 impl Default for ViewerConfig {
@@ -39,6 +40,7 @@ impl Default for ViewerConfig {
             auto_rotate: true,
             secondary_mesh: None,
             rmsd: None,
+            disulfide_mesh: None,
         }
     }
 }
@@ -68,6 +70,7 @@ pub fn run_interactive_viewer(
     let mut compositor = HalfBlockRenderer::new();
     let mut auto_rotate = config.auto_rotate;
     let mut color_scheme = config.initial_color_scheme;
+    let mut show_disulfides = config.disulfide_mesh.is_some();
 
     let mut out_buf = String::with_capacity(64 * 1024);
     let mut last_frame = Instant::now();
@@ -92,6 +95,14 @@ pub fn run_interactive_viewer(
                             ColorScheme::Solid(_) => ColorScheme::Plddt,
                         };
                         rasterizer.color_scheme = color_scheme;
+                    }
+                    KeyCode::Char('o') => {
+                        let current = rasterizer.enable_ssao && rasterizer.enable_outlines;
+                        rasterizer.enable_ssao = !current;
+                        rasterizer.enable_outlines = !current;
+                    }
+                    KeyCode::Char('d') => {
+                        show_disulfides = !show_disulfides;
                     }
                     KeyCode::Char('r') => {
                         camera.reset();
@@ -135,17 +146,23 @@ pub fn run_interactive_viewer(
 
         // Render frame
         fb.clear(ColorRGB::BLACK);
-        rasterizer.render(mesh, &camera, &mut fb);
+        rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme);
 
         // Render superimposed secondary mesh if present
         if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
-            rasterizer.render_with_scheme(
-                sec_mesh,
-                &camera,
-                &mut fb,
-                ColorScheme::Solid(sec_color),
-            );
+            rasterizer.rasterize_mesh(sec_mesh, &camera, &mut fb, ColorScheme::Solid(sec_color));
         }
+
+        // Render disulfide bridges if present and enabled
+        if show_disulfides {
+            if let Some(ref ds_mesh) = config.disulfide_mesh {
+                let gold = ColorRGB::new(251, 191, 36);
+                rasterizer.rasterize_mesh(ds_mesh, &camera, &mut fb, ColorScheme::Solid(gold));
+            }
+        }
+
+        // Post-processing: Screen-space ambient occlusion + cartoon silhouette outlines
+        rasterizer.apply_post_processing(&mut fb);
 
         // Compose to terminal
         out_buf.clear();
@@ -160,24 +177,48 @@ pub fn run_interactive_viewer(
         };
 
         let auto_status = if auto_rotate { "ON " } else { "OFF" };
+        let fx_status = if rasterizer.enable_ssao && rasterizer.enable_outlines {
+            "ON "
+        } else if rasterizer.enable_ssao || rasterizer.enable_outlines {
+            "PART"
+        } else {
+            "OFF "
+        };
+        let ds_status = if config.disulfide_mesh.is_some() {
+            if show_disulfides {
+                "ON "
+            } else {
+                "OFF"
+            }
+        } else {
+            "N/A"
+        };
         let total_triangles = mesh.triangle_count()
             + config
                 .secondary_mesh
                 .as_ref()
-                .map_or(0, |(m, _)| m.triangle_count());
+                .map_or(0, |(m, _)| m.triangle_count())
+            + if show_disulfides {
+                config
+                    .disulfide_mesh
+                    .as_ref()
+                    .map_or(0, |m| m.triangle_count())
+            } else {
+                0
+            };
 
         let status_row1 = if let Some(rmsd) = config.rmsd {
             format!(
-                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | Spin: {} | {:.0} FPS",
-                config.title, rmsd, total_triangles, auto_status, fps
+                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | FX: {} | Spin: {} | {:.0} FPS",
+                config.title, rmsd, total_triangles, fx_status, auto_status, fps
             )
         } else {
             format!(
-                " {} | Triangles: {} | Color: {} | Spin: {} | {:.0} FPS",
-                config.title, total_triangles, hud_scheme, auto_status, fps
+                " {} | Tris: {} | Color: {} | S-S: {} | FX: {} | Spin: {} | {:.0} FPS",
+                config.title, total_triangles, hud_scheme, ds_status, fx_status, auto_status, fps
             )
         };
-        let status_row2 = " [h/j/k/l/arrows] Orbit | [+/-] Zoom | [Space] Spin | [c] Color | [r] Reset | [q] Quit";
+        let status_row2 = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [c] Color | [o] SSAO/Outlines | [d] Disulfides | [r] Reset | [q] Quit";
 
         let _ = execute!(
             stdout,
