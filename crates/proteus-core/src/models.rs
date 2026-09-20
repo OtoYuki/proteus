@@ -1,3 +1,4 @@
+use crate::clash::ClashStats;
 use crate::sasa::SasaMetrics;
 use crate::structure::{RamachandranStats, SecondaryStructureSummary};
 use chrono::{DateTime, Utc};
@@ -82,6 +83,7 @@ pub struct BiophysicalMetrics {
     pub plddt_distribution: PlddtDistribution,
     pub secondary_structure_summary: Option<SecondaryStructureSummary>,
     pub ramachandran_stats: Option<RamachandranStats>,
+    pub clash_stats: Option<ClashStats>,
     pub sasa_metrics: Option<SasaMetrics>,
     pub candidate_fitness_score: Option<f64>,
 }

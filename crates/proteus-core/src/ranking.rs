@@ -55,11 +55,21 @@ pub fn evaluate_candidate_fitness(
         (metrics.contact_density * 800.0).clamp(0.0, 100.0)
     };
 
+    // 5. MolProbity Steric Clash Penalty
+    // Normal protein crystal structures have clashscore < 5. Clashes > 15 incur penalty.
+    let clash_penalty = if let Some(ref clash) = metrics.clash_stats {
+        (clash.clashscore * 0.5).min(20.0)
+    } else {
+        0.0
+    };
+
     // Weighted composite score
-    let total_score = 0.35 * plddt_component
+    let total_score = (0.35 * plddt_component
         + 0.25 * compactness_component
         + 0.20 * ramachandran_component
-        + 0.20 * hydrophobic_burial_component;
+        + 0.20 * hydrophobic_burial_component
+        - clash_penalty)
+        .clamp(0.0, 100.0);
 
     let tier_label = if total_score >= 82.0 {
         "Lead Candidate (Synthesis Priority)".to_string()
@@ -103,6 +113,7 @@ mod tests {
             },
             secondary_structure_summary: None,
             ramachandran_stats: None,
+            clash_stats: None,
             sasa_metrics: None,
             candidate_fitness_score: None,
         };

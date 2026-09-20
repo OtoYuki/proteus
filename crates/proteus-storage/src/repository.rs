@@ -372,6 +372,7 @@ impl ProteusRepository {
                 },
                 secondary_structure_summary: None,
                 ramachandran_stats: None,
+                clash_stats: None,
                 sasa_metrics: None,
                 candidate_fitness_score: None,
             }))
@@ -510,6 +511,7 @@ mod tests {
             },
             secondary_structure_summary: None,
             ramachandran_stats: None,
+            clash_stats: None,
             sasa_metrics: None,
             candidate_fitness_score: Some(88.5),
         };

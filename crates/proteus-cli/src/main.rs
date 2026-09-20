@@ -168,7 +168,7 @@ enum Commands {
         #[arg(long, default_value_t = 10)]
         top: usize,
 
-        /// Optional path to export structured screening dataset (.csv or .json)
+        /// Optional path to export structured screening dataset (.parquet, .csv, or .json)
         #[arg(short, long)]
         export: Option<PathBuf>,
     },
@@ -503,6 +503,16 @@ async fn main() -> Result<()> {
                 ]);
             }
 
+            if let Some(ref clash) = metrics.clash_stats {
+                table.add_row(vec![
+                    Cell::new("MolProbity Clashscore (>0.4Å)"),
+                    Cell::new(format!(
+                        "{:.1} ({} severe steric overlaps)",
+                        clash.clashscore, clash.clash_count
+                    )),
+                ]);
+            }
+
             if let Some(fitness) = metrics.candidate_fitness_score {
                 table.add_row(vec![
                     Cell::new("Candidate Fitness Score"),
@@ -805,6 +815,7 @@ async fn main() -> Result<()> {
                 coil_pct: f64,
                 favored_rama: f64,
                 rama_outliers: usize,
+                clashscore: f64,
                 fitness: f64,
             }
 
@@ -833,6 +844,8 @@ async fn main() -> Result<()> {
                                 metrics.ramachandran_stats.as_ref().map_or((0.0, 0), |r| {
                                     (r.favored_fraction * 100.0, r.outlier_count)
                                 });
+                            let clashscore =
+                                metrics.clash_stats.as_ref().map_or(0.0, |c| c.clashscore);
                             let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
 
                             candidates.push(CandidateRank {
@@ -847,6 +860,7 @@ async fn main() -> Result<()> {
                                 coil_pct: coil,
                                 favored_rama,
                                 rama_outliers,
+                                clashscore,
                                 fitness,
                             });
                         }
@@ -874,7 +888,7 @@ async fn main() -> Result<()> {
                 "pLDDT",
                 "Rg (Å)",
                 "Core Burial",
-                "H / E (%)",
+                "Clash",
                 "Fitness / 100",
                 "Job ID",
             ]);
@@ -887,7 +901,7 @@ async fn main() -> Result<()> {
                     Cell::new(format!("{:.2}", c.plddt)),
                     Cell::new(format!("{:.2}", c.rg)),
                     Cell::new(format!("{:.1}%", c.hydrophobic_burial)),
-                    Cell::new(format!("{:.0} / {:.0}", c.helix_pct, c.strand_pct)),
+                    Cell::new(format!("{:.1}", c.clashscore)),
                     Cell::new(format!("{:.1}", c.fitness)),
                     Cell::new(c.job_id.to_string()),
                 ]);
@@ -918,6 +932,7 @@ async fn main() -> Result<()> {
                         coil_pct: c.coil_pct,
                         favored_ramachandran_pct: c.favored_rama,
                         rama_outliers: c.rama_outliers,
+                        clashscore: c.clashscore,
                         fitness: c.fitness,
                     });
                 }

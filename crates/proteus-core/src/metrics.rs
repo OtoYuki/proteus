@@ -340,6 +340,7 @@ pub fn analyze_pdb_detailed(
     let ss_summary = crate::structure::assign_secondary_structure(&ca_coords);
     let rama_stats = crate::structure::evaluate_ramachandran_with_context(&phi_psi_context);
     let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
+    let clash_stats = crate::clash::compute_clash_stats(pdb);
 
     let mut metrics = BiophysicalMetrics {
         id: Uuid::new_v4(),
@@ -355,6 +356,7 @@ pub fn analyze_pdb_detailed(
         },
         secondary_structure_summary: Some(ss_summary),
         ramachandran_stats: Some(rama_stats),
+        clash_stats: Some(clash_stats),
         sasa_metrics: Some(sasa_metrics),
         candidate_fitness_score: None,
     };

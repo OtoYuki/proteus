@@ -1,5 +1,6 @@
 //! Core domain models and structural bioinformatics for Proteus.
 
+pub mod clash;
 pub mod error;
 pub mod metrics;
 pub mod models;
@@ -9,6 +10,7 @@ pub mod sasa;
 pub mod sequence;
 pub mod structure;
 
+pub use clash::*;
 pub use error::CoreError;
 pub use models::*;
 pub use mutagenesis::*;

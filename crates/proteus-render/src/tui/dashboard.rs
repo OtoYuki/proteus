@@ -412,6 +412,23 @@ impl DashboardRenderer {
                 row_count += 1;
             }
 
+            if let Some(ref clash) = m.clash_stats {
+                if row_count < max_rows {
+                    let score_color = if clash.clashscore < 5.0 {
+                        "\x1b[1;32m"
+                    } else if clash.clashscore < 15.0 {
+                        "\x1b[1;33m"
+                    } else {
+                        "\x1b[1;31m"
+                    };
+                    lines.push(format!(
+                        " Clashscore (>0.4Å)     : {score_color}{:.1}\x1b[0m ({} overlaps)",
+                        clash.clashscore, clash.clash_count
+                    ));
+                    row_count += 1;
+                }
+            }
+
             if let Some(fitness) = m.candidate_fitness_score {
                 if row_count < max_rows {
                     lines.push(format!(
@@ -471,6 +488,7 @@ mod tests {
                     outlier_count: 0,
                     total_evaluated: 44,
                 }),
+                clash_stats: None,
                 sasa_metrics: None,
                 candidate_fitness_score: Some(87.4),
             }),
