@@ -1,152 +1,214 @@
-# Proteus: High-Throughput Bio-Compute Orchestrator & Structural Pipeline
+# proteus
 
-[![Rust](https://img.shields.io/badge/Rust-1.94+-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
-[![Architecture](https://img.shields.io/badge/Architecture-Modular%20Cargo%20Workspace-green.svg)](docs/superpowers/specs/2026-09-19-proteus-rust-architecture-design.md)
+High-throughput bio-compute orchestration engine and terminal biophysics workbench written in Rust.
 
-**Proteus is an asynchronous, high-throughput bio-compute pipeline and orchestration engine written in Rust (`proteus-rs`). It orchestrates structural biology computational workloads across tiered models (ESMFold, Boltz-1, ColabFold, GROMACS MD) via native OCI/Podman container sockets, persists execution state in embedded SQLite (WAL mode), and calculates biophysical descriptors ($R_g$, Kabsch RMSD, contact density, pLDDT distribution) in microseconds using SIMD-accelerated linear algebra.**
-
-Originally conceptualized as an undergraduate thesis project, Proteus has evolved into a production-grade systems engineering demonstration for high-performance bio-compute infrastructure.
+Proteus automates the synthetic protein engineering design loop: sequence mutagenesis, multi-tiered structural prediction (ESMFold, Boltz-1, ColabFold), OCI/Podman container scheduling, pure-Rust all-atom biophysical validation (SASA, Ramachandran distributions, MolProbity clashscore), software 3D terminal rasterization, and Apache Parquet data lake exports.
 
 ---
 
-## Key Features (`proteus-rs`)
+## Architecture
 
-* **⚡ Native Biophysical Analytics:** Direct Rust computation of **Center-of-Mass Radius of Gyration ($R_g$)**, **Kabsch optimal superposition $C_\alpha$ RMSD** via SVD (`nalgebra`), **tertiary contact topology**, and **per-residue pLDDT statistics** using `pdbtbx`. Runs in sub-milliseconds without Python runtime or GIL bottlenecks.
-* **🐳 Direct OCI / Podman Container Management:** Talks directly to Podman rootless sockets (`/run/user/1000/podman/podman.sock`) or Docker sockets via `bollard` over UNIX domain sockets. No fragile shell scripts or unvalidated subprocess execution.
-* **📦 Zero-Config Embedded Storage:** Embedded SQLite database with SQLx running in WAL mode with connection pooling and embedded migrations. Works out of the box with zero external infrastructure setup (no PostgreSQL or RabbitMQ required).
-* **🔄 Deterministic Fallback (`SimulatedRunner`):** Automatically detects if a container runtime socket is active; if offline, falls back gracefully to a deterministic local simulation runner for reproducible testing and CI environments.
-* **🌐 Headless Daemon (`proteusd`):** High-concurrency Axum server exposing RESTful endpoints, live progress streaming via Server-Sent Events (SSE), and interactive Swagger UI at `/swagger-ui`.
-* **💻 Rich Terminal Tooling (`proteus-cli`):** Production-grade CLI built with `clap`, `comfy-table`, and `indicatif` progress spinners for batch submission, job status polling, and offline PDB inspection.
-
----
-
-## Workspace Architecture
+The project is organized as a Cargo workspace across six decoupled crates:
 
 ```
-proteus/
-├── Cargo.toml                  # Workspace root manifest
-├── crates/
-│   ├── proteus-core/           # Domain models, canonical FASTA validation, biophysical calculations (pdbtbx)
-│   ├── proteus-storage/        # Embedded SQLite with SQLx, embedded DDL migrations, repository abstractions
-│   ├── proteus-engine/         # Async DAG task scheduler, OCI container runner (bollard), simulated runner
-│   ├── proteus-server/         # Headless Axum daemon (proteusd), SSE streams, OpenAPI docs (utoipa)
-│   └── proteus-cli/            # CLI binary (proteus) with rich table output & progress indicators
-├── docs/
-│   └── superpowers/specs/      # Architectural specifications & technical design documents
-└── core/, proteus/             # Legacy Django/Celery thesis implementation (archived for provenance)
+crates/
+├── proteus-core/       Domain models, FASTA parser, DMS mutagenesis, and native biophysics
+├── proteus-storage/    Embedded SQLite repository (SQLx WAL) and Apache Parquet data lake exporter
+├── proteus-engine/     Async DAG task scheduler and OCI/Podman container runner (bollard)
+├── proteus-render/     Software 3D rasterizer, Bishop ribbon extruder, and TUI dashboard
+├── proteus-server/     Headless Axum daemon (proteusd) with SSE event streams and OpenAPI docs
+└── proteus-cli/        Unified CLI binary (proteus) for screening, inspection, and daemon hosting
 ```
 
 ---
 
-## Local Quickstart
+## Core Capabilities
 
-### 1. Prerequisites
-* **Rust toolchain:** 1.85+ (tested on Rust 1.94 on Arch Linux)
-* **Container Runtime (Optional):** Podman (`podman.socket`) or Docker for live container inference.
+### 1. In-Silico Deep Mutational Scanning (DMS)
+Generates high-density mutant variant libraries directly from wildtype scaffolds:
+- **Alanine Scanning:** Systematic single-point mutations to Alanine across selected sequence windows to map critical functional epitopes.
+- **Site-Saturation Mutagenesis:** Exhaustive substitution of all 20 canonical amino acids across target active sites or binding interfaces.
+- **Pipeline Streaming:** Native UNIX pipeline support (`mutate | screen -`) for zero-disk intermediate streaming.
 
+### 2. High-Throughput Screening Funnel & Parquet Data Lake
+Evaluates variant libraries across multi-threaded computational workers:
+- **Multi-Tier Inference:** Dispatches structural prediction jobs across fast ESMFold heuristics, Boltz-1/ColabFold OCI containers, or local simulation fallback.
+- **Multi-Objective Pareto Ranking:** Evaluates candidates against composite fitness functions incorporating pLDDT confidence, compactness ($R_g$), hydrophobic core burial, secondary structure stability, and steric clashes.
+- **Columnar Data Lake Export:** Serializes screened variant batches into ZSTD-compressed Apache Parquet files using canonical Apache Arrow schemas for direct query execution in DuckDB, Polars, or PyArrow.
+
+### 3. Pure-Rust Terminal 3D Rasterizer & Live Telemetry Dashboard
+Enables full structural inspection over SSH without X11 forwarding, WebGL browser dependencies, or headless display servers:
+- **Cartoon Ribbon Mesh Generation:** Interpolates $C_\alpha$ backbones via cubic Hermite splines with Bishop parallel-transport frames, elliptic cross-sections, and Richardson $\beta$-arrowheads.
+- **Lighting & Post-Processing:** Software $z$-buffer rasterizer with directional Blinn-Phong shading, Screen-Space Ambient Occlusion (SSAO), and edge-detection cel-outlines.
+- **Covalent Disulfide Bridges:** Automatically detects and renders cystine covalent bonds ($S_\gamma - S_\gamma$) as high-visibility sidechain cylinders.
+- **Multi-Structure Superposition:** Visualizes pairwise structural alignments in distinct dual-color palettes with Kabsch RMSD metrics.
+- **Terminal Compositing:** High-resolution sub-pixel Braille (2x4 dots/cell), ANSI 24-bit half-block (1x2 pixels/cell), and Kitty graphics protocol for raw 24-bit RGB pixel blitting.
+- **Live TUI Dashboard:** Split-screen layout displaying real-time 3D rotation alongside an ASCII Ramachandran ($\phi, \psi$) conformational scatter plot, per-residue pLDDT spectrum, and biophysical metrics.
+
+### 4. Native Biophysical Validation Engines
+Executes all-atom biophysical calculations in sub-milliseconds:
+- **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
+- **MolProbity Ramachandran Distributions:** Calculates backbone dihedral angles ($\phi, \psi$) and classifies conformations across four residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline).
+- **MolProbity Steric Clashscore:** Evaluates severe steric overlaps ($> 0.40\,\text{Å}$) per 1,000 heavy atoms using Bondi van der Waals radii, cell-list spatial hashing, and crystallographic exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges).
+- **Kabsch Coordinate Superposition:** Computes optimal rotational alignment and minimum RMSD via Singular Value Decomposition (SVD) on $3 \times 3$ covariance matrices (`nalgebra`).
+
+---
+
+## Quickstart
+
+### Prerequisites
+- **Rust Toolchain:** 1.85+ (tested on Rust 1.94)
+- **Container Runtime (Optional):** Podman rootless socket (`systemctl --user enable --now podman.socket`) or Docker daemon for live OCI container execution.
+
+### Build
 ```bash
-# Optional: Enable Podman user socket for live OCI container execution on Arch/Linux
-systemctl --user enable --now podman.socket
+cargo build --release
 ```
+The compiled binary will be located at `target/release/proteus`.
 
-### 2. Build Release Binaries
+### Verification & Test Suite
 ```bash
-cargo build --workspace --release
-```
-The unified binary will be located at `./target/release/proteus`.
-
-### 3. Run Test Suite & Quality Checks
-```bash
-# Run 12 unit & integration tests across all workspace crates
+# Run all 43 workspace unit and integration tests
 cargo test --workspace
 
-# Run strict Clippy linter
+# Strict lint check
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Check code formatting
+# Code formatting check
 cargo fmt --check
 ```
 
 ---
 
-## CLI Usage
+## CLI Reference
 
-### Submit a Sequence to the Bio-Compute Pipeline
+### 1. In-Silico Mutagenesis (`proteus mutate`)
+Generate an Alanine scanning variant library:
 ```bash
-./target/release/proteus submit --fasta ">test_insulin\nGIVEQCCTSICSLYQLENYCN" --tier fast
-```
-**Output:**
-```
-Sequence validated: 'test_insulin' (21 residues)
-Job created: c74a7bdd-b19f-43ba-bd4d-43eeaa279497
-Pipeline completed successfully!
-┌───────────────────────────┬───────────────────────────────────────────────────┬───────────────────────────┐
-│ Metric                    ┆ Value                                             ┆ Confidence Assessment     │
-╞═══════════════════════════╪═══════════════════════════════════════════════════╪═══════════════════════════╡
-│ Predicted PDB Path        ┆ .../artifacts/.../c74a7bdd..._predicted.pdb       ┆ Artifact on disk          │
-│ Global Confidence (pLDDT) ┆ 82.50                                             ┆ Confident (Good backbone) │
-│ Radius of Gyration (Rg)   ┆ 9.369 Å                                           ┆ Compactness metric        │
-│ Tertiary Contact Density  ┆ 11.11%                                            ┆ C-alpha <= 8.0Å pairs     │
-│ High Conf Residues (>=70) ┆ 100.0%                                            ┆ Reliable backbone         │
-└───────────────────────────┴───────────────────────────────────────────────────┴───────────────────────────┘
+proteus mutate --scaffold scaffold.fasta --mode alanine --output alanine_library.fasta
 ```
 
-### Query Existing Job Status & Inspection
+Generate a site-saturation library restricted to residues 10–18:
 ```bash
-# Query job lifecycle status
-./target/release/proteus status <job-id>
-
-# Inspect detailed biophysical breakdown
-./target/release/proteus inspect <job-id>
+proteus mutate --scaffold scaffold.fasta --mode saturation --start 10 --end 18 --max-variants 50
 ```
 
-### Direct Offline PDB Structure Analysis
-Perform instant mathematical structure analysis on any PDB file without running a server or database:
+### 2. High-Throughput Screening (`proteus screen`)
+Screen a variant library through the compute funnel and export candidate biophysics to Apache Parquet:
 ```bash
-./target/release/proteus analyze --pdb /path/to/structure.pdb
+proteus screen \
+  --library alanine_library.fasta \
+  --tier fast \
+  --workers 8 \
+  --min-plddt 75.0 \
+  --top 10 \
+  --export results.parquet
 ```
 
-### Launch Headless API Server (`proteusd`)
+Pipe mutations directly into the screening funnel without saving intermediate FASTA files:
 ```bash
-./target/release/proteus serve --port 8080
+proteus mutate --scaffold wildtype.fasta --mode alanine | proteus screen --library - --export results.parquet
 ```
-Open **http://localhost:8080/swagger-ui** in your browser to interact with the OpenAPI documentation.
+
+### 3. Terminal 3D Structure Viewer (`proteus view`)
+Launch the interactive 3D viewer with the live split-screen biophysical dashboard:
+```bash
+proteus view structure.pdb --interactive --dashboard
+```
+
+Interactive keyboard controls:
+- `Arrow Keys` / `HJKL`: Rotate structure pitch and yaw.
+- `+` / `-`: Zoom in and zoom out.
+- `Space`: Toggle automatic rotation.
+- `C`: Cycle color schemes (pLDDT spectrum, secondary structure, cyan, green, amber).
+- `D`: Toggle biophysical telemetry dashboard.
+- `Q` / `Esc`: Exit viewer.
+
+Superimpose two structures to visually inspect conformational changes:
+```bash
+proteus view mutant.pdb --compare wildtype.pdb --interactive
+```
+
+Render high-fidelity terminal snapshots to stdout for scripting and CI logs:
+```bash
+# High-resolution Braille rendering
+proteus view structure.pdb --backend braille --width 80 --height 36
+
+# Full-color ANSI half-block rendering
+proteus view structure.pdb --backend halfblock --color sst --width 80 --height 36
+
+# Native Kitty graphics protocol (kitty, wezterm, ghostty)
+proteus view structure.pdb --backend kitty --width 100 --height 40
+```
+
+### 4. Offline Biophysical Analysis (`proteus analyze`)
+Inspect all-atom biophysical metrics for any local PDB structure:
+```bash
+proteus analyze --pdb structure.pdb
+```
+Output:
+```
+┌─────────────────────────────────┬─────────────────────────────────────────────────┐
+│ Metric                          ┆ Value                                           │
+╞═════════════════════════════════╪═════════════════════════════════════════════════╡
+│ Radius of Gyration (Rg)         ┆ 9.369 Å                                         │
+│ Tertiary Contact Density (≤8Å)  ┆ 11.1% (Cα pairs)                                │
+│ Mean pLDDT                      ┆ 82.50 (Confident)                               │
+│ Secondary Structure             ┆ α 42% │ β 18% │ Coil 40%                        │
+│ Ramachandran Distribution       ┆ Favored: 95.5% │ Allowed: 4.5% │ Outliers: 0    │
+│ SASA Total / Hydrophobic Burial ┆ 2842.1 Å² (54.3% buried core)                   │
+│ MolProbity Clashscore (>0.4Å)   ┆ 0.0 (0 severe steric overlaps)                  │
+│ Candidate Fitness Score         ┆ 78.4 / 100                                      │
+└─────────────────────────────────┴─────────────────────────────────────────────────┘
+```
+
+### 5. Headless Daemon (`proteus serve`)
+Run the headless background service:
+```bash
+proteus serve --port 8080 --host 0.0.0.0
+```
+Interactive Swagger UI documentation is served at `http://localhost:8080/swagger-ui`.
 
 ---
 
-## Mathematical Biophysics Formulations in Rust
+## Mathematical Formulations
 
-### 1. Center of Mass & Radius of Gyration ($R_g$)
+### Radius of Gyration ($R_g$)
 $$\mathbf{r}_{\text{cm}} = \frac{1}{N}\sum_{i=1}^N \mathbf{r}_i \quad\text{over all } C_\alpha\text{ atoms}$$
 $$R_g = \sqrt{\frac{1}{N}\sum_{i=1}^N \|\mathbf{r}_i - \mathbf{r}_{\text{cm}}\|^2}$$
 
-### 2. Kabsch Optimal Superposition Algorithm ($C_\alpha$ RMSD)
-Given centered coordinate sets $P$ and $Q$:
-* Covariance matrix: $H = P^T Q$
-* Singular Value Decomposition (SVD): $H = U \Sigma V^T$
-* Optimal rotation matrix: $R = V \begin{pmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & \det(V U^T) \end{pmatrix} U^T$
-* Optimal RMSD: $\text{RMSD} = \sqrt{\frac{1}{N}\sum_{i=1}^N \|R \mathbf{p}_i - \mathbf{q}_i\|^2}$
+### Kabsch Optimal Superposition ($C_\alpha$ RMSD)
+For centered coordinate matrices $P, Q \in \mathbb{R}^{N \times 3}$:
+1. Compute the cross-covariance matrix: $H = P^T Q$.
+2. Compute Singular Value Decomposition: $H = U \Sigma V^T$.
+3. Correct for improper rotation (reflection):
+   $$R = V \begin{pmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & \det(V U^T) \end{pmatrix} U^T$$
+4. Compute aligned root-mean-square deviation:
+   $$\text{RMSD} = \sqrt{\frac{1}{N}\sum_{i=1}^N \|R \mathbf{p}_i - \mathbf{q}_i\|^2}$$
+
+### MolProbity All-Atom Clashscore
+$$\text{Clashscore} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\,\text{Å}\right)}{N_{\text{atoms}}} \times 1000$$
+Subject to topological exclusions:
+- Atoms within the same residue ($res_i = res_j$).
+- Backbone peptide linkages and proline pyrrolidine ring geometry ($|res_i - res_j| = 1$ within the same chain).
+- Covalent disulfide-bonded cysteine sulfur pairs ($d(S_\gamma, S_\gamma) \in [1.70, 2.60]\,\text{Å}$).
+
+### Composite Candidate Fitness Score
+$$S_{\text{fitness}} = 0.35 \times \text{pLDDT} + 0.25 \times f_{\text{favored\_rama}} + 0.20 \times f_{\text{hydrophobic\_burial}} + 0.20 \times f_{2^\circ\_content} - \text{penalties}$$
+where penalties include outlier Ramachandran deductions ($-3.0 \times N_{\text{outliers}}$) and MolProbity steric clashes ($-0.5 \times \min(\text{clashscore}, 40.0)$).
 
 ---
 
-## Historical Context: 2024–2025 Thesis Implementation
+## Provenance
 
-The original thesis implementation was written in Python 3.12 using Django 4.2, Celery 5.4, PostgreSQL, RabbitMQ, and Mol*Star. Application code resides in [`core/`](core/) and [`proteus/`](proteus/). For historical execution:
-```bash
-# Set up Python virtualenv
-pip install -r requirements.txt
-python manage.py migrate
-celery -A proteus worker -l info
-python manage.py runserver
-```
+The legacy Python/Django/Celery undergraduate thesis prototype is preserved under git tag `v0.1.0-thesis`. The repository root and active codebase are 100% Rust.
 
 ---
 
-## Documentation & Architecture Specs
+## License
 
-* **Architecture Specification:** [`docs/superpowers/specs/2026-09-19-proteus-rust-architecture-design.md`](docs/superpowers/specs/2026-09-19-proteus-rust-architecture-design.md)
-* **Obsidian Vault Reports:**
-  * [`00_estus/2026-09-19-proteus-rust-architecture-design.md`](file:///home/s1re/forelsket/00_estus/2026-09-19-proteus-rust-architecture-design.md)
-  * [`00_estus/2026-09-19-proteus-state-and-contracting-evolution.md`](file:///home/s1re/forelsket/00_estus/2026-09-19-proteus-state-and-contracting-evolution.md)
-  * [`00_estus/2026-09-19-proteus-commercial-valuation-systems-rust.md`](file:///home/s1re/forelsket/00_estus/2026-09-19-proteus-commercial-valuation-systems-rust.md)
+Licensed under either of:
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE) or http://opensource.org/licenses/MIT)
+
+at your option.

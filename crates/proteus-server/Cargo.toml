@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Headless Axum daemon (proteusd) with Server-Sent Events and OpenAPI documentation for Proteus."
 
 [dependencies]
 proteus-core = { workspace = true, features = ["openapi"] }

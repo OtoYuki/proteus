@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Unified CLI binary for Proteus: mutation, screening, biophysical analysis, and terminal 3D inspection."
 
 [[bin]]
 name = "proteus"

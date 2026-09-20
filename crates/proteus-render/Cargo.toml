@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Pure-Rust software 3D rasterizer, cartoon ribbon extruder, and terminal viewport engine for Proteus."
 
 [dependencies]
 proteus-core = { workspace = true }

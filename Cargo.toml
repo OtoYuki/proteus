@@ -15,6 +15,10 @@ edition = "2021"
 authors = ["Proteus Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/OtoYuki/proteus"
+homepage = "https://github.com/OtoYuki/proteus"
+readme = "README.md"
+keywords = ["bioinformatics", "protein-engineering", "biophysics", "terminal-graphics", "parquet"]
+categories = ["science::bioinformatics", "command-line-utilities", "rendering::engine"]
 
 [workspace.dependencies]
 # Internal workspace crates

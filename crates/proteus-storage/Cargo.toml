@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Embedded SQLite persistence and Apache Parquet data lake exporter for Proteus."
 
 [dependencies]
 proteus-core = { workspace = true }

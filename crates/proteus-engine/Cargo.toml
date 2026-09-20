@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+description = "Asynchronous DAG pipeline scheduler and OCI/Podman container runner for Proteus."
 
 [dependencies]
 proteus-core = { workspace = true }
