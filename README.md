@@ -49,7 +49,7 @@ Enables full structural inspection over SSH without X11 forwarding, WebGL browse
 Executes all-atom biophysical calculations in sub-milliseconds:
 - **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
 - **MolProbity Ramachandran Distributions:** Calculates backbone dihedral angles ($\phi, \psi$) and classifies conformations across four residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline).
-- **MolProbity Steric Clashscore:** Evaluates severe steric overlaps ($> 0.40\,\text{Å}$) per 1,000 heavy atoms using Bondi van der Waals radii, cell-list spatial hashing, and crystallographic exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges).
+- **MolProbity Steric Clashscore:** Evaluates severe steric overlaps ($> 0.40\text{ \AA}$) per 1,000 heavy atoms using Bondi van der Waals radii, cell-list spatial hashing, and crystallographic exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges).
 - **Kabsch Coordinate Superposition:** Computes optimal rotational alignment and minimum RMSD via Singular Value Decomposition (SVD) on $3 \times 3$ covariance matrices (`nalgebra`).
 
 ---
@@ -187,15 +187,16 @@ For centered coordinate matrices $P, Q \in \mathbb{R}^{N \times 3}$:
    $$\text{RMSD} = \sqrt{\frac{1}{N}\sum_{i=1}^N \|R \mathbf{p}_i - \mathbf{q}_i\|^2}$$
 
 ### MolProbity All-Atom Clashscore
-$$\text{Clashscore} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\,\text{Å}\right)}{N_{\text{atoms}}} \times 1000$$
+$$\text{Clashscore} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\text{ \AA}\right)}{N_{\text{atoms}}} \times 1000$$
 Subject to topological exclusions:
 - Atoms within the same residue ($res_i = res_j$).
 - Backbone peptide linkages and proline pyrrolidine ring geometry ($|res_i - res_j| = 1$ within the same chain).
-- Covalent disulfide-bonded cysteine sulfur pairs ($d(S_\gamma, S_\gamma) \in [1.70, 2.60]\,\text{Å}$).
+- Covalent disulfide-bonded cysteine sulfur pairs ($d(S_\gamma, S_\gamma) \in [1.70, 2.60]\text{ \AA}$).
 
 ### Composite Candidate Fitness Score
-$$S_{\text{fitness}} = 0.35 \times \text{pLDDT} + 0.25 \times f_{\text{favored\_rama}} + 0.20 \times f_{\text{hydrophobic\_burial}} + 0.20 \times f_{2^\circ\_content} - \text{penalties}$$
-where penalties include outlier Ramachandran deductions ($-3.0 \times N_{\text{outliers}}$) and MolProbity steric clashes ($-0.5 \times \min(\text{clashscore}, 40.0)$).
+$$S_{\text{fitness}} = 0.35 \cdot \text{pLDDT} + 0.25 \cdot f_{\text{favored}} + 0.20 \cdot f_{\text{burial}} + 0.20 \cdot f_{\text{helix}+\text{strand}} - P$$
+where the structural penalty $P$ accounts for Ramachandran outliers and steric clashes:
+$$P = 3.0 \cdot N_{\text{outliers}} + 0.5 \cdot \min(\text{clashscore}, 40.0)$$
 
 ---
 
