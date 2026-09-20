@@ -44,8 +44,8 @@ impl ComputeRunner for AutoRunner {
     ) -> Result<RunResult, EngineError> {
         let image = match job.tier {
             PipelineTier::FastScreening => "ghcr.io/proteus/esmfold:latest",
-            PipelineTier::HighFidelity => "ghcr.io/sokrypton/colabfold:1.5.5",
-            PipelineTier::FullValidation => "gromacs/gromacs:latest",
+            PipelineTier::HighFidelity => "ghcr.io/jwohlwend/boltz:latest",
+            PipelineTier::FullValidation => "ghcr.io/proteus/openmm:latest",
         };
 
         // 1. Try local OCI container if runner connected and image is present

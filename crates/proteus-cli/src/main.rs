@@ -75,6 +75,32 @@ enum Commands {
         reference: Option<PathBuf>,
     },
 
+    /// 3D structural ribbon visualization in the terminal (HalfBlock / Braille / Kitty)
+    View {
+        /// Target PDB file path or job UUID
+        target: String,
+
+        /// Run interactive 60 FPS TUI viewer with orbit camera controls
+        #[arg(short, long)]
+        interactive: bool,
+
+        /// Terminal rendering backend
+        #[arg(short, long, value_enum, default_value_t = CliBackend::HalfBlock)]
+        backend: CliBackend,
+
+        /// Color scheme
+        #[arg(short, long, value_enum, default_value_t = CliColorScheme::Plddt)]
+        color: CliColorScheme,
+
+        /// Terminal viewport width (defaults to terminal width or 80)
+        #[arg(long)]
+        width: Option<usize>,
+
+        /// Terminal viewport height (defaults to terminal height or 30)
+        #[arg(long)]
+        height: Option<usize>,
+    },
+
     /// Run the headless background daemon (proteusd)
     Serve {
         /// Port to listen on
@@ -104,6 +130,48 @@ impl From<CliTier> for PipelineTier {
             CliTier::Fast => PipelineTier::FastScreening,
             CliTier::Sota => PipelineTier::HighFidelity,
             CliTier::Full => PipelineTier::FullValidation,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+enum CliBackend {
+    #[value(name = "halfblock", alias = "half-block")]
+    HalfBlock,
+    #[value(name = "braille")]
+    Braille,
+    #[value(name = "kitty")]
+    Kitty,
+}
+
+impl From<CliBackend> for proteus_render::terminal::TerminalBackend {
+    fn from(b: CliBackend) -> Self {
+        match b {
+            CliBackend::HalfBlock => proteus_render::terminal::TerminalBackend::HalfBlock,
+            CliBackend::Braille => proteus_render::terminal::TerminalBackend::Braille,
+            CliBackend::Kitty => proteus_render::terminal::TerminalBackend::Kitty,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+enum CliColorScheme {
+    #[value(name = "plddt")]
+    Plddt,
+    #[value(name = "ss", alias = "secondary-structure")]
+    SecondaryStructure,
+    #[value(name = "rainbow")]
+    Rainbow,
+}
+
+impl From<CliColorScheme> for proteus_render::rasterizer::ColorScheme {
+    fn from(c: CliColorScheme) -> Self {
+        match c {
+            CliColorScheme::Plddt => proteus_render::rasterizer::ColorScheme::Plddt,
+            CliColorScheme::SecondaryStructure => {
+                proteus_render::rasterizer::ColorScheme::SecondaryStructure
+            }
+            CliColorScheme::Rainbow => proteus_render::rasterizer::ColorScheme::Rainbow,
         }
     }
 }
@@ -350,6 +418,75 @@ async fn main() -> Result<()> {
             }
 
             println!("{table}");
+        }
+
+        Commands::View {
+            target,
+            interactive,
+            backend,
+            color,
+            width,
+            height,
+        } => {
+            let target_path = PathBuf::from(&target);
+            let (pdb_content, title) = if target_path.exists() {
+                let content = tokio::fs::read_to_string(&target_path)
+                    .await
+                    .with_context(|| format!("Failed to read PDB file at {:?}", target_path))?;
+                let name = target_path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("PDB Structure")
+                    .to_string();
+                (content, name)
+            } else if let Ok(job_id) = Uuid::parse_str(&target) {
+                let pool = create_sqlite_pool(&db_path).await?;
+                let repo = ProteusRepository::new(pool);
+                let pred = repo
+                    .get_prediction_by_job(job_id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("Prediction for job {} not found", job_id))?;
+                let content = tokio::fs::read_to_string(&pred.pdb_path)
+                    .await
+                    .with_context(|| format!("Failed to read PDB at {:?}", pred.pdb_path))?;
+                (content, format!("Job {job_id}"))
+            } else {
+                anyhow::bail!(
+                    "Target '{}' is neither an existing file path nor a valid job UUID",
+                    target
+                );
+            };
+
+            let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
+            let render_color: proteus_render::rasterizer::ColorScheme = color.into();
+
+            if interactive {
+                let (mesh, camera) = proteus_render::parse_pdb_for_rendering(&pdb_content)
+                    .context("Failed to parse structure for 3D rendering")?;
+                let config = proteus_render::tui::ViewerConfig {
+                    title,
+                    initial_color_scheme: render_color,
+                    auto_rotate: true,
+                };
+                proteus_render::tui::run_interactive_viewer(&mesh, camera, config)
+                    .context("Interactive 3D viewer error")?;
+            } else {
+                let (term_cols, term_rows): (u16, u16) =
+                    crossterm::terminal::size().unwrap_or((80, 24));
+                let w = width.unwrap_or(term_cols as usize);
+                let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
+
+                let snapshot = proteus_render::render_pdb_snapshot(
+                    &pdb_content,
+                    w,
+                    h,
+                    render_backend,
+                    render_color,
+                )
+                .context("Failed to render 3D snapshot")?;
+
+                println!("{snapshot}");
+            }
         }
 
         Commands::Serve { port, host, runner } => {

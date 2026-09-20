@@ -6,6 +6,7 @@ members = [
     "crates/proteus-engine",
     "crates/proteus-server",
     "crates/proteus-cli",
+    "crates/proteus-render",
 ]
 
 [workspace.package]
@@ -21,6 +22,7 @@ proteus-core = { path = "crates/proteus-core" }
 proteus-storage = { path = "crates/proteus-storage" }
 proteus-engine = { path = "crates/proteus-engine" }
 proteus-server = { path = "crates/proteus-server" }
+proteus-render = { path = "crates/proteus-render" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }
@@ -52,6 +54,8 @@ nalgebra = "0.33"
 clap = { version = "4.5", features = ["derive", "env"] }
 indicatif = "0.17"
 comfy-table = "7.1"
+crossterm = "0.28"
+base64 = "0.22"
 
 # Diagnostics & Docs
 tracing = "0.1"

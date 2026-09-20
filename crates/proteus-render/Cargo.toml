@@ -1,0 +1,18 @@
+[package]
+name = "proteus-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+proteus-core = { workspace = true }
+nalgebra = { workspace = true }
+pdbtbx = { workspace = true }
+crossterm = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

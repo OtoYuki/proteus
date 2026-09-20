@@ -81,13 +81,13 @@ impl ComputeRunner for OciRunner {
     ) -> Result<RunResult, EngineError> {
         let image = match job.tier {
             PipelineTier::FastScreening => "ghcr.io/proteus/esmfold:latest",
-            PipelineTier::HighFidelity => "ghcr.io/sokrypton/colabfold:1.5.5",
-            PipelineTier::FullValidation => "gromacs/gromacs:latest",
+            PipelineTier::HighFidelity => "ghcr.io/jwohlwend/boltz:latest",
+            PipelineTier::FullValidation => "ghcr.io/proteus/openmm:latest",
         };
 
         if !self.has_image(image).await {
             return Err(EngineError::Container(format!(
-                "Required container image '{image}' is not available locally. Pull it with 'podman pull {image}', or run with '--runner esm-api' for live ESMFold folding or '--runner simulated'."
+                "Required SOTA container image '{image}' is not available locally. Pull it with 'podman pull {image}', or run with '--runner esm-api' for live ESMFold folding or '--runner simulated'."
             )));
         }
 
@@ -114,21 +114,25 @@ impl ComputeRunner for OciRunner {
                 "/workspace",
             ],
             PipelineTier::HighFidelity => vec![
-                "colabfold_batch",
-                "--num-models",
-                "1",
+                "boltz",
+                "predict",
                 "/workspace/input.fasta",
+                "--out_dir",
                 "/workspace",
+                "--output_format",
+                "pdb",
+                "--override",
             ],
             PipelineTier::FullValidation => vec![
-                "gmx",
-                "pdb2gmx",
-                "-f",
+                "python",
+                "-m",
+                "proteus.relax",
+                "--input",
                 "/workspace/input.pdb",
-                "-o",
-                "/workspace/processed.gro",
-                "-water",
-                "spce",
+                "--output",
+                "/workspace/relaxed.pdb",
+                "--forcefield",
+                "amber14sb",
             ],
         };
 
@@ -202,16 +206,24 @@ impl ComputeRunner for OciRunner {
             }
         }
 
-        // Locate predicted PDB in work_dir
-        let mut entries = tokio::fs::read_dir(work_dir).await?;
+        // Locate predicted PDB in work_dir (recursively scanning in case engine creates subdirectories)
         let mut found_pdb: Option<PathBuf> = None;
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            if let Some(ext) = path.extension() {
-                if ext == "pdb" {
-                    found_pdb = Some(path);
-                    break;
+        let mut dirs = vec![work_dir.to_path_buf()];
+        while let Some(current_dir) = dirs.pop() {
+            let mut entries = tokio::fs::read_dir(&current_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if let Some(ext) = path.extension() {
+                    if ext == "pdb" || ext == "cif" {
+                        found_pdb = Some(path);
+                        break;
+                    }
                 }
+            }
+            if found_pdb.is_some() {
+                break;
             }
         }
 
