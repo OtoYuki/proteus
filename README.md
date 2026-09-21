@@ -8,11 +8,12 @@ Proteus automates the synthetic protein engineering design loop: sequence mutage
 
 ## Architecture
 
-The project is organized as a Cargo workspace across six decoupled crates:
+The project is organized as a Cargo workspace across seven decoupled crates:
 
 ```
 crates/
 ├── proteus-core/       Domain models, FASTA parser, DMS mutagenesis, and native biophysics
+├── proteus-dssp/       Standalone pure-Rust Kabsch–Sander DSSP secondary-structure assignment
 ├── proteus-storage/    Embedded SQLite repository (SQLx WAL) and Apache Parquet data lake exporter
 ├── proteus-engine/     Async DAG task scheduler and OCI/Podman container runner (bollard)
 ├── proteus-render/     Software 3D rasterizer, Bishop ribbon extruder, and TUI dashboard
@@ -33,7 +34,7 @@ Generates high-density mutant variant libraries directly from wildtype scaffolds
 ### 2. High-Throughput Screening Funnel & Parquet Data Lake
 Evaluates variant libraries across multi-threaded computational workers:
 - **Multi-Tier Inference:** Dispatches structural prediction jobs across fast ESMFold heuristics, Boltz-1/ColabFold OCI containers, or local simulation fallback.
-- **Multi-Objective Pareto Ranking:** Evaluates candidates against composite fitness functions incorporating pLDDT confidence, compactness ($R_g$), hydrophobic core burial, secondary structure stability, and steric clashes.
+- **Weighted Composite Fitness Score:** Ranks candidates by a weighted sum of pLDDT confidence (predicted models only), compactness ($R_g$ vs Flory scaling), MolProbity Ramachandran quality, hydrophobic core burial and non-covalent network density, minus a steric-overlap penalty. For experimental structures the pLDDT weight is redistributed over the other terms.
 - **Columnar Data Lake Export:** Serializes screened variant batches into ZSTD-compressed Apache Parquet files using canonical Apache Arrow schemas for direct query execution in DuckDB, Polars, or PyArrow.
 
 ### 3. Pure-Rust Terminal 3D Rasterizer & Live Telemetry Dashboard
@@ -49,9 +50,26 @@ Enables full structural inspection over SSH without X11 forwarding, WebGL browse
 Executes all-atom biophysical calculations in sub-milliseconds:
 - **Non-Covalent Interaction Networks (NCIN):** Evaluates all-atom hydrogen bonds (Baker-Hubbard heavy-atom antecedent criteria across backbone and sidechains), ionic salt bridges ($\le 4.0\text{ \AA}$ between basic cations and acidic anions), $\pi$-$\pi$ aromatic stacking (parallel displaced and T-shaped edge-to-face), and cation-$\pi$ interactions over $O(N)$ spatial bounding-box cell lists.
 - **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
-- **MolProbity Ramachandran Distributions:** Calculates backbone dihedral angles ($\phi, \psi$) and classifies conformations across four residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline).
+- **MolProbity Ramachandran Evaluation:** Backbone $\phi/\psi$ are scored against the six Top8000 percentile contour grids (general, Gly, cis-Pro, trans-Pro, pre-Pro, Ile/Val) converted from cctbx, with MolProbity's Favored ≥ 2 % / Allowed ≥ 0.05–0.2 % thresholds. Labels agree with cctbx `ramalyze` on 100 % of residues across the validation corpus.
+- **Kabsch–Sander DSSP (`proteus-dssp`):** Eight-state secondary structure from backbone H-bond energies (α/3₁₀/π helices, bridges, ladders, bends, turns), a standalone pure-Rust crate validated residue-by-residue against mdtraj.
 - **Heavy-Atom Steric Overlap (MolProbity-style, no hydrogens):** Counts severe heavy-atom overlaps ($> 0.40\text{ \AA}$) per 1,000 atoms using Bondi van der Waals radii, cell-list spatial hashing, and covalent exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges). This is **not** the MolProbity clashscore, which adds hydrogens with Reduce first; it under-counts on deposited structures and is intended as a relative screen for grossly overlapping predicted models.
 - **Kabsch Coordinate Superposition:** Computes optimal rotational alignment and minimum RMSD via Singular Value Decomposition (SVD) on $3 \times 3$ covariance matrices (`nalgebra`).
+
+### 5. Validated Against Reference Implementations
+Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:
+
+| id | fmt | kind | res | Δrg Å | SASA vs mdtraj | SASA vs freesasa | φ/ψ ≤tol | DSSP-8 | DSSP-3 | Rama labels | F/A/O proteus | F/A/O cctbx |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1crn | pdb | xray | 46 | 0.000 | 0.15% | 0.86% | 90/90 | 100.0% | 100.0% | 100.00% | 43/1/0 | 43/1/0 |
+| 1tim | pdb | xray | 494 | 0.000 | 0.06% | 3.42% | 984/984 | 100.0% | 100.0% | 100.00% | 306/123/61 | 306/123/61 |
+| 1ubq | pdb | xray | 76 | 0.000 | 0.05% | 1.40% | 150/150 | 100.0% | 100.0% | 100.00% | 74/0/0 | 74/0/0 |
+| 2kod | pdb | nmr | 176 | 0.000 | 0.00% | 1.06% | 348/348 | 100.0% | 100.0% | 100.00% | 155/8/9 | 155/8/9 |
+| 4hhb | pdb | xray | 574 | 0.000 | 0.07% | 2.03% | 1140/1140 | 100.0% | 100.0% | 100.00% | 505/54/7 | 505/54/7 |
+| 6vxx | cif | cryoem | 2916 | 0.000 | 0.02% | – | 5760/5760 | 97.8% | 100.0% | 100.00% | 2775/69/0 | 2775/69/0 |
+| af-p38398 | cif | afdb | 1863 | 0.000 | 0.01% | – | 3724/3724 | 100.0% | 100.0% | 100.00% | 826/413/622 | 826/413/622 |
+| af-p69905 | cif | afdb | 142 | 0.000 | 0.05% | – | 282/282 | 100.0% | 100.0% | 100.00% | 138/2/0 | 138/2/0 |
+
+Δrg is the absolute Cα radius-of-gyration error in Å; SASA columns are relative errors; φ/ψ counts angles within 0.1°; F/A/O are MolProbity Favored/Allowed/Outlier counts. See `validate/README.md` for what is and is not covered.
 
 ---
 
@@ -69,7 +87,7 @@ The compiled binary will be located at `target/release/proteus`.
 
 ### Verification & Test Suite
 ```bash
-# Run all 48 workspace unit and integration tests
+# Run all 80 workspace unit, integration and doc tests
 cargo test --workspace
 
 # Strict lint check
@@ -147,25 +165,37 @@ Inspect all-atom biophysical metrics for any local PDB structure:
 ```bash
 proteus analyze --pdb structure.pdb
 ```
-Output:
+Output (1CRN, crambin — an X-ray structure, so no pLDDT is reported):
 ```
-┌───────────────────────────────────────┬─────────────────────────────────────────────────┐
-│ Biophysical Metric                    ┆ Value                                           │
-╞═══════════════════════════════════════╪═════════════════════════════════════════════════╡
-│ Radius of Gyration (Rg)               ┆ 9.676 Å                                         │
-│ Contact Density (C-alpha <= 8Å)       ┆ 9.86% (Cα pairs)                                │
-│ Mean pLDDT                            ┆ 82.50 (Confident)                               │
-│ Secondary Structure Composition       ┆ α-Helix: 69.6% | β-Strand: 28.3% | Coil: 2.2%   │
-│ Ramachandran Conformation             ┆ Favored: 95.5% | Allowed: 4.5% | Outliers: 0    │
-│ Solvent Accessible Surface Area       ┆ Total: 2976.6 Å² (Hydrophobic Burial: 92.8%)    │
-│ MolProbity Clashscore (>0.4Å)         ┆ 0.0 (0 severe steric overlaps)                  │
-│ Hydrogen Bonds (H-Bonds)              ┆ 54 total (43 BB-BB, 10 BB-SC, 1 SC-SC)          │
-│ Ionic Salt Bridges (≤4.0Å)            ┆ 1 detected (closest: ARG17:NH2-GLU23:OE2 3.97Å) │
-│ Aromatic π-π Stacking                 ┆ 0 conjugated pairs (0 parallel, 0 T-shaped)     │
-│ Cation-π Interactions                 ┆ 1 active interactions                           │
-│ Non-Covalent Network Density          ┆ 121.7 contacts / 100 res                        │
-│ Candidate Fitness Score               ┆ 84.8 / 100                                      │
-└───────────────────────────────────────┴─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────┬───────────────────────────────────────────────────────────────────┐
+│ Biophysical Metric                       ┆ Value                                                             │
+╞══════════════════════════════════════════╪═══════════════════════════════════════════════════════════════════╡
+│ Radius of Gyration (Rg)                  ┆ 9.676 Å                                                           │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Contact Density (C-alpha <= 8Å)          ┆ 9.86%                                                             │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ pLDDT                                    ┆ n/a (experimental structure; B-factor column is not a confidence) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Secondary Structure Composition          ┆ α-Helix: 47.8% | β-Strand: 8.7% | Coil: 43.5%                     │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Ramachandran Conformation                ┆ Favored: 97.7% | Allowed: 2.3% | Outliers: 0                      │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Solvent Accessible Surface Area          ┆ Total: 2973.4 Å² (Hydrophobic Burial: 92.8%)                      │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Heavy-atom steric overlap (>0.4 Å, no H) ┆ 0.0 per 1k atoms (0 overlaps)                                     │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Hydrogen Bonds (H-Bonds)                 ┆ 54 total (43 BB-BB, 10 BB-SC, 1 SC-SC)                            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Ionic Salt Bridges (≤4.0Å)               ┆ 1 detected (closest: ARG17:NH2-GLU23:OE2 3.97Å)                   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Aromatic π-π Stacking                    ┆ 0 conjugated pairs (0 parallel, 0 T-shaped)                       │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Cation-π Interactions                    ┆ 1 active interactions                                             │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Non-Covalent Network Density             ┆ 121.7 contacts / 100 res                                          │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Candidate Fitness Score                  ┆ 98.2 / 100                                                        │
+└──────────────────────────────────────────┴───────────────────────────────────────────────────────────────────┘
 ```
 
 ### 5. Headless Daemon (`proteus serve`)
