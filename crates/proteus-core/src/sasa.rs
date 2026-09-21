@@ -165,9 +165,18 @@ impl SpatialCellList {
     }
 }
 
-/// Shrake-Rupley Solvent Accessible Surface Area (SASA) numerical calculation.
-/// Uses an O(N) 3D spatial cell-list, a 96-point Fibonacci sphere, and 1.40Å probe radius.
+/// Default number of Fibonacci-sphere test points per atom. 960 matches mdtraj's default and
+/// keeps the total SASA within ~0.3 % of it; 96 is ~10x faster and within ~1–2 %.
+pub const DEFAULT_SPHERE_POINTS: usize = 960;
+
+/// Shrake-Rupley Solvent Accessible Surface Area (SASA) with [`DEFAULT_SPHERE_POINTS`].
 pub fn compute_sasa(atoms: &[AtomDescriptor]) -> SasaMetrics {
+    compute_sasa_with_points(atoms, DEFAULT_SPHERE_POINTS)
+}
+
+/// Shrake-Rupley SASA using an O(N) 3D spatial cell-list, an `n_points` Fibonacci sphere per
+/// atom, Bondi radii and a 1.40 Å probe.
+pub fn compute_sasa_with_points(atoms: &[AtomDescriptor], n_points: usize) -> SasaMetrics {
     if atoms.is_empty() {
         return SasaMetrics {
             total_sasa: 0.0,
@@ -178,7 +187,7 @@ pub fn compute_sasa(atoms: &[AtomDescriptor]) -> SasaMetrics {
     }
 
     let probe_radius = 1.40;
-    let n_points = 96usize;
+    let n_points = n_points.max(12);
     let sphere_points = generate_fibonacci_sphere(n_points);
 
     let n = atoms.len();

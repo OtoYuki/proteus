@@ -25,3 +25,4 @@ openapi = ["dep:utoipa"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+toml = { workspace = true }

@@ -1,0 +1,4 @@
+mdtraj
+freesasa
+numpy
+cctbx-base

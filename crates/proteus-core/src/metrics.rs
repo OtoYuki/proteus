@@ -193,6 +193,9 @@ pub fn analyze_pdb_detailed_with_header(
     reference_pdb: Option<&pdbtbx::PDB>,
     extra_header: Option<&str>,
 ) -> Result<DetailedBiophysicalAnalysis, CoreError> {
+    // All metrics are defined on protein heavy atoms: drop solvent, ions, ligands, hydrogens.
+    let protein = crate::io::protein_heavy_atoms(pdb);
+    let pdb = &protein;
     let mut ca_coords: Vec<Vector3<f64>> = Vec::new();
     let mut plddts: Vec<f64> = Vec::new();
     let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
@@ -206,11 +209,10 @@ pub fn analyze_pdb_detailed_with_header(
     }
     for atom in pdb.atoms() {
         let coord = Vector3::new(atom.x(), atom.y(), atom.z());
-        let elem_symbol = atom
-            .element()
-            .map(|e| e.symbol().to_string())
-            .unwrap_or_else(|| atom.name().trim().chars().next().unwrap_or('C').to_string());
-        all_atoms.push(crate::sasa::AtomDescriptor::new(coord, elem_symbol));
+        all_atoms.push(crate::sasa::AtomDescriptor::new(
+            coord,
+            crate::io::element_symbol(atom),
+        ));
     }
 
     if ca_coords.is_empty() {

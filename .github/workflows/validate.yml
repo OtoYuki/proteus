@@ -1,0 +1,29 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  reference-validation:
+    name: corpus vs mdtraj / freesasa / cctbx
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v5
+      - name: Cache corpus
+        uses: actions/cache@v4
+        with:
+          path: validate/corpus
+          key: corpus-${{ hashFiles('validate/corpus.toml') }}
+      - run: make fetch
+      - run: make validate
+      - name: Upload validation table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-table
+          path: validate/last_run.md

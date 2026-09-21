@@ -1,0 +1,20 @@
+# Contract between Proteus and the reference implementations. Loosen only with a written
+# justification in validate/README.md.
+
+# Cα radius of gyration vs mdtraj, Å (absolute).
+rg_ca_abs = 0.01
+# Total heavy-atom SASA vs mdtraj Shrake–Rupley (960 points/atom), relative.
+sasa_vs_mdtraj_sr_rel = 0.01
+# Total SASA vs FreeSASA Lee–Richards with its default ProtOr radii: a different algorithm
+# *and* a different radius set, so this is an independent sanity check, not a tight bound.
+# Observed 0.2–3.4 % over the corpus (see validate/README.md).
+sasa_vs_freesasa_lr_rel = 0.04
+# Backbone φ/ψ vs mdtraj, degrees (absolute); every angle must be within this.
+phi_psi_abs_deg = 0.1
+# Fraction of residues whose DSSP code agrees with mdtraj.
+dssp3_min_agreement = 0.98
+dssp8_min_agreement = 0.95
+# Fraction of residues whose MolProbity Favored/Allowed/Outlier label agrees with cctbx ramalyze.
+rama_label_min_agreement = 0.995
+# Fraction of Proteus residues whose chain:resseq:icode key exists in the mdtraj residue list.
+min_residue_key_match = 0.98

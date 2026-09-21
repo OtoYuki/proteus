@@ -61,6 +61,26 @@ fn looks_like_cif(text: &str, hint: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// PDB record types that coordinate-based analysis needs. Sequence and annotation records
+/// (SEQRES, SEQADV, DBREF, HELIX, SHEET, SITE, LINK, …) are dropped before parsing: they carry
+/// nothing Proteus uses, and pdbtbx's lexer rejects legitimate deposited files on malformed
+/// ones (e.g. blank sequence numbers in the SEQADV deletion records of 1TIM).
+const COORDINATE_RECORDS: &[&str] = &[
+    "HEADER", "REMARK", "CRYST1", "SCALE", "ORIGX", "MTRIX", "MODEL", "ATOM", "HETATM", "ANISOU",
+    "TER", "ENDMDL", "END", "SSBOND", "CONECT", "MASTER",
+];
+
+fn coordinate_records_only(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if COORDINATE_RECORDS.iter().any(|r| line.starts_with(r)) {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Open a structure file by path. Extension decides the format when recognised
 /// (`.pdb`, `.ent`, `.cif`, `.mmcif`, each optionally `.gz`); otherwise the content is sniffed.
 pub fn open_structure(path: &Path) -> Result<pdbtbx::PDB, CoreError> {
@@ -123,14 +143,19 @@ pub fn load_structure_bytes(
     let result = if is_cif {
         pdbtbx::open_mmcif_raw(text, StrictnessLevel::Loose)
     } else {
+        let coordinates = coordinate_records_only(text);
         pdbtbx::open_pdb_raw(
-            std::io::BufReader::new(bytes),
+            std::io::BufReader::new(coordinates.as_bytes()),
             pdbtbx::Context::None,
             StrictnessLevel::Loose,
         )
     };
-    let (pdb, _warnings) =
+    let (mut pdb, _warnings) =
         result.map_err(|e| parse_err(if is_cif { "mmCIF" } else { "PDB" }, e))?;
+    // NMR ensembles and multi-model files: analyse the first model only, as DSSP/MolProbity do.
+    if pdb.model_count() > 1 {
+        pdb.remove_models_except(&[0]);
+    }
     Ok(LoadedStructure {
         pdb,
         header_preview,
@@ -140,6 +165,40 @@ pub fn load_structure_bytes(
             StructureFormat::Pdb
         },
     })
+}
+
+/// Element symbol of an atom, falling back to the first letter of its name.
+pub fn element_symbol(atom: &pdbtbx::Atom) -> String {
+    atom.element()
+        .map(|e| e.symbol().to_string())
+        .unwrap_or_else(|| atom.name().trim().chars().next().unwrap_or('C').to_string())
+}
+
+/// True when the residue looks like an amino acid: it has a `CA` atom whose element is carbon
+/// (calcium ions are also named `CA`, with element Ca). C-alpha-only traces therefore count;
+/// waters, ions and ligands do not. Modified residues (MSE, SEP, …) pass automatically.
+pub fn is_protein_residue(residue: &pdbtbx::Residue) -> bool {
+    residue
+        .atoms()
+        .any(|a| a.name().trim() == "CA" && element_symbol(a).eq_ignore_ascii_case("C"))
+}
+
+/// A copy of the structure restricted to protein residues, heavy atoms and the first
+/// alternate conformation: what every biophysical metric (SASA, DSSP, Ramachandran,
+/// overlaps, interactions) is defined on. Solvent, ions, ligands and hydrogens are removed.
+pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
+    let mut out = pdb.clone();
+    out.remove_residues_by(|r| !is_protein_residue(r));
+    out.remove_atoms_by(|a| element_symbol(a).eq_ignore_ascii_case("H"));
+    // Alternate conformations: keep the first (highest-occupancy by PDB convention), as
+    // mdtraj, DSSP and MolProbity do. Duplicated altloc atoms would otherwise inflate SASA.
+    for residue in out.residues_mut() {
+        while residue.conformer_count() > 1 {
+            residue.remove_conformer(1);
+        }
+    }
+    out.remove_empty();
+    out
 }
 
 #[cfg(test)]
@@ -196,5 +255,38 @@ END\n";
         std::fs::write(&path, gz).unwrap();
         let pdb = open_structure(&path).unwrap();
         assert_eq!(pdb.residue_count(), 46);
+    }
+
+    #[test]
+    fn multi_model_file_keeps_first_model_only() {
+        let one = std::fs::read_to_string(data("1crn.pdb")).unwrap();
+        let atoms: String = one
+            .lines()
+            .filter(|l| l.starts_with("ATOM") || l.starts_with("HETATM"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let text = format!("MODEL        1\n{atoms}ENDMDL\nMODEL        2\n{atoms}ENDMDL\nEND\n");
+        let pdb = open_structure_bytes(text.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(pdb.model_count(), 1);
+        assert_eq!(pdb.residue_count(), 46);
+    }
+
+    #[test]
+    fn protein_only_drops_waters_ions_and_hydrogens() {
+        let text =
+            "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 10.00           C\n\
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00 10.00           C\n\
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00 10.00           O\n\
+ATOM      5  H   ALA A   1      -0.500   0.800   0.000  1.00 10.00           H\n\
+HETATM    6 CA    CA A 101      10.000  10.000  10.000  1.00 10.00          CA\n\
+HETATM    7  O   HOH A 201      12.000  12.000  12.000  1.00 10.00           O\n\
+END\n";
+        let pdb = open_structure_bytes(text.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(pdb.atom_count(), 7);
+        let p = protein_heavy_atoms(&pdb);
+        assert_eq!(p.residue_count(), 1);
+        assert_eq!(p.atom_count(), 4);
+        assert!(crate::backbone::extract_backbone(&p).len() == 1);
     }
 }

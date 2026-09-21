@@ -1,0 +1,303 @@
+# Validation corpus. `make fetch` downloads into validate/corpus/ (git-ignored).
+# kind: xray | nmr | cryoem | afdb. sha256 is filled in after the first fetch.
+
+[[structure]]
+id = "1crn"
+url = "https://files.rcsb.org/download/1CRN.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "42199a30a0701864a2a5cc76cd7f35cc544cd0e65fbcf63e03c166543249b811"
+
+[[structure]]
+id = "1ubq"
+url = "https://files.rcsb.org/download/1UBQ.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "d4a6812d8951cf6594e6a0763f089e35f5a80b62acb3c117b2c5565228a7b161"
+
+[[structure]]
+id = "2lzm"
+url = "https://files.rcsb.org/download/2LZM.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "a305932376e1e45428c956164117bd3ab1bbc59cdab6b2ae38b7974c0e83ce6f"
+
+[[structure]]
+id = "4hhb"
+url = "https://files.rcsb.org/download/4HHB.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "abf382e0fd84b53bd4c08b373d37c0d7fe9fbe1a9a9c3851b2f5f2fbbe627101"
+
+[[structure]]
+id = "1a3n"
+url = "https://files.rcsb.org/download/1A3N.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "a4db006269e9b6f9db0eb5447a5d40e59d67857484a9294b9ca71d642ffe9861"
+
+[[structure]]
+id = "3ptb"
+url = "https://files.rcsb.org/download/3PTB.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "288f7954d4d013fa8eab3808e1037e2958e2dcd12c9eca65a3f1014404a9f9a2"
+
+[[structure]]
+id = "1tim"
+url = "https://files.rcsb.org/download/1TIM.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "79b35b419696a1e368aad2121ae2712e46444b5978de1e86bdc286f482222cdc"
+
+[[structure]]
+id = "2ptc"
+url = "https://files.rcsb.org/download/2PTC.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "0b3880b05cfba506159267e7e2f3c851b89ea736e9ce822e0c0102d720e26ee9"
+
+[[structure]]
+id = "1brs"
+url = "https://files.rcsb.org/download/1BRS.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "0076aae54252706a8c8c02f7b1e71ce2394b0e928b413590b4ac12aade9e8f6c"
+
+[[structure]]
+id = "1hho"
+url = "https://files.rcsb.org/download/1HHO.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "f2d60a04ac027f55f20295790197fa31b290fe8ddaca6c1287ce373fcb040ed1"
+
+[[structure]]
+id = "1l2y"
+url = "https://files.rcsb.org/download/1L2Y.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "5d1bbb545a312dfff1ae1e64b6d8addecb2f561ddc4011aeb5bee9d1dfcd4438"
+
+[[structure]]
+id = "1aki"
+url = "https://files.rcsb.org/download/1AKI.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "c75d7a689617248cdd92dc6633531d2506fb9bef1e6e21e26c8f579ae6955abb"
+
+[[structure]]
+id = "1bni"
+url = "https://files.rcsb.org/download/1BNI.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "e7a0612d97d3b9f52f2ab6efcaa94b8baa410c37e30107992e4e2564b5385796"
+
+[[structure]]
+id = "2ci2"
+url = "https://files.rcsb.org/download/2CI2.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "8a42f06a0a59074eddf9ac6274962057fc965a1256dce268d96b9d903ba4ae4d"
+
+[[structure]]
+id = "1stn"
+url = "https://files.rcsb.org/download/1STN.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "ef725bf74ca724b4698a4acd4bea5cbe3a6729c25235bc452f5dbf51ea1fa9e5"
+
+[[structure]]
+id = "1mbn"
+url = "https://files.rcsb.org/download/1MBN.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "e4635115be5a605e58f449f82824e15182a7000c3677876c33fc44118defef78"
+
+[[structure]]
+id = "1pgb"
+url = "https://files.rcsb.org/download/1PGB.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "1f7a38180b264722853820aa636f9ff66b458f914061f5a12c1687fd951c2f6d"
+
+[[structure]]
+id = "1gb1"
+url = "https://files.rcsb.org/download/1GB1.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "26ad823df283b7b0ce384fdb9ab12cf103cacd61fceb12780d8843189a93133a"
+
+[[structure]]
+id = "3ssi"
+url = "https://files.rcsb.org/download/3SSI.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "b30ba15057b79b89e0d50f351cc44eb0c0b30b8fe28e355f38ceee16b1655649"
+
+[[structure]]
+id = "1bpi"
+url = "https://files.rcsb.org/download/1BPI.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "2289dd009b6eae05ac142836277e23098e178185df9441e2a3b9c1bed7dd75df"
+
+[[structure]]
+id = "1ubq"
+url = "https://files.rcsb.org/download/1UBQ.cif"
+format = "cif"
+kind = "xray"
+sha256 = "056f98710cb2b36f633c45e41902a02eb446e82871da21ff2dd44f74a56ca0f6"
+
+[[structure]]
+id = "4hhb"
+url = "https://files.rcsb.org/download/4HHB.cif"
+format = "cif"
+kind = "xray"
+sha256 = "2d3ca1bf21ddff35af2e2bc5d331720f7bfc46a16c4829ea3ec1b41062d5f5a6"
+
+[[structure]]
+id = "1tim"
+url = "https://files.rcsb.org/download/1TIM.cif"
+format = "cif"
+kind = "xray"
+sha256 = "ceade3ae0730f20726672a822015722ce52c5b868a1270f2af85eff9bff5b0a1"
+
+[[structure]]
+id = "2ptc"
+url = "https://files.rcsb.org/download/2PTC.cif"
+format = "cif"
+kind = "xray"
+sha256 = "4b663a459fbbcb1052892c1ac2a1278ad8695f446e757133cbda0b780497e2df"
+
+[[structure]]
+id = "1brs"
+url = "https://files.rcsb.org/download/1BRS.cif"
+format = "cif"
+kind = "xray"
+sha256 = "1c98dcc3eac7ccb88657e3ab0f745121d7ddbd2fe11357c65dbaffdd5704f153"
+
+[[structure]]
+id = "1d3z"
+url = "https://files.rcsb.org/download/1D3Z.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "21099cb88231455fdfab4095dddfadcc85cc4213e105cf5f9cfff2ca21993378"
+
+[[structure]]
+id = "2kod"
+url = "https://files.rcsb.org/download/2KOD.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "2c36bdf85ffb90e329bd419c7b33f4f173d2812d00b769338eafce2c67b7d224"
+
+[[structure]]
+id = "1g6j"
+url = "https://files.rcsb.org/download/1G6J.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "2e3a9c76ab8c98f7065f280ff630a534083d6b67588c7af8f2a32a364d8f6188"
+
+[[structure]]
+id = "2l3b"
+url = "https://files.rcsb.org/download/2L3B.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "3ab10b903e59be57eff8dfcc4340c0802e9678739d117528df235ff2858b503f"
+
+[[structure]]
+id = "1lb5"
+url = "https://files.rcsb.org/download/1LB5.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "b11fafd5f0b8269a26f8b7fecbecb5d3ff1b6b6fa8a683bb864fa1e63f1de2a7"
+
+[[structure]]
+id = "6vxx"
+url = "https://files.rcsb.org/download/6VXX.cif"
+format = "cif"
+kind = "cryoem"
+sha256 = "74ceac62dc45e34818f7c6f32fc12690f250ad803b999c1d7399a362ecd86984"
+
+[[structure]]
+id = "6m0j"
+url = "https://files.rcsb.org/download/6M0J.cif"
+format = "cif"
+kind = "cryoem"
+sha256 = "ec1bbd3e64524f4ec91803781fb065bc8bb7559a67b60fcc2bfb5a08dae3cba6"
+
+[[structure]]
+id = "7bv2"
+url = "https://files.rcsb.org/download/7BV2.cif"
+format = "cif"
+kind = "cryoem"
+sha256 = "a544a9446cdb61ab7e243e51d385f038509e5d173c81c3826a4210472a8de5bb"
+
+[[structure]]
+id = "6zge"
+url = "https://files.rcsb.org/download/6ZGE.cif"
+format = "cif"
+kind = "cryoem"
+sha256 = "a82e316791c55d8b48d6de795cafefabc16ae4484d53e77bf8a4c721a15a2ad9"
+
+[[structure]]
+id = "af-p69905"
+url = "https://alphafold.ebi.ac.uk/files/AF-P69905-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "eb7adbdd79775b0d694bacfa4b29872e05f4e56af26af880960d755c3036e230"
+
+[[structure]]
+id = "af-p00698"
+url = "https://alphafold.ebi.ac.uk/files/AF-P00698-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "09a298fac7b7ef96e9c1ea5690811e713021c2e3a89e239ae7218e4cc658a82c"
+
+[[structure]]
+id = "af-q9y6k9"
+url = "https://alphafold.ebi.ac.uk/files/AF-Q9Y6K9-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "e2032e9be33052d38af99ae0c24a1ad68a27846cf2cffaf12d3693e211420eac"
+
+[[structure]]
+id = "af-p04637"
+url = "https://alphafold.ebi.ac.uk/files/AF-P04637-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "4332bff49301d04434b6e3b43c439aa5bd8238760e88c7142f7d0c0851a68e5d"
+
+[[structure]]
+id = "af-p01308"
+url = "https://alphafold.ebi.ac.uk/files/AF-P01308-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "0d71181346ce6d218d681417e849d3cc6f7b04dfd11fa85702b2984da2b81b14"
+
+[[structure]]
+id = "af-p00533"
+url = "https://alphafold.ebi.ac.uk/files/AF-P00533-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "485413c9edb379204b45cae0191e4d44aa136d160da78ccbed69a4678f8e392f"
+
+[[structure]]
+id = "af-p38398"
+url = "https://alphafold.ebi.ac.uk/files/AF-P38398-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "119c411fb688fa36051126df1bd7b9dd228f4cc0c2653fb9791352618007d2eb"
+
+[[structure]]
+id = "af-p42212"
+url = "https://alphafold.ebi.ac.uk/files/AF-P42212-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "20fee8dd4053d5aa1dc43acd68810faccf68b942f41220d375bfa6307daaa6d2"
+
+[[structure]]
+id = "af-p0a7y4"
+url = "https://alphafold.ebi.ac.uk/files/AF-P0A7Y4-F1-model_v6.cif"
+format = "cif"
+kind = "afdb"
+sha256 = "c39af7312ca433369d10219462cc983d48a9402ffc60803577d663dafc6761b8"

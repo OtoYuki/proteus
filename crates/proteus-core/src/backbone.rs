@@ -12,6 +12,8 @@ pub const MAX_PEPTIDE_BOND: f64 = 2.5;
 pub struct BackboneResidue {
     pub chain_id: String,
     pub seq_num: isize,
+    /// PDB insertion code, if any.
+    pub insertion_code: Option<String>,
     /// Three-letter residue name, trimmed and upper-cased.
     pub name: String,
     pub n: Option<Vector3<f64>>,
@@ -43,6 +45,7 @@ pub fn extract_backbone(pdb: &pdbtbx::PDB) -> Vec<BackboneResidue> {
             let mut r = BackboneResidue {
                 chain_id: chain.id().to_string(),
                 seq_num: residue.serial_number(),
+                insertion_code: residue.insertion_code().map(|c| c.trim().to_string()),
                 name: residue
                     .name()
                     .map(|n| n.trim().to_uppercase())

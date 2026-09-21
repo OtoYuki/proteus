@@ -74,5 +74,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 anyhow = "1.0"
 tempfile = "3.17"
+toml = "0.8"
 utoipa = { version = "5.3", features = ["uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
