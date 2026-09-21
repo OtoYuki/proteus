@@ -1,5 +1,6 @@
 //! Core domain models and structural bioinformatics for Proteus.
 
+pub mod backbone;
 pub mod clash;
 pub mod error;
 pub mod interactions;

@@ -196,53 +196,20 @@ pub fn analyze_pdb_detailed(
     let mut plddts: Vec<f64> = Vec::new();
     let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
 
-    struct ResidueBackbone {
-        name: String,
-        n: Option<Vector3<f64>>,
-        ca: Option<Vector3<f64>>,
-        c: Option<Vector3<f64>>,
+    let backbones = crate::backbone::extract_backbone(pdb);
+    for r in &backbones {
+        if let Some(ca) = r.ca {
+            ca_coords.push(ca);
+            plddts.push(r.b_factor);
+        }
     }
-
-    let mut backbones: Vec<ResidueBackbone> = Vec::new();
-
-    for residue in pdb.residues() {
-        let res_name = residue
-            .name()
-            .map(|n| n.trim().to_string())
-            .unwrap_or_default();
-
-        let mut cur_bb = ResidueBackbone {
-            name: res_name,
-            n: None,
-            ca: None,
-            c: None,
-        };
-
-        for atom in residue.atoms() {
-            let coord = Vector3::new(atom.x(), atom.y(), atom.z());
-            let name = atom.name().trim();
-
-            if name == "CA" {
-                ca_coords.push(coord);
-                plddts.push(atom.b_factor());
-                cur_bb.ca = Some(coord);
-            } else if name == "N" {
-                cur_bb.n = Some(coord);
-            } else if name == "C" {
-                cur_bb.c = Some(coord);
-            }
-
-            let elem_symbol = atom
-                .element()
-                .map(|e| e.symbol().to_string())
-                .unwrap_or_else(|| name.chars().next().unwrap_or('C').to_string());
-
-            all_atoms.push(crate::sasa::AtomDescriptor::new(coord, elem_symbol));
-        }
-
-        if cur_bb.ca.is_some() {
-            backbones.push(cur_bb);
-        }
+    for atom in pdb.atoms() {
+        let coord = Vector3::new(atom.x(), atom.y(), atom.z());
+        let elem_symbol = atom
+            .element()
+            .map(|e| e.symbol().to_string())
+            .unwrap_or_else(|| atom.name().trim().chars().next().unwrap_or('C').to_string());
+        all_atoms.push(crate::sasa::AtomDescriptor::new(coord, elem_symbol));
     }
 
     if ca_coords.is_empty() {
@@ -290,49 +257,26 @@ pub fn analyze_pdb_detailed(
     let mut ramachandran_points = Vec::new();
     let n_res = backbones.len();
     for i in 0..n_res {
-        let next_name = if i + 1 < n_res {
+        let phi = if i > 0 {
+            crate::backbone::phi(&backbones[i - 1], &backbones[i])
+        } else {
+            None
+        };
+        let psi = if i + 1 < n_res {
+            crate::backbone::psi(&backbones[i], &backbones[i + 1])
+        } else {
+            None
+        };
+        let next_name = if i + 1 < n_res && !backbones[i + 1].chain_break_before {
             Some(backbones[i + 1].name.as_str())
         } else {
             None
         };
         let context = crate::structure::ResidueContext::from_names(&backbones[i].name, next_name);
-
-        let phi = if i > 0 {
-            if let (Some(prev_c), Some(cur_n), Some(cur_ca), Some(cur_c)) = (
-                backbones[i - 1].c,
-                backbones[i].n,
-                backbones[i].ca,
-                backbones[i].c,
-            ) {
-                crate::structure::compute_dihedral(&prev_c, &cur_n, &cur_ca, &cur_c).ok()
-            } else {
-                None
-            }
-        } else {
-            None
+        let region = match (phi, psi) {
+            (Some(p), Some(s)) => crate::structure::classify_ramachandran_context(p, s, context),
+            _ => crate::structure::RamachandranRegion::Outlier,
         };
-
-        let psi = if i + 1 < n_res {
-            if let (Some(cur_n), Some(cur_ca), Some(cur_c), Some(next_n)) = (
-                backbones[i].n,
-                backbones[i].ca,
-                backbones[i].c,
-                backbones[i + 1].n,
-            ) {
-                crate::structure::compute_dihedral(&cur_n, &cur_ca, &cur_c, &next_n).ok()
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        let region = if let (Some(p_val), Some(s_val)) = (phi, psi) {
-            crate::structure::classify_ramachandran_context(p_val, s_val, context)
-        } else {
-            crate::structure::RamachandranRegion::Outlier
-        };
-
         ramachandran_points.push((phi, psi, region));
         phi_psi_context.push((phi, psi, context));
     }
