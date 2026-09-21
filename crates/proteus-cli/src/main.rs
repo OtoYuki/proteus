@@ -551,12 +551,12 @@ async fn main() -> Result<()> {
                 ]);
             }
 
-            if let Some(ref clash) = metrics.clash_stats {
+            if let Some(ref clash) = metrics.steric_overlap {
                 table.add_row(vec![
-                    Cell::new("MolProbity Clashscore (>0.4Å)"),
+                    Cell::new("Heavy-atom steric overlap (>0.4 Å, no H)"),
                     Cell::new(format!(
-                        "{:.1} ({} severe steric overlaps)",
-                        clash.clashscore, clash.clash_count
+                        "{:.1} per 1k atoms ({} overlaps)",
+                        clash.heavy_atom_overlap_score, clash.clash_count
                     )),
                 ]);
             }
@@ -1005,7 +1005,7 @@ async fn main() -> Result<()> {
                 coil_pct: f64,
                 favored_rama: f64,
                 rama_outliers: usize,
-                clashscore: f64,
+                heavy_atom_overlap_score: f64,
                 hbond_count: usize,
                 salt_bridge_count: usize,
                 pi_stacking_count: usize,
@@ -1038,8 +1038,10 @@ async fn main() -> Result<()> {
                                 metrics.ramachandran_stats.as_ref().map_or((0.0, 0), |r| {
                                     (r.favored_fraction * 100.0, r.outlier_count)
                                 });
-                            let clashscore =
-                                metrics.clash_stats.as_ref().map_or(0.0, |c| c.clashscore);
+                            let heavy_atom_overlap_score = metrics
+                                .steric_overlap
+                                .as_ref()
+                                .map_or(0.0, |c| c.heavy_atom_overlap_score);
                             let (
                                 hbond_count,
                                 salt_bridge_count,
@@ -1070,7 +1072,7 @@ async fn main() -> Result<()> {
                                 coil_pct: coil,
                                 favored_rama,
                                 rama_outliers,
-                                clashscore,
+                                heavy_atom_overlap_score,
                                 hbond_count,
                                 salt_bridge_count,
                                 pi_stacking_count,
@@ -1117,7 +1119,7 @@ async fn main() -> Result<()> {
                     Cell::new(format!("{:.2}", c.plddt)),
                     Cell::new(format!("{:.2}", c.rg)),
                     Cell::new(format!("{:.1}%", c.hydrophobic_burial)),
-                    Cell::new(format!("{:.1}", c.clashscore)),
+                    Cell::new(format!("{:.1}", c.heavy_atom_overlap_score)),
                     Cell::new(c.hbond_count),
                     Cell::new(format!(
                         "{}/{}",
@@ -1154,7 +1156,7 @@ async fn main() -> Result<()> {
                         coil_pct: c.coil_pct,
                         favored_ramachandran_pct: c.favored_rama,
                         rama_outliers: c.rama_outliers,
-                        clashscore: c.clashscore,
+                        heavy_atom_overlap_score: c.heavy_atom_overlap_score,
                         hbond_count: c.hbond_count,
                         salt_bridge_count: c.salt_bridge_count,
                         pi_stacking_count: c.pi_stacking_count,

@@ -46,7 +46,7 @@ use uuid::Uuid;
             proteus_core::structure::SecondaryStructureSummary,
             proteus_core::structure::SecondaryStructure,
             proteus_core::structure::RamachandranStats,
-            proteus_core::clash::ClashStats,
+            proteus_core::clash::StericOverlapStats,
             proteus_core::clash::StericClash,
             proteus_core::sasa::SasaMetrics,
             proteus_core::interactions::InteractionNetwork,

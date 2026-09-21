@@ -22,4 +22,5 @@ arrow-array = { workspace = true }
 blake3 = { workspace = true }
 
 [dev-dependencies]
+bytes = "1"
 tempfile = { workspace = true }

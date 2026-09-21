@@ -16,14 +16,20 @@ pub struct StericClash {
     pub overlap: f64,
 }
 
-/// Summary of crystallographic steric clashes per the MolProbity standard.
+/// Heavy-atom steric overlap statistics.
+///
+/// **Not** the MolProbity clashscore: MolProbity adds hydrogens (Reduce) before counting
+/// ≥ 0.4 Å overlaps of the H-inclusive van der Waals envelope; this metric uses heavy atoms
+/// only and therefore under-counts on essentially every deposited structure. It is useful as a
+/// relative screen for grossly overlapping predicted models, not as a MolProbity-comparable
+/// number.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub struct ClashStats {
-    /// Total number of severe steric overlaps (> 0.40 Å).
+pub struct StericOverlapStats {
+    /// Total number of severe heavy-atom overlaps (> 0.40 Å).
     pub clash_count: usize,
-    /// MolProbity clashscore: number of serious overlaps per 1,000 evaluated atoms.
-    pub clashscore: f64,
+    /// Overlaps per 1,000 heavy atoms evaluated (MolProbity-style normalisation, no hydrogens).
+    pub heavy_atom_overlap_score: f64,
     /// Maximum overlap distance in angstroms.
     pub worst_overlap: f64,
     /// Total number of heavy atoms evaluated.
@@ -75,7 +81,7 @@ struct ClashAtom {
 /// Evaluates all-atom steric clashes in a PDB structure using an O(N) spatial grid.
 /// An overlap is classified as a severe clash if:
 /// `overlap = r_vdw(A) + r_vdw(B) - distance > 0.40 Å`
-pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
+pub fn compute_steric_overlap(pdb: &pdbtbx::PDB) -> StericOverlapStats {
     let mut atoms: Vec<ClashAtom> = Vec::new();
     let mut global_res_idx = 0;
 
@@ -95,7 +101,7 @@ pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
                     .map(|e| e.symbol().to_string())
                     .unwrap_or_else(|| atom_name.chars().next().unwrap_or('C').to_string());
 
-                // Exclude explicit hydrogens if present to match standard heavy-atom clashscore
+                // Exclude explicit hydrogens if present to match standard heavy-atom heavy_atom_overlap_score
                 if elem_symbol.eq_ignore_ascii_case("H") {
                     continue;
                 }
@@ -121,9 +127,9 @@ pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
 
     let total_atoms = atoms.len();
     if total_atoms < 2 {
-        return ClashStats {
+        return StericOverlapStats {
             clash_count: 0,
-            clashscore: 0.0,
+            heavy_atom_overlap_score: 0.0,
             worst_overlap: 0.0,
             total_atoms_evaluated: total_atoms,
             clashes: Vec::new(),
@@ -232,15 +238,15 @@ pub fn compute_clash_stats(pdb: &pdbtbx::PDB) -> ClashStats {
     }
 
     let clash_count = clashes.len();
-    let clashscore = if total_atoms > 0 {
+    let heavy_atom_overlap_score = if total_atoms > 0 {
         (clash_count as f64 * 1000.0) / (total_atoms as f64)
     } else {
         0.0
     };
 
-    ClashStats {
+    StericOverlapStats {
         clash_count,
-        clashscore,
+        heavy_atom_overlap_score,
         worst_overlap,
         total_atoms_evaluated: total_atoms,
         clashes,
@@ -270,9 +276,9 @@ mod tests {
         )
         .expect("Failed to parse Crambin PDB");
 
-        let stats = compute_clash_stats(&pdb);
+        let stats = compute_steric_overlap(&pdb);
         assert_eq!(stats.clash_count, 0);
-        assert_eq!(stats.clashscore, 0.0);
+        assert_eq!(stats.heavy_atom_overlap_score, 0.0);
         assert!(stats.total_atoms_evaluated > 300);
     }
 }

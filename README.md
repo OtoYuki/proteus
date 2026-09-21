@@ -2,7 +2,7 @@
 
 High-throughput bio-compute orchestration engine and terminal biophysics workbench written in Rust.
 
-Proteus automates the synthetic protein engineering design loop: sequence mutagenesis, multi-tiered structural prediction (ESMFold, Boltz-1, ColabFold), OCI/Podman container scheduling, pure-Rust all-atom biophysical validation (SASA, Ramachandran distributions, MolProbity clashscore), software 3D terminal rasterization, and Apache Parquet data lake exports.
+Proteus automates the synthetic protein engineering design loop: sequence mutagenesis, multi-tiered structural prediction (ESMFold, Boltz-1, ColabFold), OCI/Podman container scheduling, pure-Rust all-atom biophysical validation (SASA, DSSP, MolProbity Ramachandran, heavy-atom steric overlap), software 3D terminal rasterization, and Apache Parquet data lake exports.
 
 ---
 
@@ -50,7 +50,7 @@ Executes all-atom biophysical calculations in sub-milliseconds:
 - **Non-Covalent Interaction Networks (NCIN):** Evaluates all-atom hydrogen bonds (Baker-Hubbard heavy-atom antecedent criteria across backbone and sidechains), ionic salt bridges ($\le 4.0\text{ \AA}$ between basic cations and acidic anions), $\pi$-$\pi$ aromatic stacking (parallel displaced and T-shaped edge-to-face), and cation-$\pi$ interactions over $O(N)$ spatial bounding-box cell lists.
 - **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
 - **MolProbity Ramachandran Distributions:** Calculates backbone dihedral angles ($\phi, \psi$) and classifies conformations across four residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline).
-- **MolProbity Steric Clashscore:** Evaluates severe steric overlaps ($> 0.40\text{ \AA}$) per 1,000 heavy atoms using Bondi van der Waals radii, cell-list spatial hashing, and crystallographic exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges).
+- **Heavy-Atom Steric Overlap (MolProbity-style, no hydrogens):** Counts severe heavy-atom overlaps ($> 0.40\text{ \AA}$) per 1,000 atoms using Bondi van der Waals radii, cell-list spatial hashing, and covalent exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges). This is **not** the MolProbity clashscore, which adds hydrogens with Reduce first; it under-counts on deposited structures and is intended as a relative screen for grossly overlapping predicted models.
 - **Kabsch Coordinate Superposition:** Computes optimal rotational alignment and minimum RMSD via Singular Value Decomposition (SVD) on $3 \times 3$ covariance matrices (`nalgebra`).
 
 ---
@@ -192,8 +192,8 @@ For centered coordinate matrices $P, Q \in \mathbb{R}^{N \times 3}$:
 4. Compute aligned root-mean-square deviation:
    $$\text{RMSD} = \sqrt{\frac{1}{N}\sum_{i=1}^N \|R \mathbf{p}_i - \mathbf{q}_i\|^2}$$
 
-### MolProbity All-Atom Clashscore
-$$\text{Clashscore} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\text{ \AA}\right)}{N_{\text{atoms}}} \times 1000$$
+### Heavy-Atom Steric Overlap Score (MolProbity-style, no hydrogens)
+$$\text{Overlap}_{1k} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\text{ \AA}\right)}{N_{\text{atoms}}} \times 1000$$
 Subject to topological exclusions:
 - Atoms within the same residue ($res_i = res_j$).
 - Backbone peptide linkages and proline pyrrolidine ring geometry ($|res_i - res_j| = 1$ within the same chain).

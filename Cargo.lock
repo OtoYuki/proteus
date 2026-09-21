@@ -2423,6 +2423,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "blake3",
+ "bytes",
  "chrono",
  "parquet",
  "proteus-core",

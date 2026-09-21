@@ -81,9 +81,9 @@ pub fn evaluate_candidate_fitness(
     };
 
     // 6. MolProbity Steric Clash Penalty
-    // Normal protein crystal structures have clashscore < 5. Clashes > 15 incur penalty.
-    let clash_penalty = if let Some(ref clash) = metrics.clash_stats {
-        (clash.clashscore * 0.5).min(20.0)
+    // Normal protein crystal structures have heavy_atom_overlap_score < 5. Clashes > 15 incur penalty.
+    let clash_penalty = if let Some(ref clash) = metrics.steric_overlap {
+        (clash.heavy_atom_overlap_score * 0.5).min(20.0)
     } else {
         0.0
     };
@@ -147,7 +147,7 @@ mod tests {
             confidence_source: Default::default(),
             secondary_structure_summary: None,
             ramachandran_stats: None,
-            clash_stats: None,
+            steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
             candidate_fitness_score: None,
@@ -179,7 +179,7 @@ mod tests {
             confidence_source: crate::confidence::ConfidenceSource::Predicted,
             secondary_structure_summary: None,
             ramachandran_stats: None,
-            clash_stats: None,
+            steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
             candidate_fitness_score: None,

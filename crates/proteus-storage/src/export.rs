@@ -3,6 +3,7 @@ use arrow_array::{ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -11,6 +12,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// High-density biophysical record for a screening candidate variant.
+/// Version of the screening export schema (CSV/JSON columns, Parquet fields).
+/// 2: `clashscore` renamed to `heavy_atom_overlap_score`.
+pub const EXPORT_SCHEMA_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreeningRecord {
     pub rank: usize,
@@ -25,7 +30,7 @@ pub struct ScreeningRecord {
     pub coil_pct: f64,
     pub favored_ramachandran_pct: f64,
     pub rama_outliers: usize,
-    pub clashscore: f64,
+    pub heavy_atom_overlap_score: f64,
     pub hbond_count: usize,
     pub salt_bridge_count: usize,
     pub pi_stacking_count: usize,
@@ -36,7 +41,7 @@ pub struct ScreeningRecord {
 /// Serializes candidate screening records to standard RFC-4180 CSV format.
 pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
     let mut out = String::new();
-    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,clashscore,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness\n");
+    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,heavy_atom_overlap_score,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness\n");
 
     for r in records {
         // Escape quotes in header if needed
@@ -60,7 +65,7 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
             r.coil_pct,
             r.favored_ramachandran_pct,
             r.rama_outliers,
-            r.clashscore,
+            r.heavy_atom_overlap_score,
             r.hbond_count,
             r.salt_bridge_count,
             r.pi_stacking_count,
@@ -92,7 +97,7 @@ pub fn screening_record_schema() -> Schema {
         Field::new("coil_pct", DataType::Float64, false),
         Field::new("favored_ramachandran_pct", DataType::Float64, false),
         Field::new("rama_outliers", DataType::Int64, false),
-        Field::new("clashscore", DataType::Float64, false),
+        Field::new("heavy_atom_overlap_score", DataType::Float64, false),
         Field::new("hbond_count", DataType::Int64, false),
         Field::new("salt_bridge_count", DataType::Int64, false),
         Field::new("pi_stacking_count", DataType::Int64, false),
@@ -125,7 +130,10 @@ pub fn records_to_record_batch(
         .map(|r| Some(r.favored_ramachandran_pct))
         .collect();
     let rama_outliers: Int64Array = records.iter().map(|r| r.rama_outliers as i64).collect();
-    let clashscores: Float64Array = records.iter().map(|r| Some(r.clashscore)).collect();
+    let overlap_scores: Float64Array = records
+        .iter()
+        .map(|r| Some(r.heavy_atom_overlap_score))
+        .collect();
     let hbonds: Int64Array = records.iter().map(|r| r.hbond_count as i64).collect();
     let salt_bridges: Int64Array = records.iter().map(|r| r.salt_bridge_count as i64).collect();
     let pi_stacks: Int64Array = records.iter().map(|r| r.pi_stacking_count as i64).collect();
@@ -145,7 +153,7 @@ pub fn records_to_record_batch(
         Arc::new(coil_pcts),
         Arc::new(favored_ramas),
         Arc::new(rama_outliers),
-        Arc::new(clashscores),
+        Arc::new(overlap_scores),
         Arc::new(hbonds),
         Arc::new(salt_bridges),
         Arc::new(pi_stacks),
@@ -166,6 +174,10 @@ pub fn export_records_to_parquet<W: Write + Send>(
 
     let props = WriterProperties::builder()
         .set_compression(Compression::ZSTD(Default::default()))
+        .set_key_value_metadata(Some(vec![KeyValue::new(
+            "proteus.schema_version".to_string(),
+            EXPORT_SCHEMA_VERSION.to_string(),
+        )]))
         .build();
 
     let mut arrow_writer = ArrowWriter::try_new(writer, schema, Some(props))?;
@@ -233,7 +245,7 @@ mod tests {
             coil_pct: 40.0,
             favored_ramachandran_pct: 95.5,
             rama_outliers: 0,
-            clashscore: 1.25,
+            heavy_atom_overlap_score: 1.25,
             hbond_count: 28,
             salt_bridge_count: 1,
             pi_stacking_count: 2,
@@ -253,7 +265,8 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 3); // Header + 2 rows
         assert!(lines[0].starts_with("rank,job_id,header"));
-        assert!(lines[0].contains("clashscore"));
+        assert!(lines[0].contains("heavy_atom_overlap_score"));
+        assert!(!lines[0].contains("clashscore"));
         assert!(lines[1].starts_with("1,"));
         assert!(lines[2].contains("\"crambin, mutated\""));
     }
@@ -264,7 +277,7 @@ mod tests {
         let json = export_records_to_json(&records).unwrap();
         assert!(json.contains("crambin_WT"));
         assert!(json.contains("hydrophobic_burial_pct"));
-        assert!(json.contains("clashscore"));
+        assert!(json.contains("heavy_atom_overlap_score"));
     }
 
     #[tokio::test]
@@ -332,5 +345,35 @@ mod tests {
             .await
             .unwrap();
         assert!(nested_path.exists());
+    }
+
+    #[test]
+    fn parquet_carries_schema_version_metadata() {
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        let records = vec![sample_record(1, "crambin_WT")];
+        let mut buf: Vec<u8> = Vec::new();
+        export_records_to_parquet(&records, &mut buf).unwrap();
+        let reader = SerializedFileReader::new(bytes::Bytes::from(buf)).unwrap();
+        let kv = reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .cloned()
+            .unwrap_or_default();
+        let version = kv
+            .iter()
+            .find(|k| k.key == "proteus.schema_version")
+            .and_then(|k| k.value.clone());
+        assert_eq!(version.as_deref(), Some("2"));
+        let names: Vec<String> = reader
+            .metadata()
+            .file_metadata()
+            .schema_descr()
+            .columns()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
+        assert!(names.iter().any(|n| n == "heavy_atom_overlap_score"));
+        assert!(!names.iter().any(|n| n == "clashscore"));
     }
 }

@@ -1,4 +1,4 @@
-use crate::clash::ClashStats;
+use crate::clash::StericOverlapStats;
 use crate::sasa::SasaMetrics;
 use crate::structure::{RamachandranStats, SecondaryStructureSummary};
 use chrono::{DateTime, Utc};
@@ -87,7 +87,9 @@ pub struct BiophysicalMetrics {
     pub confidence_source: crate::confidence::ConfidenceSource,
     pub secondary_structure_summary: Option<SecondaryStructureSummary>,
     pub ramachandran_stats: Option<RamachandranStats>,
-    pub clash_stats: Option<ClashStats>,
+    /// Heavy-atom steric overlaps (not a MolProbity clashscore; see `clash::StericOverlapStats`).
+    #[serde(alias = "clash_stats")]
+    pub steric_overlap: Option<StericOverlapStats>,
     pub sasa_metrics: Option<SasaMetrics>,
     pub interaction_network: Option<crate::interactions::InteractionNetwork>,
     pub candidate_fitness_score: Option<f64>,

@@ -412,18 +412,18 @@ impl DashboardRenderer {
                 row_count += 1;
             }
 
-            if let Some(ref clash) = m.clash_stats {
+            if let Some(ref clash) = m.steric_overlap {
                 if row_count < max_rows {
-                    let score_color = if clash.clashscore < 5.0 {
+                    let score_color = if clash.heavy_atom_overlap_score < 5.0 {
                         "\x1b[1;32m"
-                    } else if clash.clashscore < 15.0 {
+                    } else if clash.heavy_atom_overlap_score < 15.0 {
                         "\x1b[1;33m"
                     } else {
                         "\x1b[1;31m"
                     };
                     lines.push(format!(
-                        " Clashscore (>0.4Å)     : {score_color}{:.1}\x1b[0m ({} overlaps)",
-                        clash.clashscore, clash.clash_count
+                        " Overlap/1k (no H)      : {score_color}{:.1}\x1b[0m ({} overlaps)",
+                        clash.heavy_atom_overlap_score, clash.clash_count
                     ));
                     row_count += 1;
                 }
@@ -489,7 +489,7 @@ mod tests {
                     outlier_count: 0,
                     total_evaluated: 44,
                 }),
-                clash_stats: None,
+                steric_overlap: None,
                 sasa_metrics: None,
                 interaction_network: None,
                 candidate_fitness_score: Some(87.4),
