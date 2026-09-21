@@ -154,7 +154,7 @@ Render high-fidelity terminal snapshots to stdout for scripting and CI logs:
 proteus view structure.pdb --backend braille --width 80 --height 36
 
 # Full-color ANSI half-block rendering
-proteus view structure.pdb --backend halfblock --color sst --width 80 --height 36
+proteus view structure.pdb --backend halfblock --color ss --width 80 --height 36
 
 # Native Kitty graphics protocol (kitty, wezterm, ghostty)
 proteus view structure.pdb --backend kitty --width 100 --height 40

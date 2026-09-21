@@ -278,8 +278,17 @@ impl DashboardRenderer {
     }
 
     fn render_plddt_section(&self, data: &DashboardData, width: usize, lines: &mut Vec<String>) {
-        let title = " pLDDT Confidence Profile ";
-        let bar_len = width.saturating_sub(title.len() + 2);
+        let predicted = data
+            .metrics
+            .as_ref()
+            .map(|m| m.plddt().is_some())
+            .unwrap_or(true);
+        let title = if predicted {
+            " pLDDT Confidence Profile "
+        } else {
+            " B-factor Profile (experimental; no pLDDT) "
+        };
+        let bar_len = width.saturating_sub(title.chars().count() + 2);
         lines.push(format!(
             "\x1b[1;34m├─{}\x1b[0m\x1b[38;5;240m{:─<w$}┤\x1b[0m",
             title,
@@ -287,13 +296,19 @@ impl DashboardRenderer {
             w = bar_len
         ));
 
-        if let Some(plddt_dist) = data.metrics.as_ref().map(|m| &m.plddt_distribution) {
-            lines.push(format!(
-                " Mean: \x1b[1m{:.1}\x1b[0m │ Med: \x1b[1m{:.1}\x1b[0m │ ≥70: \x1b[32m{:.1}%\x1b[0m",
-                plddt_dist.mean,
-                plddt_dist.median,
-                plddt_dist.high_confidence_fraction * 100.0
-            ));
+        if let Some(m) = data.metrics.as_ref() {
+            match m.plddt() {
+                Some(plddt_dist) => lines.push(format!(
+                    " Mean: \x1b[1m{:.1}\x1b[0m │ Med: \x1b[1m{:.1}\x1b[0m │ ≥70: \x1b[32m{:.1}%\x1b[0m",
+                    plddt_dist.mean,
+                    plddt_dist.median,
+                    plddt_dist.high_confidence_fraction * 100.0
+                )),
+                None => lines.push(format!(
+                    " Mean B: \x1b[1m{:.1} Å²\x1b[0m │ Med: \x1b[1m{:.1}\x1b[0m │ \x1b[38;5;242mnot a confidence\x1b[0m",
+                    m.plddt_distribution.mean, m.plddt_distribution.median
+                )),
+            }
         }
 
         // Resampled per-residue pLDDT bar
@@ -314,8 +329,18 @@ impl DashboardRenderer {
                     70.0
                 };
 
-                // Color code: Very High (Blue), High (Cyan), Low (Yellow), Very Low (Orange/Red)
-                let block_color = if avg >= 90.0 {
+                // Color code: Very High (Blue), High (Cyan), Low (Yellow), Very Low (Orange/Red).
+                // Experimental B-factors: a neutral grey ramp scaled to the structure's own range.
+                let block_color = if !predicted {
+                    let (lo, hi) = data
+                        .plddts
+                        .iter()
+                        .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                    let t = if hi > lo { (avg - lo) / (hi - lo) } else { 0.5 };
+                    let g = 90 + (t * 140.0) as u8;
+                    let _ = write!(bar_str, "\x1b[38;2;{g};{g};{g}m█\x1b[0m");
+                    continue;
+                } else if avg >= 90.0 {
                     "\x1b[38;2;30;64;175m" // Deep Blue
                 } else if avg >= 70.0 {
                     "\x1b[38;2;56;189;248m" // Cyan

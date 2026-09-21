@@ -324,8 +324,12 @@ fn dirs_next_or_home() -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // RUST_LOG wins when set (e.g. RUST_LOG=off for clean demo output); default is info.
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();
@@ -1106,7 +1110,7 @@ async fn main() -> Result<()> {
                 "pLDDT",
                 "Rg (Å)",
                 "Core Burial",
-                "Clash",
+                "Overlap/1k",
                 "H-Bonds",
                 "Salt/π",
                 "Fitness / 100",
