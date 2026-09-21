@@ -67,7 +67,20 @@ pub fn interpolate_catmull_rom(points: &[Vector3<f64>], subdivisions: usize) -> 
             let dt = 1e-4 * (t2 - t1);
             let pos_fwd = eval_barry_goldman(pts, ts, t + dt);
             let pos_bwd = eval_barry_goldman(pts, ts, t - dt);
-            let tangent = (pos_fwd - pos_bwd).normalize();
+            let delta = pos_fwd - pos_bwd;
+            // With fully coincident control points the central difference vanishes and
+            // `normalize()` yields NaN, which would poison the frames, the mesh and every
+            // vertex downstream. The knot-spacing clamp above keeps realistic structures off
+            // this path — a PDB with one duplicated C-alpha still renders — but the function is
+            // public API, so carry the previous tangent rather than emit NaN.
+            let tangent = if delta.norm() > 1e-12 {
+                delta.normalize()
+            } else {
+                result
+                    .last()
+                    .map(|prev: &SplinePoint| prev.tangent)
+                    .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0))
+            };
 
             result.push(SplinePoint {
                 position: pos,
@@ -116,5 +129,91 @@ mod tests {
         assert!((curve.first().unwrap().position - pts[0]).norm() < 1e-3);
         // Last point should match pts[3] closely
         assert!((curve.last().unwrap().position - pts[3]).norm() < 1e-3);
+    }
+
+    /// Catmull–Rom is *interpolating*: the curve must pass through every control point, not
+    /// just the two ends. A wrong tangent scale or an off-by-one in the knot windows shows up
+    /// here and nowhere else.
+    #[test]
+    fn spline_passes_through_every_control_point() {
+        let pts = vec![
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 2.0, -1.0),
+            Vector3::new(2.0, 0.0, 1.5),
+            Vector3::new(3.5, 2.0, 0.0),
+            Vector3::new(5.0, -1.0, 2.0),
+        ];
+        let curve = interpolate_catmull_rom(&pts, 8);
+        for (i, p) in pts.iter().enumerate() {
+            let closest = curve
+                .iter()
+                .map(|c| (c.position - p).norm())
+                .fold(f64::MAX, f64::min);
+            assert!(
+                closest < 1e-6,
+                "control point {i} is {closest} from the curve"
+            );
+        }
+    }
+
+    /// Tangents must be unit length and point along the direction of travel, or the Bishop
+    /// frames built from them are meaningless.
+    #[test]
+    fn tangents_are_unit_and_forward_facing() {
+        let pts: Vec<Vector3<f64>> = (0..6)
+            .map(|i| Vector3::new(i as f64, (i as f64 * 0.7).sin(), (i as f64 * 0.3).cos()))
+            .collect();
+        let curve = interpolate_catmull_rom(&pts, 6);
+        for (i, sp) in curve.iter().enumerate() {
+            assert!(
+                (sp.tangent.norm() - 1.0).abs() < 1e-6,
+                "tangent {i} has length {}",
+                sp.tangent.norm()
+            );
+            if i + 1 < curve.len() {
+                let step = curve[i + 1].position - sp.position;
+                if step.norm() > 1e-9 {
+                    assert!(
+                        sp.tangent.dot(&step.normalize()) > 0.5,
+                        "tangent {i} points away from the next sample"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Sample density and monotone progress: a spline over N control points with S subdivisions
+    /// must produce strictly advancing samples, never a duplicate or a reversal.
+    #[test]
+    fn samples_advance_monotonically() {
+        let pts: Vec<Vector3<f64>> = (0..5)
+            .map(|i| Vector3::new(i as f64 * 3.8, 0.0, 0.0))
+            .collect();
+        let curve = interpolate_catmull_rom(&pts, 4);
+        assert!(
+            curve.len() >= pts.len(),
+            "curve is coarser than its control polygon"
+        );
+        for w in curve.windows(2) {
+            assert!(
+                w[1].position.x > w[0].position.x - 1e-9,
+                "sample went backwards: {} then {}",
+                w[0].position.x,
+                w[1].position.x
+            );
+        }
+        assert!(curve.iter().all(|c| c.residue_index < pts.len()));
+    }
+
+    #[test]
+    fn degenerate_inputs_do_not_panic() {
+        assert!(interpolate_catmull_rom(&[], 4).is_empty());
+        assert_eq!(interpolate_catmull_rom(&[Vector3::zeros()], 4).len(), 1);
+        // Coincident control points: zero-length segments must not produce NaN tangents.
+        let same = vec![Vector3::new(1.0, 1.0, 1.0); 4];
+        let curve = interpolate_catmull_rom(&same, 4);
+        assert!(curve
+            .iter()
+            .all(|c| c.tangent.iter().all(|v| v.is_finite())));
     }
 }
