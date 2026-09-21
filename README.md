@@ -1,8 +1,44 @@
 # proteus
 
-High-throughput bio-compute orchestration engine and terminal biophysics workbench written in Rust.
+[![ci](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml)
+[![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
+[![release](https://img.shields.io/github/v/release/OtoYuki/proteus?include_prereleases)](https://github.com/OtoYuki/proteus/releases)
+[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue)](Cargo.toml)
+[![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
 
-Proteus automates the synthetic protein engineering design loop: sequence mutagenesis, multi-tiered structural prediction (ESMFold, Boltz-1, ColabFold), OCI/Podman container scheduling, pure-Rust all-atom biophysical validation (SASA, DSSP, MolProbity Ramachandran, heavy-atom steric overlap), software 3D terminal rasterization, and Apache Parquet data lake exports.
+High-throughput bio-compute orchestration engine and terminal biophysics workbench, in Rust.
+
+![proteus demo: analyze, interactive dashboard, pLDDT provenance, validation table](docs/media/demo.gif)
+
+Proteus runs the protein-engineering design loop end to end — sequence mutagenesis → structure
+prediction (ESMFold API, Boltz/ColabFold containers via Podman/Docker, GA4GH TES v1.1) → all-atom
+biophysical validation → ranking → Apache Parquet — and lets you look at the result in the terminal
+you are already SSH'd into. The biophysics is pure Rust and **checked against mdtraj, FreeSASA and
+cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not asserted.
+
+| what | how it is checked |
+|---|---|
+| φ/ψ, Cα radius of gyration, Kabsch RMSD | mdtraj, every angle within 0.1° |
+| Kabsch–Sander DSSP (`proteus-dssp`, standalone crate) | mdtraj, ≥ 98 % per-residue |
+| MolProbity Ramachandran (Top8000 contours from cctbx) | cctbx `ramalyze`, 100 % label agreement |
+| Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj ≤ 1 %, FreeSASA ≤ 4 % (L&R, ProtOr radii) |
+| heavy-atom steric overlap, H-bond / salt-bridge / π network | Proteus-defined; labelled as such |
+
+**Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
+SASA 2.5–4.3× faster than mdtraj's C++ kernel at equal point count and ~35× faster than
+Biopython; DSSP 1.2–14× vs mdtraj; φ/ψ + Ramachandran 33–167× vs mdtraj φ/ψ. 6VXX
+(22 812 atoms) full profile: 0.63 s.
+
+## Install
+
+```bash
+# release binaries (Linux x86_64/aarch64, macOS x86_64/arm64)
+curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
+# from source (Rust 1.88+)
+cargo install --git https://github.com/OtoYuki/proteus proteus-cli
+# container
+podman run --rm -v "$PWD:/w" ghcr.io/otoyuki/proteus analyze --pdb /w/structure.pdb
+```
 
 ---
 
@@ -95,6 +131,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Code formatting check
 cargo fmt --check
+
+# Reference validation (downloads a ~50 MB corpus once; needs uv)
+make validate
+
+# Benchmarks (criterion + mdtraj/FreeSASA/Biopython baselines)
+bench/run.sh
 ```
 
 ---
@@ -104,19 +146,18 @@ cargo fmt --check
 ### 1. In-Silico Mutagenesis (`proteus mutate`)
 Generate an Alanine scanning variant library:
 ```bash
-proteus mutate --scaffold scaffold.fasta --mode alanine --output alanine_library.fasta
+proteus mutate scaffold.fasta --mode alanine --output alanine_library.fasta
 ```
 
 Generate a site-saturation library restricted to residues 10–18:
 ```bash
-proteus mutate --scaffold scaffold.fasta --mode saturation --start 10 --end 18 --max-variants 50
+proteus mutate scaffold.fasta --mode saturation --start 10 --end 18 --max-variants 50
 ```
 
 ### 2. High-Throughput Screening (`proteus screen`)
 Screen a variant library through the compute funnel and export candidate biophysics to Apache Parquet:
 ```bash
-proteus screen \
-  --library alanine_library.fasta \
+proteus screen alanine_library.fasta \
   --tier fast \
   --workers 8 \
   --min-plddt 75.0 \
@@ -126,7 +167,7 @@ proteus screen \
 
 Pipe mutations directly into the screening funnel without saving intermediate FASTA files:
 ```bash
-proteus mutate --scaffold wildtype.fasta --mode alanine | proteus screen --library - --export results.parquet
+proteus mutate wildtype.fasta --mode alanine | proteus screen - --export results.parquet
 ```
 
 ### 3. Terminal 3D Structure Viewer (`proteus view`)
@@ -205,6 +246,8 @@ proteus serve --port 8080 --host 0.0.0.0
 ```
 Interactive Swagger UI documentation is served at `http://localhost:8080/swagger-ui`.
 
+> The daemon has no authentication and, with a container socket available, runs the image named in each TES task. Bind it to localhost or put it behind an authenticating proxy — see [SECURITY.md](SECURITY.md).
+
 ---
 
 ## Mathematical Formulations
@@ -255,7 +298,7 @@ The legacy Python/Django/Celery undergraduate thesis prototype is preserved unde
 ## License
 
 Licensed under either of:
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
 at your option.
