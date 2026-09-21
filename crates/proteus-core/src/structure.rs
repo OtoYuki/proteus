@@ -70,13 +70,10 @@ pub fn compute_dihedral(
     let n1 = b1.cross(&b2);
     let n2 = b2.cross(&b3);
 
-    let m1 = n1.cross(&(b2 / b2_norm));
-
+    // IUPAC/Blondel-Karplus signed torsion: atan2(|b2| b1·n2, n1·n2).
+    let y = b2_norm * b1.dot(&n2);
     let x = n1.dot(&n2);
-    let y = m1.dot(&n2);
-
-    let rad = y.atan2(x);
-    Ok(rad.to_degrees())
+    Ok(y.atan2(x).to_degrees())
 }
 
 /// Assign secondary structure using P-SEA alpha-carbon geometry:
@@ -433,5 +430,65 @@ mod tests {
             classify_ramachandran_context(-120.0, 140.0, ResidueContext::PreProline),
             RamachandranRegion::CoreStrand
         );
+    }
+    #[test]
+    fn dihedral_sign_matches_iupac_on_crambin() {
+        let (pdb, _) = pdbtbx::open(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
+            pdbtbx::StrictnessLevel::Loose,
+        )
+        .unwrap();
+        let csv = include_str!("../tests/data/1crn_phipsi_mdtraj.csv");
+        let mut expect: Vec<(Option<f64>, Option<f64>)> = Vec::new();
+        for line in csv.lines().skip(1) {
+            let f: Vec<&str> = line.split(',').collect();
+            expect.push((f[2].parse::<f64>().ok(), f[3].parse::<f64>().ok()));
+        }
+        let bb: Vec<(Vector3<f64>, Vector3<f64>, Vector3<f64>)> = pdb
+            .residues()
+            .map(|r| {
+                let get = |n: &str| {
+                    r.atoms()
+                        .find(|a| a.name() == n)
+                        .map(|a| Vector3::new(a.x(), a.y(), a.z()))
+                        .unwrap()
+                };
+                (get("N"), get("CA"), get("C"))
+            })
+            .collect();
+        for i in 0..bb.len() {
+            if i > 0 {
+                let phi = compute_dihedral(&bb[i - 1].2, &bb[i].0, &bb[i].1, &bb[i].2).unwrap();
+                assert!(
+                    (phi - expect[i].0.unwrap()).abs() < 0.05,
+                    "phi res {} got {phi}",
+                    i + 1
+                );
+            }
+            if i + 1 < bb.len() {
+                let psi = compute_dihedral(&bb[i].0, &bb[i].1, &bb[i].2, &bb[i + 1].0).unwrap();
+                assert!(
+                    (psi - expect[i].1.unwrap()).abs() < 0.05,
+                    "psi res {} got {psi}",
+                    i + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dihedral_mirror_negates() {
+        let p = [
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 1.5, 0.0),
+            Vector3::new(0.7, 1.5, 0.9),
+        ];
+        let a = compute_dihedral(&p[0], &p[1], &p[2], &p[3]).unwrap();
+        let m: Vec<Vector3<f64>> = p.iter().map(|v| Vector3::new(v.x, v.y, -v.z)).collect();
+        let b = compute_dihedral(&m[0], &m[1], &m[2], &m[3]).unwrap();
+        assert!((a + b).abs() < 1e-9);
+        // IUPAC value for these points is -52.125 deg (computed independently with numpy).
+        assert!((a + 52.125).abs() < 0.01, "expected -52.125, got {a}");
     }
 }
