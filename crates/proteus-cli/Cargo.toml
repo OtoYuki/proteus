@@ -20,6 +20,7 @@ crossterm = { workspace = true }
 clap = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
+base64 = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Table};
@@ -107,6 +108,14 @@ enum Commands {
         /// Terminal viewport height (defaults to terminal height or 30)
         #[arg(long)]
         height: Option<usize>,
+
+        /// Open structure in browser via standalone Mol* WebGL 3D viewer
+        #[arg(long)]
+        web: bool,
+
+        /// Export standalone Mol* WebGL 3D viewer HTML file
+        #[arg(long)]
+        html: Option<PathBuf>,
     },
 
     /// In-silico Deep Mutational Scanning (DMS) variant library generator
@@ -595,6 +604,8 @@ async fn main() -> Result<()> {
             color,
             width,
             height,
+            web,
+            html,
         } => {
             let target_path = PathBuf::from(&target);
             let (pdb_content, title) = if target_path.exists() {
@@ -624,6 +635,83 @@ async fn main() -> Result<()> {
                     target
                 );
             };
+
+            if web || html.is_some() {
+                let html_path = html.unwrap_or_else(|| {
+                    let sanitized: String = title
+                        .chars()
+                        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                        .collect();
+                    std::env::temp_dir().join(format!("proteus_view_{sanitized}.html"))
+                });
+
+                let b64_pdb =
+                    base64::engine::general_purpose::STANDARD.encode(pdb_content.as_bytes());
+                let html_content = format!(
+                    r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Proteus 3D Structure Viewer - {title}</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.css" />
+    <script type="text/javascript" src="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.js"></script>
+    <style>
+        body, html {{ width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #fff; }}
+        #app {{ width: 100%; height: 100%; position: absolute; }}
+        #header {{ position: absolute; top: 16px; left: 20px; z-index: 1000; background: rgba(15, 23, 42, 0.85); padding: 12px 20px; border-radius: 12px; backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
+        #header h1 {{ margin: 0; font-size: 16px; font-weight: 700; color: #38bdf8; letter-spacing: -0.025em; }}
+        #header p {{ margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; }}
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>Proteus Bio-Compute 3D Viewer</h1>
+        <p>{title}</p>
+    </div>
+    <div id="app"></div>
+    <script>
+        const pdbB64 = `{b64_pdb}`;
+        document.addEventListener('DOMContentLoaded', async () => {{
+            const viewer = await molstar.Viewer.create('app', {{
+                layoutIsExpanded: false,
+                layoutShowControls: true,
+                layoutShowRemoteState: false,
+                layoutShowSequence: true,
+                layoutShowLog: false,
+                viewportShowExpand: false,
+            }});
+            const rawPdb = atob(pdbB64);
+            const blob = new Blob([rawPdb], {{ type: 'text/plain' }});
+            const url = URL.createObjectURL(blob);
+            await viewer.loadStructureFromUrl(url, 'pdb', false, {{
+                representationStyle: {{
+                    type: 'cartoon',
+                    color: 'secondary-structure',
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>"#
+                );
+
+                tokio::fs::write(&html_path, html_content)
+                    .await
+                    .with_context(|| format!("Failed to write HTML file to {:?}", html_path))?;
+
+                println!(
+                    "Generated standalone 3D WebGL viewer HTML -> {:?}",
+                    html_path
+                );
+
+                if web {
+                    println!("Launching default browser via xdg-open...");
+                    let _ = std::process::Command::new("xdg-open")
+                        .arg(&html_path)
+                        .spawn();
+                }
+                return Ok(());
+            }
 
             let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
             let render_color: proteus_render::rasterizer::ColorScheme = color.into();
