@@ -1,0 +1,59 @@
+{
+ "host": "archlinux",
+ "python": "3.12.13",
+ "mdtraj": "1.11.1.post2",
+ "freesasa": "?",
+ "cpu": "x86_64",
+ "results": {
+  "1crn": {
+   "n_atoms": 327,
+   "n_residues": 46,
+   "mdtraj_sasa_960": 0.018527738999182475,
+   "mdtraj_sasa_96": 0.0049846480005726335,
+   "mdtraj_dssp": 0.00015326300035667373,
+   "mdtraj_phi_psi": 0.0006856979998701718,
+   "mdtraj_rg": 3.6841999644821044e-05,
+   "freesasa_lr": 0.007395933999760018,
+   "freesasa_sr_100": 0.0014827779996267054,
+   "biopython_sasa_sr_100": 0.03821313050002573,
+   "biopython_phi_psi": 0.004635567000150331
+  },
+  "1ubq": {
+   "n_atoms": 602,
+   "n_residues": 76,
+   "mdtraj_sasa_960": 0.03173518699986744,
+   "mdtraj_sasa_96": 0.005333011000402621,
+   "mdtraj_dssp": 0.0002461539997966611,
+   "mdtraj_phi_psi": 0.0006049459998394013,
+   "mdtraj_rg": 4.9309000132780056e-05,
+   "freesasa_lr": 0.014550140000210376,
+   "freesasa_sr_100": 0.0026610610002535395,
+   "biopython_sasa_sr_100": 0.06873218650025592,
+   "biopython_phi_psi": 0.0076587399998970795
+  },
+  "4hhb": {
+   "n_atoms": 4384,
+   "n_residues": 574,
+   "mdtraj_sasa_960": 0.2579593099999329,
+   "mdtraj_sasa_96": 0.07071833500049252,
+   "mdtraj_dssp": 0.002940985999885015,
+   "mdtraj_phi_psi": 0.0025176560002364567,
+   "mdtraj_rg": 0.00016574300025240518,
+   "freesasa_lr": 0.11742839599992294,
+   "freesasa_sr_100": 0.020422821000465774,
+   "biopython_sasa_sr_100": 0.5518785330000355,
+   "biopython_phi_psi": 0.05890496099982556
+  },
+  "6vxx": {
+   "n_atoms": 22812,
+   "n_residues": 2916,
+   "mdtraj_sasa_960": 2.2632028710004306,
+   "mdtraj_sasa_96": 1.3374313469994377,
+   "mdtraj_dssp": 0.035197772000174155,
+   "mdtraj_phi_psi": 0.010470091000570392,
+   "mdtraj_rg": 0.000786495999818726,
+   "biopython_sasa_sr_100": 2.940539342000193,
+   "biopython_phi_psi": 0.3011354299997038
+  }
+ }
+}

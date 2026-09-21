@@ -1,0 +1,47 @@
+{
+ "host": "archlinux",
+ "cpu": "x86_64",
+ "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+ "results": {
+  "1crn": {
+   "dssp": 1.101178296639629e-05,
+   "full_profile": 0.007953126581168831,
+   "interaction_network": 0.00011948456718106996,
+   "kabsch_rmsd": 8.732735072153383e-07,
+   "phi_psi_ramachandran": 4.107830946722123e-06,
+   "sasa_shrake_rupley_96": 0.001064855908119658,
+   "sasa_shrake_rupley_960": 0.007175973607142857,
+   "steric_overlap": 0.0005174356359022557
+  },
+  "1ubq": {
+   "dssp": 2.5767269934860735e-05,
+   "full_profile": 0.014741094510416669,
+   "interaction_network": 0.00023531992716802167,
+   "kabsch_rmsd": 1.2401864555727958e-06,
+   "phi_psi_ramachandran": 6.956621603747792e-06,
+   "sasa_shrake_rupley_96": 0.0019957741442307693,
+   "sasa_shrake_rupley_960": 0.012819689019480518,
+   "steric_overlap": 0.0007396739576923077
+  },
+  "4hhb": {
+   "dssp": 0.0012021137666666667,
+   "full_profile": 0.11011629,
+   "interaction_network": 0.0018703282648148147,
+   "kabsch_rmsd": 5.578198671679198e-06,
+   "phi_psi_ramachandran": 5.9196642842560833e-05,
+   "sasa_shrake_rupley_96": 0.016066909977777776,
+   "sasa_shrake_rupley_960": 0.100426058,
+   "steric_overlap": 0.00555525765625
+  },
+  "6vxx": {
+   "dssp": 0.03015087725,
+   "full_profile": 0.6138779085,
+   "interaction_network": 0.009257900724358975,
+   "kabsch_rmsd": 2.7380498631009233e-05,
+   "phi_psi_ramachandran": 0.0003217578988095238,
+   "sasa_shrake_rupley_96": 0.08325840125,
+   "sasa_shrake_rupley_960": 0.527213253,
+   "steric_overlap": 0.039751862666666665
+  }
+ }
+}
