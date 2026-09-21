@@ -279,7 +279,7 @@ pub fn score_library(
             .nth(1)
             .and_then(|rest| rest.split(']').next())
         {
-            m.split(|c| c == ',' || c == '/' || c == ';')
+            m.split([',', '/', ';'])
                 .filter(|x| !x.trim().is_empty())
                 .map(|x| parse_mutation(x).map_err(|e| anyhow::anyhow!("{e}")))
                 .collect::<Result<_>>()?

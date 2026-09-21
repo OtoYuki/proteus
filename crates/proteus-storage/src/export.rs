@@ -313,7 +313,7 @@ mod tests {
         // Read Parquet back using ParquetRecordBatchReaderBuilder
         let file = std::fs::File::open(&parquet_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 18);
+        assert_eq!(builder.schema().fields().len(), 19);
 
         let mut reader = builder.build().unwrap();
         let batch = reader.next().unwrap().unwrap();
