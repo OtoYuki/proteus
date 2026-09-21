@@ -4,8 +4,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Table};
 use indicatif::{ProgressBar, ProgressStyle};
+use proteus_core::confidence::ConfidenceSource;
 use proteus_core::metrics::analyze_pdb_file;
 use proteus_core::models::PipelineTier;
+use proteus_core::ranking::evaluate_candidate_fitness;
 use proteus_core::sequence::validate_and_parse_fasta;
 use proteus_engine::oci::OciRunner;
 use proteus_engine::simulated::SimulatedRunner;
@@ -26,6 +28,13 @@ use uuid::Uuid;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
+enum ConfidenceSourceArg {
+    Auto,
+    Predicted,
+    Experimental,
 }
 
 #[derive(Subcommand)]
@@ -74,6 +83,11 @@ enum Commands {
         /// Optional reference PDB for Kabsch RMSD alignment
         #[arg(short, long)]
         reference: Option<PathBuf>,
+
+        /// Treat the B-factor column as pLDDT (predicted) or as experimental B-factors;
+        /// `auto` inspects the header and the value distribution.
+        #[arg(long, value_enum, default_value_t = ConfidenceSourceArg::Auto)]
+        confidence_source: ConfidenceSourceArg,
     },
 
     /// 3D structural ribbon visualization in the terminal (HalfBlock / Braille / Kitty)
@@ -430,10 +444,29 @@ async fn main() -> Result<()> {
             print_job_inspection(&repo, job_id).await?;
         }
 
-        Commands::Analyze { pdb, reference } => {
+        Commands::Analyze {
+            pdb,
+            reference,
+            confidence_source,
+        } => {
             println!("Analyzing structure file: {:?}", pdb);
-            let metrics = analyze_pdb_file(&pdb, reference.as_deref())
+            let mut metrics = analyze_pdb_file(&pdb, reference.as_deref())
                 .context("Biophysical analysis failed")?;
+            let forced = match confidence_source {
+                ConfidenceSourceArg::Auto => None,
+                ConfidenceSourceArg::Predicted => Some(ConfidenceSource::Predicted),
+                ConfidenceSourceArg::Experimental => Some(ConfidenceSource::ExperimentalBFactor),
+            };
+            if let Some(src) = forced {
+                metrics.confidence_source = src;
+                let residues = metrics
+                    .secondary_structure_summary
+                    .as_ref()
+                    .map(|s| s.assignment.len())
+                    .unwrap_or(1);
+                metrics.candidate_fitness_score =
+                    Some(evaluate_candidate_fitness(&metrics, residues).total_score);
+            }
 
             let mut table = Table::new();
             table.load_preset(UTF8_FULL);
@@ -447,28 +480,34 @@ async fn main() -> Result<()> {
                 Cell::new("Contact Density (C-alpha <= 8Å)"),
                 Cell::new(format!("{:.2}%", metrics.contact_density * 100.0)),
             ]);
-            table.add_row(vec![
-                Cell::new("Mean pLDDT"),
-                Cell::new(format!("{:.2}", metrics.plddt_distribution.mean)),
-            ]);
-            table.add_row(vec![
-                Cell::new("Median pLDDT"),
-                Cell::new(format!("{:.2}", metrics.plddt_distribution.median)),
-            ]);
-            table.add_row(vec![
-                Cell::new("Fraction High Conf (pLDDT >= 70)"),
-                Cell::new(format!(
-                    "{:.1}%",
-                    metrics.plddt_distribution.high_confidence_fraction * 100.0
-                )),
-            ]);
-            table.add_row(vec![
-                Cell::new("Fraction Very High Conf (pLDDT >= 90)"),
-                Cell::new(format!(
-                    "{:.1}%",
-                    metrics.plddt_distribution.very_high_confidence_fraction * 100.0
-                )),
-            ]);
+            match metrics.plddt() {
+                Some(p) => {
+                    table.add_row(vec![
+                        Cell::new("Mean pLDDT"),
+                        Cell::new(format!("{:.2}", p.mean)),
+                    ]);
+                    table.add_row(vec![
+                        Cell::new("Median pLDDT"),
+                        Cell::new(format!("{:.2}", p.median)),
+                    ]);
+                    table.add_row(vec![
+                        Cell::new("Fraction High Conf (pLDDT >= 70)"),
+                        Cell::new(format!("{:.1}%", p.high_confidence_fraction * 100.0)),
+                    ]);
+                    table.add_row(vec![
+                        Cell::new("Fraction Very High Conf (pLDDT >= 90)"),
+                        Cell::new(format!("{:.1}%", p.very_high_confidence_fraction * 100.0)),
+                    ]);
+                }
+                None => {
+                    table.add_row(vec![
+                        Cell::new("pLDDT"),
+                        Cell::new(
+                            "n/a (experimental structure; B-factor column is not a confidence)",
+                        ),
+                    ]);
+                }
+            }
 
             if let Some(rmsd) = metrics.rmsd_to_reference {
                 table.add_row(vec![

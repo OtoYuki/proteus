@@ -480,6 +480,7 @@ mod tests {
                     high_confidence_fraction: 0.957,
                     very_high_confidence_fraction: 0.782,
                 },
+                confidence_source: Default::default(),
                 secondary_structure_summary: None,
                 ramachandran_stats: Some(RamachandranStats {
                     favored_fraction: 0.955,

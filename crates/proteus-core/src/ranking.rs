@@ -22,9 +22,13 @@ pub fn evaluate_candidate_fitness(
 ) -> CandidateFitness {
     let n_res = residue_count.max(1) as f64;
 
-    // 1. pLDDT Component (weight: 0.30)
-    // Mean pLDDT is natively [0.0, 100.0]
-    let plddt_component = metrics.plddt_distribution.mean.clamp(0.0, 100.0);
+    // 1. pLDDT Component (weight: 0.30). Absent for experimental structures, whose B-factor
+    // column is not a confidence; its weight is then redistributed over the other terms.
+    let has_plddt = metrics.plddt().is_some();
+    let plddt_component = metrics
+        .plddt()
+        .map(|p| p.mean.clamp(0.0, 100.0))
+        .unwrap_or(0.0);
 
     // 2. Compactness Component (weight: 0.20)
     // Expected globular protein Rg follows Flory scaling: Rg_expected ≈ 2.82 * N^0.392
@@ -84,12 +88,18 @@ pub fn evaluate_candidate_fitness(
         0.0
     };
 
-    // Weighted composite score
-    let total_score = (0.30 * plddt_component
-        + 0.20 * compactness_component
-        + 0.15 * ramachandran_component
-        + 0.15 * hydrophobic_burial_component
-        + 0.20 * interaction_network_component
+    // Weighted composite score: pLDDT 0.30, compactness 0.20, Ramachandran 0.15,
+    // burial 0.15, network 0.20. Without pLDDT the remaining weights are scaled by 1/0.70.
+    let (w_p, w_c, w_r, w_b, w_n) = if has_plddt {
+        (0.30, 0.20, 0.15, 0.15, 0.20)
+    } else {
+        (0.0, 0.20 / 0.70, 0.15 / 0.70, 0.15 / 0.70, 0.20 / 0.70)
+    };
+    let total_score = (w_p * plddt_component
+        + w_c * compactness_component
+        + w_r * ramachandran_component
+        + w_b * hydrophobic_burial_component
+        + w_n * interaction_network_component
         - clash_penalty)
         .clamp(0.0, 100.0);
 
@@ -134,6 +144,7 @@ mod tests {
                 high_confidence_fraction: 0.95,
                 very_high_confidence_fraction: 0.85,
             },
+            confidence_source: Default::default(),
             secondary_structure_summary: None,
             ramachandran_stats: None,
             clash_stats: None,
@@ -149,5 +160,44 @@ mod tests {
             fitness.total_score
         );
         assert_eq!(fitness.tier_label, "Lead Candidate (Synthesis Priority)");
+    }
+
+    #[test]
+    fn experimental_structure_redistributes_plddt_weight() {
+        let base = BiophysicalMetrics {
+            id: Uuid::new_v4(),
+            prediction_id: Uuid::new_v4(),
+            radius_of_gyration: 10.0,
+            rmsd_to_reference: None,
+            contact_density: 0.12,
+            plddt_distribution: PlddtDistribution {
+                mean: 0.0,
+                median: 0.0,
+                high_confidence_fraction: 0.0,
+                very_high_confidence_fraction: 0.0,
+            },
+            confidence_source: crate::confidence::ConfidenceSource::Predicted,
+            secondary_structure_summary: None,
+            ramachandran_stats: None,
+            clash_stats: None,
+            sasa_metrics: None,
+            interaction_network: None,
+            candidate_fitness_score: None,
+        };
+        let predicted_zero = evaluate_candidate_fitness(&base, 46);
+        let experimental = BiophysicalMetrics {
+            confidence_source: crate::confidence::ConfidenceSource::ExperimentalBFactor,
+            ..base
+        };
+        let exp = evaluate_candidate_fitness(&experimental, 46);
+        assert!(exp.total_score > predicted_zero.total_score);
+        // Four-term weighted mean with weights scaled by 1/0.70.
+        let expected = (0.20 * exp.compactness_component
+            + 0.15 * exp.ramachandran_component
+            + 0.15 * exp.hydrophobic_burial_component
+            + 0.20 * exp.interaction_network_component)
+            / 0.70;
+        assert!((exp.total_score - expected).abs() < 1e-9);
+        assert_eq!(exp.plddt_component, 0.0);
     }
 }

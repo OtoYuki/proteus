@@ -192,6 +192,16 @@ pub fn analyze_pdb_detailed(
     pdb: &pdbtbx::PDB,
     reference_pdb: Option<&pdbtbx::PDB>,
 ) -> Result<DetailedBiophysicalAnalysis, CoreError> {
+    analyze_pdb_detailed_with_header(pdb, reference_pdb, None)
+}
+
+/// As [`analyze_pdb_detailed`], with raw header text (EXPDTA/TITLE/mmCIF categories that
+/// pdbtbx does not retain) to improve pLDDT-vs-B-factor provenance detection.
+pub fn analyze_pdb_detailed_with_header(
+    pdb: &pdbtbx::PDB,
+    reference_pdb: Option<&pdbtbx::PDB>,
+    extra_header: Option<&str>,
+) -> Result<DetailedBiophysicalAnalysis, CoreError> {
     let mut ca_coords: Vec<Vector3<f64>> = Vec::new();
     let mut plddts: Vec<f64> = Vec::new();
     let mut all_atoms: Vec<crate::sasa::AtomDescriptor> = Vec::new();
@@ -234,9 +244,16 @@ pub fn analyze_pdb_detailed(
         None
     };
 
+    let header = format!(
+        "{}\n{}",
+        crate::confidence::pdb_header_text(pdb),
+        extra_header.unwrap_or("")
+    );
+    let confidence_source = crate::confidence::detect_confidence_source(&header, &plddts);
+
     // Normalize pLDDT if model wrote it in [0.0, 1.0] range (e.g. ESMFold)
     let max_plddt = plddts.iter().copied().fold(f64::MIN, f64::max);
-    if max_plddt <= 1.0 && max_plddt > 0.0 {
+    if confidence_source.is_predicted() && max_plddt <= 1.0 && max_plddt > 0.0 {
         for v in &mut plddts {
             *v *= 100.0;
         }
@@ -304,6 +321,7 @@ pub fn analyze_pdb_detailed(
             high_confidence_fraction: high_conf,
             very_high_confidence_fraction: very_high_conf,
         },
+        confidence_source,
         secondary_structure_summary: Some(ss_summary),
         ramachandran_stats: Some(rama_stats),
         clash_stats: Some(clash_stats),

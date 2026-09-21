@@ -81,12 +81,27 @@ pub struct BiophysicalMetrics {
     pub rmsd_to_reference: Option<f64>,
     pub contact_density: f64,
     pub plddt_distribution: PlddtDistribution,
+    /// Whether `plddt_distribution` is a real confidence (predicted model) or just the
+    /// B-factor column of an experimental structure.
+    #[serde(default)]
+    pub confidence_source: crate::confidence::ConfidenceSource,
     pub secondary_structure_summary: Option<SecondaryStructureSummary>,
     pub ramachandran_stats: Option<RamachandranStats>,
     pub clash_stats: Option<ClashStats>,
     pub sasa_metrics: Option<SasaMetrics>,
     pub interaction_network: Option<crate::interactions::InteractionNetwork>,
     pub candidate_fitness_score: Option<f64>,
+}
+
+impl BiophysicalMetrics {
+    /// pLDDT statistics, only meaningful for predicted structures. `None` when the
+    /// B-factor column is known to be experimental.
+    pub fn plddt(&self) -> Option<&PlddtDistribution> {
+        match self.confidence_source {
+            crate::confidence::ConfidenceSource::ExperimentalBFactor => None,
+            _ => Some(&self.plddt_distribution),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

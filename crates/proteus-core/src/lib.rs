@@ -2,6 +2,7 @@
 
 pub mod backbone;
 pub mod clash;
+pub mod confidence;
 pub mod error;
 pub mod interactions;
 pub mod metrics;
@@ -15,6 +16,7 @@ pub mod structure;
 pub mod tes;
 
 pub use clash::*;
+pub use confidence::ConfidenceSource;
 pub use error::CoreError;
 pub use interactions::*;
 pub use models::*;

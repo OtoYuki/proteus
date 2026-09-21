@@ -41,6 +41,8 @@ use uuid::Uuid;
             proteus_core::models::Prediction,
             proteus_core::models::BiophysicalMetrics,
             proteus_core::models::PlddtDistribution,
+            proteus_core::confidence::ConfidenceSource,
+            proteus_core::rama8000::RamaClass,
             proteus_core::structure::SecondaryStructureSummary,
             proteus_core::structure::SecondaryStructure,
             proteus_core::structure::RamachandranStats,
