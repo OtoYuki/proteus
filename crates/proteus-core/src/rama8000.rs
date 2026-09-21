@@ -73,8 +73,10 @@ fn decode(bytes: &[u8]) -> Vec<f32> {
         "rama8000 grid must be 180x180 f32"
     );
     bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 

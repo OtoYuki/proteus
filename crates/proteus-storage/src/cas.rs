@@ -238,7 +238,7 @@ mod tests {
             "objects/{}/{}/{}",
             &entry.hash[0..2],
             &entry.hash[2..4],
-            &entry.hash
+            entry.hash
         );
         assert!(entry.path.ends_with(expected_subpath));
 
