@@ -92,6 +92,26 @@ Executes all-atom biophysical calculations in sub-milliseconds:
 - **Heavy-Atom Steric Overlap (MolProbity-style, no hydrogens):** Counts severe heavy-atom overlaps ($> 0.40\text{ \AA}$) per 1,000 atoms using Bondi van der Waals radii, cell-list spatial hashing, and covalent exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges). This is **not** the MolProbity clashscore, which adds hydrogens with Reduce first; it under-counts on deposited structures and is intended as a relative screen for grossly overlapping predicted models.
 - **Kabsch Coordinate Superposition:** Computes optimal rotational alignment and minimum RMSD via Singular Value Decomposition (SVD) on $3 \times 3$ covariance matrices (`nalgebra`).
 
+### 5. ESM-2 Protein Language Model, in Pure Rust
+`proteus-esm` re-implements `EsmForMaskedLM` on [candle](https://github.com/huggingface/candle) —
+no Python, no PyTorch, one static binary. It loads any `facebook/esm2_*` checkpoint and produces
+zero-shot mutation scores (wild-type or masked marginals, Meier et al. 2021) and full deep
+mutational scans.
+
+```bash
+proteus esm score wildtype.fasta --mutations P19A,C4S --esm-masked
+proteus esm scan wildtype.fasta --export scan.csv            # 20×L matrix + terminal heat map
+proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --export lib.parquet
+```
+
+- **Parity:** logits within 1e-2 and amino-acid log-probabilities within 5e-3 of
+  `transformers.EsmForMaskedLM` (fp32) on three proteins × two checkpoints, pinned in CI-runnable
+  tests against committed reference values.
+- **Accuracy on real data:** ProteinGym v1.1 Spearman ρ, five smallest single-mutant assays —
+  mean |ρ| 0.42 with `esm2_t12_35M`, 0.24 with `esm2_t6_8M` ([`bench/README.md`](bench/README.md)).
+- `--scorer esm2` ranks a screening library by sequence likelihood; `--scorer hybrid` combines it
+  with the structural fitness score. Both add an `esm2_score` column to the Parquet export.
+
 ### 5. Validated Against Reference Implementations
 Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:
 

@@ -1,0 +1,38 @@
+{
+ "model": "facebook/esm2_t12_35M_UR50D",
+ "marginals": "wild-type",
+ "host": "archlinux",
+ "mean_abs_spearman": 0.4183705899323439,
+ "assays": [
+  {
+   "assay": "SQSTM_MOUSE_Tsuboyama_2023_2RRU",
+   "seq_len": 40,
+   "n_scored": 707,
+   "spearman": 0.431327979683102
+  },
+  {
+   "assay": "VG08_BPP22_Tsuboyama_2023_2GP8",
+   "seq_len": 40,
+   "n_scored": 723,
+   "spearman": 0.509922248383431
+  },
+  {
+   "assay": "OTU7A_HUMAN_Tsuboyama_2023_2L2D",
+   "seq_len": 42,
+   "n_scored": 635,
+   "spearman": 0.5427094425403105
+  },
+  {
+   "assay": "DN7A_SACS2_Tsuboyama_2023_1JIC",
+   "seq_len": 55,
+   "n_scored": 1008,
+   "spearman": 0.20992162324959007
+  },
+  {
+   "assay": "HCP_LAMBD_Tsuboyama_2023_2L6Q",
+   "seq_len": 55,
+   "n_scored": 1040,
+   "spearman": 0.3979716558052857
+  }
+ ]
+}

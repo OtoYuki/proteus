@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- **`proteus-esm`: ESM-2 masked-LM inference in pure Rust** (candle) — Hub or local safetensors
+  checkpoints, wild-type/masked marginal mutation scores, 20×L deep mutational scans. Parity with
+  `transformers` pinned by tests (logits ≤ 1e-2, amino-acid log-probs ≤ 5e-3). ProteinGym v1.1
+  Spearman ρ mean |ρ| 0.42 (35M) / 0.24 (8M) on five small assays.
+- `proteus esm score|scan`; `proteus screen --scorer esm2|hybrid` with an `esm2_score` export
+  column (schema_version 3) and a terminal DMS heat map.
 - **TES executors run inside their container image** (bollard; Podman/Docker socket): argv
   overrides the image entrypoint, declared paths are bind-mounted from the task work dir,
   `cpu_cores`/`ram_gb` become container limits, network off by default, per-executor timeout,

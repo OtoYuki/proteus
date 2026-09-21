@@ -81,3 +81,26 @@ Ratios > 1 mean Proteus is faster. Where the point counts differ (96 vs 100, 960
 Proteus does more work (φ/ψ **plus** Top8000 Ramachandran scoring vs φ/ψ only), the row label says so.
 The interaction network and overlap score have no drop-in equivalent in mdtraj/Biopython (mdtraj's
 `baker_hubbard` needs explicit hydrogens), so they are reported without a ratio.
+
+## ProteinGym zero-shot fitness (ESM-2 in pure Rust)
+
+`bench/proteingym.py` downloads ProteinGym v1.1 substitution assays, runs `proteus esm scan`,
+and correlates the predicted scores with the measured fitness (Spearman ρ). Five smallest
+single-mutant assays (≤ 60 residues), all mutants scored, CPU:
+
+| assay | residues | mutants | 8M wt-marg. | 8M masked | 35M wt-marg. |
+|---|---|---|---|---|---|
+| SQSTM_MOUSE_Tsuboyama_2023_2RRU | 40 | 707 | +0.190 | +0.186 | **+0.431** |
+| VG08_BPP22_Tsuboyama_2023_2GP8 | 40 | 723 | +0.370 | +0.360 | **+0.510** |
+| OTU7A_HUMAN_Tsuboyama_2023_2L2D | 42 | 635 | +0.212 | +0.205 | **+0.543** |
+| DN7A_SACS2_Tsuboyama_2023_1JIC | 55 | 1008 | +0.079 | +0.074 | **+0.210** |
+| HCP_LAMBD_Tsuboyama_2023_2L6Q | 55 | 1040 | +0.323 | +0.285 | **+0.398** |
+| **mean \|ρ\|** | | | 0.235 | 0.222 | **0.418** |
+
+For scale, the published ESM-2 650M zero-shot average over all 217 ProteinGym substitution
+assays is ≈ 0.42 (Spearman). These five are stability assays on very short proteins, so the
+numbers are not comparable to that average — they show the Rust implementation reproduces the
+expected behaviour (bigger model ≫ smaller model; masked ≈ wild-type marginals on short
+sequences) on real experimental data, not that it beats anything.
+
+Reproduce: `bench/proteingym.py --assays 5 --max-len 60 --model facebook/esm2_t12_35M_UR50D`.
