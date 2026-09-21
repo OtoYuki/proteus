@@ -14,9 +14,7 @@ pub fn model_dir(model_id: &str) -> Result<PathBuf> {
         .ok_or_else(|| EsmError::Hub(format!("'{model_id}' is not an <owner>/<name> Hub id")))?;
     let root = std::env::var_os("PROTEUS_ESM_CACHE")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/proteus/esm"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/proteus/esm")))
         .ok_or_else(|| EsmError::Hub("no cache directory (set PROTEUS_ESM_CACHE)".into()))?;
     Ok(root.join(format!("{owner}--{name}")))
 }

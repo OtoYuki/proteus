@@ -14,7 +14,8 @@ use uuid::Uuid;
 /// High-density biophysical record for a screening candidate variant.
 /// Version of the screening export schema (CSV/JSON columns, Parquet fields).
 /// 2: `clashscore` renamed to `heavy_atom_overlap_score`.
-pub const EXPORT_SCHEMA_VERSION: u32 = 2;
+/// 3: nullable `esm2_score` column (ESM-2 zero-shot mutation score, `--scorer esm2|hybrid`).
+pub const EXPORT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreeningRecord {
@@ -36,12 +37,15 @@ pub struct ScreeningRecord {
     pub pi_stacking_count: usize,
     pub cation_pi_count: usize,
     pub fitness: f64,
+    /// ESM-2 zero-shot score summed over the variant's substitutions; `None` when not computed.
+    #[serde(default)]
+    pub esm2_score: Option<f64>,
 }
 
 /// Serializes candidate screening records to standard RFC-4180 CSV format.
 pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
     let mut out = String::new();
-    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,heavy_atom_overlap_score,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness\n");
+    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,heavy_atom_overlap_score,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness,esm2_score\n");
 
     for r in records {
         // Escape quotes in header if needed
@@ -52,7 +56,7 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
         };
 
         out.push_str(&format!(
-            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{},{},{},{},{:.2}\n",
+            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{},{},{},{},{:.2},{}\n",
             r.rank,
             r.job_id,
             safe_header,
@@ -70,7 +74,8 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
             r.salt_bridge_count,
             r.pi_stacking_count,
             r.cation_pi_count,
-            r.fitness
+            r.fitness,
+            r.esm2_score.map(|e| format!("{e:.4}")).unwrap_or_default()
         ));
     }
 
@@ -103,6 +108,7 @@ pub fn screening_record_schema() -> Schema {
         Field::new("pi_stacking_count", DataType::Int64, false),
         Field::new("cation_pi_count", DataType::Int64, false),
         Field::new("fitness", DataType::Float64, false),
+        Field::new("esm2_score", DataType::Float64, true),
     ])
 }
 
@@ -139,6 +145,7 @@ pub fn records_to_record_batch(
     let pi_stacks: Int64Array = records.iter().map(|r| r.pi_stacking_count as i64).collect();
     let cation_pis: Int64Array = records.iter().map(|r| r.cation_pi_count as i64).collect();
     let fitnesses: Float64Array = records.iter().map(|r| Some(r.fitness)).collect();
+    let esm2_scores: Float64Array = records.iter().map(|r| r.esm2_score).collect();
 
     let columns: Vec<ArrayRef> = vec![
         Arc::new(ranks),
@@ -159,6 +166,7 @@ pub fn records_to_record_batch(
         Arc::new(pi_stacks),
         Arc::new(cation_pis),
         Arc::new(fitnesses),
+        Arc::new(esm2_scores),
     ];
 
     RecordBatch::try_new(schema, columns)
@@ -251,6 +259,7 @@ mod tests {
             pi_stacking_count: 2,
             cation_pi_count: 1,
             fitness: 78.4,
+            esm2_score: Some(-1.25),
         }
     }
 
@@ -364,7 +373,7 @@ mod tests {
             .iter()
             .find(|k| k.key == "proteus.schema_version")
             .and_then(|k| k.value.clone());
-        assert_eq!(version.as_deref(), Some("2"));
+        assert_eq!(version.as_deref(), Some("3"));
         let names: Vec<String> = reader
             .metadata()
             .file_metadata()

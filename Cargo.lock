@@ -2736,6 +2736,7 @@ dependencies = [
  "indicatif",
  "proteus-core",
  "proteus-engine",
+ "proteus-esm",
  "proteus-render",
  "proteus-server",
  "proteus-storage",

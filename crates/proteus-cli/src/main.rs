@@ -1,3 +1,5 @@
+mod esm_cmd;
+
 use anyhow::{Context, Result};
 use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -197,6 +199,21 @@ enum Commands {
         /// Optional path to export structured screening dataset (.parquet, .csv, or .json)
         #[arg(short, long)]
         export: Option<PathBuf>,
+
+        /// Ranking signal: structure-only fitness, ESM-2 zero-shot score, or a hybrid
+        #[arg(long, value_enum, default_value_t = esm_cmd::Scorer::Structure)]
+        scorer: esm_cmd::Scorer,
+
+        #[command(flatten)]
+        esm: esm_cmd::EsmOptions,
+    },
+
+    /// ESM-2 protein language model: zero-shot mutation scores and deep mutational scans
+    Esm {
+        #[command(subcommand)]
+        command: esm_cmd::EsmCommand,
+        #[command(flatten)]
+        esm: esm_cmd::EsmOptions,
     },
 
     /// Run the headless background daemon (proteusd)
@@ -958,6 +975,10 @@ async fn main() -> Result<()> {
             }
         }
 
+        Commands::Esm { command, esm } => {
+            esm_cmd::run(command, esm).await?;
+        }
+
         Commands::Screen {
             library,
             tier,
@@ -966,6 +987,8 @@ async fn main() -> Result<()> {
             min_plddt,
             top,
             export,
+            scorer,
+            esm,
         } => {
             let content: String = if library == "-" {
                 eprintln!("Reading sequence library from standard input (stdin)...");
@@ -989,6 +1012,13 @@ async fn main() -> Result<()> {
 
             let total_seqs = sequences.len();
             eprintln!("Loaded {total_seqs} candidate sequences for screening funnel");
+
+            // ESM-2 scores are sequence-only: compute them before (and independently of) folding.
+            let esm_scores = if scorer == esm_cmd::Scorer::Structure {
+                None
+            } else {
+                Some(esm_cmd::score_library(&sequences, &esm)?)
+            };
 
             let pool = create_sqlite_pool(&db_path).await?;
             let repo = ProteusRepository::new(pool);
@@ -1055,6 +1085,8 @@ async fn main() -> Result<()> {
                 pi_stacking_count: usize,
                 cation_pi_count: usize,
                 fitness: f64,
+                esm2_score: Option<f32>,
+                rank_key: f64,
             }
 
             let mut candidates: Vec<CandidateRank> = Vec::new();
@@ -1103,6 +1135,15 @@ async fn main() -> Result<()> {
                                     )
                                 });
                             let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
+                            let esm2_score = esm_scores
+                                .as_ref()
+                                .and_then(|m| m.get(&seq.id).copied())
+                                .flatten();
+                            let rank_key = match (scorer, esm2_score) {
+                                (esm_cmd::Scorer::Structure, _) | (_, None) => fitness,
+                                (esm_cmd::Scorer::Esm2, Some(e)) => e as f64,
+                                (esm_cmd::Scorer::Hybrid, Some(e)) => esm_cmd::hybrid(fitness, e),
+                            };
 
                             candidates.push(CandidateRank {
                                 job_id,
@@ -1122,16 +1163,18 @@ async fn main() -> Result<()> {
                                 pi_stacking_count,
                                 cation_pi_count,
                                 fitness,
+                                esm2_score,
+                                rank_key,
                             });
                         }
                     }
                 }
             }
 
-            // Rank by composite fitness score descending
+            // Rank by the selected signal, descending
             candidates.sort_by(|a, b| {
-                b.fitness
-                    .partial_cmp(&a.fitness)
+                b.rank_key
+                    .partial_cmp(&a.rank_key)
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
@@ -1152,6 +1195,7 @@ async fn main() -> Result<()> {
                 "H-Bonds",
                 "Salt/π",
                 "Fitness / 100",
+                "ESM-2",
                 "Job ID",
             ]);
 
@@ -1171,11 +1215,24 @@ async fn main() -> Result<()> {
                         c.pi_stacking_count + c.cation_pi_count
                     )),
                     Cell::new(format!("{:.1}", c.fitness)),
+                    Cell::new(
+                        c.esm2_score
+                            .map(|e| format!("{e:+.2}"))
+                            .unwrap_or_else(|| "–".into()),
+                    ),
                     Cell::new(c.job_id.to_string()),
                 ]);
             }
 
             println!("{table}");
+            if scorer != esm_cmd::Scorer::Structure {
+                println!(
+                    "Ranked by {:?} (ESM-2 {} marginals, {})",
+                    scorer,
+                    if esm.masked { "masked" } else { "wild-type" },
+                    esm.model
+                );
+            }
 
             if let Some(winner) = candidates.first() {
                 println!(
@@ -1206,6 +1263,7 @@ async fn main() -> Result<()> {
                         pi_stacking_count: c.pi_stacking_count,
                         cation_pi_count: c.cation_pi_count,
                         fitness: c.fitness,
+                        esm2_score: c.esm2_score.map(f64::from),
                     });
                 }
                 proteus_storage::save_screening_dataset(&records, &export_path)

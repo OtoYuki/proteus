@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 proteus-core = { workspace = true }
 proteus-storage = { workspace = true }
+proteus-esm = { workspace = true }
 proteus-engine = { workspace = true }
 proteus-server = { workspace = true }
 proteus-render = { workspace = true }
