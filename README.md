@@ -2,6 +2,7 @@
 
 [![ci](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml)
 [![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
+[![tes-conformance](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml)
 [![release](https://img.shields.io/github/v/release/OtoYuki/proteus?include_prereleases)](https://github.com/OtoYuki/proteus/releases)
 [![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue)](Cargo.toml)
 [![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
@@ -246,7 +247,21 @@ proteus serve --port 8080 --host 0.0.0.0
 ```
 Interactive Swagger UI documentation is served at `http://localhost:8080/swagger-ui`.
 
-> The daemon has no authentication, and in 0.3.x TES executors run as host processes (the `image` field is not yet honoured). Keep it on localhost or behind an authenticating proxy — see [SECURITY.md](SECURITY.md).
+TES executors run inside their container image through the Podman/Docker socket, with `resources` enforced. Lock it down with `--auth-token` and `--allow-image`:
+```bash
+proteus serve --host 0.0.0.0 --port 8080 --auth-token "$TOKEN" --allow-image 'ghcr.io/otoyuki/*' --allow-image 'docker.io/library/alpine:*'
+```
+The server passes the GA4GH TES 1.1 compliance suite (23/23 tests, run in CI with the container executor) — see [SECURITY.md](SECURITY.md) for what is and is not covered.
+
+### 6. Run it from a workflow engine
+Any TES client works. Two are checked in CI:
+```bash
+# Nextflow
+nextflow run examples/nextflow/screening.nf -with-tes http://127.0.0.1:8080/v1
+# Sprocket (WDL, St. Jude Rust Labs)
+sprocket run -c examples/wdl/sprocket.toml -s examples/wdl/analyze.wdl @examples/wdl/inputs.json
+```
+See [`examples/wdl/README.md`](examples/wdl/README.md) for what crosses the wire.
 
 ---
 
