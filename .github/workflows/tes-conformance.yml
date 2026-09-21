@@ -35,9 +35,13 @@ jobs:
           pip install /tmp/otr
       - name: Run the suite
         working-directory: /tmp/otr
+        # The runner exits 1 even when every test passes, so the JSON report below is the gate.
         run: |
           mkdir -p /tmp/otr-report
-          openapi-test-runner report --server http://127.0.0.1:8080/ --version 1.1.0 --output_path /tmp/otr-report | sed 's/\x1b\[[0-9;]*m//g' | grep -E "Compliance Test-|Passed -|Failed -|Total Tests"
+          openapi-test-runner report --server http://127.0.0.1:8080/ --version 1.1.0 --output_path /tmp/otr-report \
+            > /tmp/otr-stdout.txt 2>&1 || true
+          sed 's/\x1b\[[0-9;]*m//g' /tmp/otr-stdout.txt | grep -E "Compliance Test-|Passed -|Failed -|Total Tests" || true
+          test -f /tmp/otr-report/report.json
       - name: Fail on any failed test
         run: |
           python3 - <<'PY'
