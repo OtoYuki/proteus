@@ -10,5 +10,7 @@ fetch: $(VENV)
 	$(PY) validate/fetch.py
 reference: fetch
 	$(PY) validate/reference.py
+	$(PY) validate/hbond_reference.py
 validate: fetch
 	cargo test -p proteus-core --release --test validation -- --ignored --nocapture
+	cargo test -p proteus-core --release --test hbond_validation -- --ignored --nocapture

@@ -20,7 +20,7 @@ jobs:
           path: validate/corpus
           key: corpus-${{ hashFiles('validate/corpus.toml') }}
       - run: make fetch
-      - run: make validate
+      - run: make validate   # structure corpus + hydrogen-bond recall
       - name: Upload validation table
         if: always()
         uses: actions/upload-artifact@v4

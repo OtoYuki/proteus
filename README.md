@@ -23,7 +23,8 @@ cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not as
 | Kabsch–Sander DSSP (`proteus-dssp`, standalone crate) | mdtraj, ≥ 98 % per-residue |
 | MolProbity Ramachandran (Top8000 contours from cctbx) | cctbx `ramalyze`, 100 % label agreement |
 | Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj ≤ 1 %, FreeSASA ≤ 4 % (L&R, ProtOr radii) |
-| heavy-atom steric overlap, H-bond / salt-bridge / π network | Proteus-defined; labelled as such |
+| hydrogen-bond network | mdtraj `baker_hubbard` (explicit-H reference), 94.9–100 % recall |
+| heavy-atom steric overlap, salt bridges, π interactions | Proteus-defined; labelled as such |
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
 SASA 2.5–4.3× faster than mdtraj's C++ kernel at equal point count and ~35× faster than

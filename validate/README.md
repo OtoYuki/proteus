@@ -12,11 +12,26 @@ GitHub Actions job runs it on every push and pull request and uploads the table.
 | Ramachandran Favored/Allowed/Outlier | cctbx `mmtbx.validation.ramalyze` (MolProbity Top8000) | per-residue label agreement | ≥ 99.5 % |
 | SASA (Shrake–Rupley, 960 pts, Bondi radii) | `mdtraj.shrake_rupley` (same algorithm and radii) | relative | 1 % |
 | SASA | FreeSASA Lee–Richards, ProtOr radii | relative | 4 % — different algorithm **and** radius set; an independent sanity check, not a tight bound (observed 0.2–3.4 %) |
+| hydrogen-bond network | `mdtraj.baker_hubbard` on structures with explicit H | **recall** of mdtraj's non-local bonds | ≥ 92 % (observed 94.9–100 %) |
 
-Not validated here (no reference run yet): the heavy-atom overlap score (a Python
-re-implementation of Proteus's own rule would only be a regression test), the non-covalent
-interaction network (mdtraj's `baker_hubbard` needs explicit hydrogens), and the composite
-fitness score (a Proteus-defined heuristic).
+### Hydrogen bonds
+
+Proteus detects H-bonds from **heavy atoms only** — donor/acceptor distance plus antecedent
+angles — because predicted models never ship hydrogens. mdtraj's `baker_hubbard` uses the
+explicit H (D–H···A distance and angle). The criteria are related but not the same, so the test
+measures **recall** (how many of mdtraj's bonds Proteus also finds), not set equality. Proteus
+legitimately reports more bonds; that is the price of working without hydrogens, and the extra
+ones are not counted against it.
+
+Only the four NMR entries in the corpus carry hydrogens (1D3Z, 2KOD, 1G6J, 2L3B); mdtraj's
+i→i±1 bonds are excluded because Proteus requires |Δseq| ≥ 2 by design. Comparison is by
+donor/acceptor **residue pair**, so multiple atom-level bonds between the same two residues
+collapse to one.
+
+Still not validated (no reference run): the heavy-atom overlap score (a Python re-implementation
+of Proteus's own rule would only be a regression test), **salt bridges, π–π stacking and
+cation–π** (no widely used reference implementation with the same definitions), and the
+composite fitness score (a Proteus-defined heuristic).
 
 ## Corpus
 
