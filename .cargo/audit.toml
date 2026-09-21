@@ -1,2 +1,8 @@
 [advisories]
-ignore = ["RUSTSEC-2024-0436"] # paste (unmaintained) via nalgebra/simba; no maintained replacement upstream
+ignore = [
+    # paste (unmaintained) via nalgebra/simba; no maintained replacement upstream
+    "RUSTSEC-2024-0436",
+    # rsa Marvin attack: sqlx-mysql appears in Cargo.lock through sqlx feature unification but is
+    # never compiled — Proteus enables only the sqlite driver. Re-check when sqlx drops the pin.
+    "RUSTSEC-2023-0071",
+]

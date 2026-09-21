@@ -47,6 +47,17 @@ pub enum EngineEvent {
     },
 }
 
+/// Result of a TES cancel request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelOutcome {
+    /// The task was running or queued and is now `CANCELED`.
+    Canceled,
+    /// The task had already finished; nothing changed.
+    AlreadyTerminal,
+    /// No task with this id exists.
+    NotFound,
+}
+
 #[derive(Clone)]
 pub struct PipelineScheduler {
     repo: ProteusRepository,
@@ -289,14 +300,17 @@ impl PipelineScheduler {
     }
 
     /// Cancels a running or queued TES task.
-    pub async fn cancel_tes_task(&self, task_id: &str) -> Result<bool, EngineError> {
+    /// Cancel a TES task. Returns `Ok(CancelOutcome::NotFound)` only for unknown ids;
+    /// cancelling a task that already reached a terminal state is an idempotent no-op
+    /// (`AlreadyTerminal`), as clients such as Nextflow and Sprocket retry cancels freely.
+    pub async fn cancel_tes_task(&self, task_id: &str) -> Result<CancelOutcome, EngineError> {
         if let Some(record) = self.repo.get_tes_task(task_id).await? {
             if record.state == "COMPLETE"
                 || record.state == "EXECUTOR_ERROR"
                 || record.state == "SYSTEM_ERROR"
                 || record.state == "CANCELED"
             {
-                return Ok(false);
+                return Ok(CancelOutcome::AlreadyTerminal);
             }
             let mut task: TesTask =
                 serde_json::from_str(&record.task_json).unwrap_or_else(|_| TesTask {
@@ -313,9 +327,9 @@ impl PipelineScheduler {
                 task_id: task_id.to_string(),
                 error: "Task canceled by user".into(),
             });
-            Ok(true)
+            Ok(CancelOutcome::Canceled)
         } else {
-            Ok(false)
+            Ok(CancelOutcome::NotFound)
         }
     }
 

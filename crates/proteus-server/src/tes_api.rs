@@ -7,6 +7,7 @@ use proteus_core::tes::{
     TesCancelTaskResponse, TesCreateTaskResponse, TesListTasksResponse, TesServiceInfo, TesTask,
     TesTaskView,
 };
+use proteus_engine::CancelOutcome;
 use serde::Deserialize;
 use std::sync::atomic::Ordering;
 
@@ -132,18 +133,18 @@ pub async fn cancel_task(
     let clean_id = id.strip_suffix(":cancel").unwrap_or(&id);
 
     match state.scheduler.cancel_tes_task(clean_id).await {
-        Ok(true) => {
+        Ok(CancelOutcome::Canceled) => {
             state
                 .telemetry
                 .tasks_canceled
                 .fetch_add(1, Ordering::Relaxed);
             Ok((StatusCode::OK, Json(TesCancelTaskResponse {})))
         }
-        Ok(false) => Err((
+        // Idempotent: a cancel after completion is not an error (TES clients retry cancels).
+        Ok(CancelOutcome::AlreadyTerminal) => Ok((StatusCode::OK, Json(TesCancelTaskResponse {}))),
+        Ok(CancelOutcome::NotFound) => Err((
             StatusCode::NOT_FOUND,
-            Json(
-                serde_json::json!({ "error": format!("Task '{clean_id}' not found or already completed") }),
-            ),
+            Json(serde_json::json!({ "error": format!("Task '{clean_id}' not found") })),
         )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,

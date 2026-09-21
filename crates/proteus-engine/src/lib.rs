@@ -12,4 +12,4 @@ pub use auto::AutoRunner;
 pub use error::EngineError;
 pub use esm_api::EsmApiRunner;
 pub use runner::ComputeRunner;
-pub use scheduler::{EngineEvent, PipelineScheduler};
+pub use scheduler::{CancelOutcome, EngineEvent, PipelineScheduler};
