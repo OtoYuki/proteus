@@ -26,7 +26,11 @@ pub struct SecondaryStructureSummary {
     pub helix_fraction: f64,
     pub strand_fraction: f64,
     pub coil_fraction: f64,
+    /// Three-state assignment, one entry per residue with a C-alpha.
     pub assignment: Vec<SecondaryStructure>,
+    /// Eight-state DSSP string (`H B E G I T S -`), same length as `assignment`.
+    #[serde(default)]
+    pub dssp: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,108 +80,65 @@ pub fn compute_dihedral(
     Ok(y.atan2(x).to_degrees())
 }
 
-/// Assign secondary structure using P-SEA alpha-carbon geometry:
-/// - Alpha-helix: distance(i, i+3) in [5.0, 5.5]A, distance(i, i+4) in [5.5, 6.5]A, dihedral in [40, 65] deg.
-/// - Beta-strand: distance(i, i+2) in [6.5, 7.2]A, distance(i, i+3) in [9.8, 10.8]A.
-pub fn assign_secondary_structure(ca_coords: &[Vector3<f64>]) -> SecondaryStructureSummary {
-    let n = ca_coords.len();
-    if n < 4 {
-        let assignment = vec![SecondaryStructure::Coil; n];
-        return SecondaryStructureSummary {
-            helix_fraction: 0.0,
-            strand_fraction: 0.0,
-            coil_fraction: 1.0,
-            assignment,
-        };
-    }
-
-    let mut assignment = vec![SecondaryStructure::Coil; n];
-
-    // Detect helices (i, i+3 and i, i+4 distance invariants)
-    let mut is_helix = vec![false; n];
-    for i in 0..n {
-        let has_i3 = if i + 3 < n {
-            let d3 = (ca_coords[i] - ca_coords[i + 3]).norm();
-            (5.0..=5.6).contains(&d3)
-        } else {
-            false
-        };
-
-        let has_i4 = if i + 4 < n {
-            let d4 = (ca_coords[i] - ca_coords[i + 4]).norm();
-            (5.4..=6.6).contains(&d4)
-        } else {
-            false
-        };
-
-        if has_i3 || has_i4 {
-            is_helix[i] = true;
-            if i + 1 < n {
-                is_helix[i + 1] = true;
+/// Assign secondary structure with Kabsch–Sander DSSP (via `proteus-dssp`).
+///
+/// Residues missing any of N, CA, C, O are skipped in the DSSP run; their slot in the
+/// returned `assignment` is `Coil` so that indices line up with the backbone list.
+pub fn assign_secondary_structure(
+    backbone: &[crate::backbone::BackboneResidue],
+) -> SecondaryStructureSummary {
+    let mut index_map: Vec<Option<usize>> = Vec::with_capacity(backbone.len());
+    let mut residues: Vec<proteus_dssp::Residue> = Vec::with_capacity(backbone.len());
+    let mut pending_break = false;
+    for r in backbone {
+        match (r.n, r.ca, r.c, r.o) {
+            (Some(n), Some(ca), Some(c), Some(o)) => {
+                index_map.push(Some(residues.len()));
+                residues.push(proteus_dssp::Residue {
+                    n: [n.x, n.y, n.z],
+                    ca: [ca.x, ca.y, ca.z],
+                    c: [c.x, c.y, c.z],
+                    o: [o.x, o.y, o.z],
+                    is_proline: r.is_proline(),
+                    chain_break_before: r.chain_break_before || pending_break,
+                });
+                pending_break = false;
             }
-            if i + 2 < n {
-                is_helix[i + 2] = true;
-            }
-            if i + 3 < n {
-                is_helix[i + 3] = true;
+            _ => {
+                // A residue with missing atoms breaks the peptide chain for DSSP purposes.
+                index_map.push(None);
+                pending_break = true;
             }
         }
     }
-
-    // Detect strands (extended chain invariants)
-    let mut is_strand = vec![false; n];
-    for i in 0..n {
-        if is_helix[i] {
-            continue;
-        }
-        let has_i2 = if i + 2 < n {
-            let d2 = (ca_coords[i] - ca_coords[i + 2]).norm();
-            (6.4..=7.4).contains(&d2)
-        } else {
-            false
-        };
-
-        let has_i3 = if i + 3 < n {
-            let d3 = (ca_coords[i] - ca_coords[i + 3]).norm();
-            (9.6..=11.0).contains(&d3)
-        } else {
-            false
-        };
-
-        if has_i2 || has_i3 {
-            is_strand[i] = true;
-            if i + 1 < n {
-                is_strand[i + 1] = true;
+    let dssp8 = proteus_dssp::assign(&residues);
+    let mut assignment = Vec::with_capacity(backbone.len());
+    let mut dssp = String::with_capacity(backbone.len());
+    for slot in &index_map {
+        match slot {
+            Some(k) => {
+                let s = dssp8[*k];
+                dssp.push(s.as_char());
+                assignment.push(match s.simplify() {
+                    proteus_dssp::Simple::Helix => SecondaryStructure::Helix,
+                    proteus_dssp::Simple::Strand => SecondaryStructure::Strand,
+                    proteus_dssp::Simple::Coil => SecondaryStructure::Coil,
+                });
             }
-            if i + 2 < n {
-                is_strand[i + 2] = true;
+            None => {
+                dssp.push('-');
+                assignment.push(SecondaryStructure::Coil);
             }
         }
     }
-
-    let mut helix_count = 0;
-    let mut strand_count = 0;
-    let mut coil_count = 0;
-
-    for i in 0..n {
-        if is_helix[i] {
-            assignment[i] = SecondaryStructure::Helix;
-            helix_count += 1;
-        } else if is_strand[i] {
-            assignment[i] = SecondaryStructure::Strand;
-            strand_count += 1;
-        } else {
-            assignment[i] = SecondaryStructure::Coil;
-            coil_count += 1;
-        }
-    }
-
-    let n_f = n as f64;
+    let n = assignment.len().max(1) as f64;
+    let count = |k: SecondaryStructure| assignment.iter().filter(|s| **s == k).count() as f64 / n;
     SecondaryStructureSummary {
-        helix_fraction: (helix_count as f64) / n_f,
-        strand_fraction: (strand_count as f64) / n_f,
-        coil_fraction: (coil_count as f64) / n_f,
+        helix_fraction: count(SecondaryStructure::Helix),
+        strand_fraction: count(SecondaryStructure::Strand),
+        coil_fraction: count(SecondaryStructure::Coil),
         assignment,
+        dssp,
     }
 }
 
@@ -383,23 +344,29 @@ mod tests {
     }
 
     #[test]
-    fn test_synthetic_helix_secondary_structure() {
-        // Generate ideal alpha-helix CA coordinates (3.6 residues/turn, 1.5A pitch, 2.3A radius)
-        let radius = 2.3;
-        let mut coords = Vec::new();
-        for i in 0..20 {
-            let angle = (i as f64) * 1.74533; // 100 degrees
-            let x = radius * angle.cos();
-            let y = radius * angle.sin();
-            let z = (i as f64) * 1.5;
-            coords.push(Vector3::new(x, y, z));
-        }
-
-        let summary = assign_secondary_structure(&coords);
+    fn crambin_three_state_fractions_match_dssp() {
+        let (pdb, _) = pdbtbx::open(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
+            pdbtbx::StrictnessLevel::Loose,
+        )
+        .unwrap();
+        let bb = crate::backbone::extract_backbone(&pdb);
+        let s = assign_secondary_structure(&bb);
+        assert_eq!(s.dssp, "-EE-SSHHHHHHHHHHHTTT--HHHHHHHHS-EE-SSS---GGG--");
         assert!(
-            summary.helix_fraction > 0.70,
-            "Expected helix fraction > 70%, got {}",
-            summary.helix_fraction
+            (s.helix_fraction - 0.478).abs() < 0.05,
+            "{}",
+            s.helix_fraction
+        );
+        assert!(
+            (s.strand_fraction - 0.087).abs() < 0.05,
+            "{}",
+            s.strand_fraction
+        );
+        assert!(
+            (s.coil_fraction - 0.435).abs() < 0.05,
+            "{}",
+            s.coil_fraction
         );
     }
 

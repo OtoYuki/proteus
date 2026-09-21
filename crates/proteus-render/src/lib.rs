@@ -153,7 +153,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         }
     }
 
-    let ss_summary = assign_secondary_structure(&ca_coords);
+    let ss_summary = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&pdb));
 
     // Compute bounding sphere
     let n = ca_coords.len() as f64;
@@ -312,18 +312,19 @@ pub fn prepare_superposition_for_rendering(
     .map_err(|e| RenderError::Geometry(e.to_string()))?;
 
     let aligned_tgt_ca = sup.aligned_coords;
-    let tgt_ss = assign_secondary_structure(&aligned_tgt_ca);
-    let ref_ss = assign_secondary_structure(&ref_ca[..common_len]);
+    // Secondary structure is invariant under rigid superposition: assign on the originals.
+    let tgt_ss = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&tgt_pdb));
+    let ref_ss = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&ref_pdb));
 
     let target_mesh = generate_cartoon_mesh(
         &aligned_tgt_ca,
-        &tgt_ss.assignment,
+        &tgt_ss.assignment[..common_len],
         &tgt_plddts[..common_len],
         4,
     );
     let ref_mesh = generate_cartoon_mesh(
         &ref_ca[..common_len],
-        &ref_ss.assignment,
+        &ref_ss.assignment[..common_len],
         &ref_plddts[..common_len],
         4,
     );

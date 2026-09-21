@@ -1,0 +1,20 @@
+[package]
+name = "proteus-dssp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pure-Rust Kabsch-Sander DSSP secondary-structure assignment (DSSP 2.x semantics)."
+keywords = ["bioinformatics", "dssp", "protein", "secondary-structure"]
+categories = ["science::bioinformatics"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dev-dependencies]
+pdbtbx = { workspace = true }

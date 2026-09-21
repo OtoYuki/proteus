@@ -281,7 +281,7 @@ pub fn analyze_pdb_detailed(
         phi_psi_context.push((phi, psi, context));
     }
 
-    let ss_summary = crate::structure::assign_secondary_structure(&ca_coords);
+    let ss_summary = crate::structure::assign_secondary_structure(&backbones);
     let rama_stats = crate::structure::evaluate_ramachandran_with_context(&phi_psi_context);
     let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
     let clash_stats = crate::clash::compute_clash_stats(pdb);

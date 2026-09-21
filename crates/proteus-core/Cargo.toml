@@ -14,6 +14,7 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 pdbtbx = { workspace = true }
 nalgebra = { workspace = true }
+proteus-dssp = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
 utoipa = { workspace = true, optional = true }
 

@@ -7,6 +7,7 @@ members = [
     "crates/proteus-server",
     "crates/proteus-cli",
     "crates/proteus-render",
+    "crates/proteus-dssp",
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ proteus-storage = { path = "crates/proteus-storage" }
 proteus-engine = { path = "crates/proteus-engine" }
 proteus-server = { path = "crates/proteus-server" }
 proteus-render = { path = "crates/proteus-render" }
+proteus-dssp = { path = "crates/proteus-dssp" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }

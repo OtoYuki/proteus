@@ -2337,6 +2337,7 @@ dependencies = [
  "chrono",
  "nalgebra",
  "pdbtbx",
+ "proteus-dssp",
  "serde",
  "serde_json",
  "tempfile",
@@ -2344,6 +2345,14 @@ dependencies = [
  "tracing",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "proteus-dssp"
+version = "0.2.0"
+dependencies = [
+ "pdbtbx",
+ "serde",
 ]
 
 [[package]]
