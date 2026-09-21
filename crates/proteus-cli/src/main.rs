@@ -312,7 +312,11 @@ fn resolve_runner(mode: RunnerMode) -> Result<Arc<dyn ComputeRunner>> {
     }
 }
 
+/// `$PROTEUS_DATA_DIR` if set (containers, CI), else `~/.local/share/proteus`.
 fn get_default_data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("PROTEUS_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs_next_or_home().join(".local/share/proteus")
 }
 

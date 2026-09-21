@@ -39,7 +39,7 @@ async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # Serialization & Models
 serde = { version = "1.0", features = ["derive"] }
