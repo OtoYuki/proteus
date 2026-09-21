@@ -78,7 +78,8 @@ fn corpus_matches_reference_implementations() {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(root().join("reference"))
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+        // Structure corpus only; validate/reference/esm/ holds ESM-2 logits for proteus-esm.
+        .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("json"))
         .collect();
     entries.sort();
 

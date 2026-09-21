@@ -30,8 +30,8 @@ struct SeqRef {
 
 fn reference(name: &str) -> Reference {
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../validate/reference")
-        .join(format!("esm_{name}.json"));
+        .join("../../validate/reference/esm")
+        .join(format!("{name}.json"));
     serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
 
