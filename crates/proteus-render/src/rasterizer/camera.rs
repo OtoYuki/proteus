@@ -70,11 +70,10 @@ impl OrbitCamera {
         let centered = point - self.center;
         let view = rot_mat * centered + self.pan;
 
-        let scale = self.zoom * (width.min(height) as f32) / (self.bounding_radius * 2.2);
+        let scale = self.zoom * (width.min(height) as f32) * 0.90 / (self.bounding_radius * 2.0);
 
         let screen_x = (width as f32 * 0.5) + view.x * scale;
-        // 0.5 vertical factor compensates for 2:1 character cell aspect ratio
-        let screen_y = (height as f32 * 0.5) - view.y * scale * 0.5;
+        let screen_y = (height as f32 * 0.5) - view.y * scale;
         // Smaller depth is closer to camera; viewer is at +Z
         let depth_z = -view.z;
 
