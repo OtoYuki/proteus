@@ -706,7 +706,12 @@ impl PipelineScheduler {
                 task_id: task_id.to_string(),
                 error: format!("TES task finished with state {:?}", task.state),
             });
-            warn!("TES task {} finished with state {:?}", task_id, task.state);
+            warn!(
+                "TES task {} finished with state {:?}; system_logs: {:?}",
+                task_id,
+                task.state,
+                task.logs.last().map(|l| &l.system_logs)
+            );
         }
 
         Ok(())

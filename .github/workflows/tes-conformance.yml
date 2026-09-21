@@ -14,6 +14,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p proteus-cli
+      - name: Pre-pull alpine (Docker Hub anonymous pulls are rate-limited on hosted runners)
+        run: |
+          docker pull alpine:latest || (docker images --format '{{.Repository}}:{{.Tag}}' | grep '^alpine:' | head -1 | xargs -I{} docker tag {} alpine:latest)
+          docker images | grep alpine
       - name: Start proteusd (container executor via /var/run/docker.sock)
         run: |
           mkdir -p /tmp/proteus-data

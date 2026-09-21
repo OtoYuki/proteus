@@ -230,6 +230,20 @@ impl ContainerExecutor {
         if self.docker.inspect_image(image).await.is_ok() {
             return Ok(());
         }
+        // `alpine` → `alpine:latest`; without a tag the engine API pulls every tag.
+        let image = if image
+            .rsplit('/')
+            .next()
+            .is_some_and(|last| !last.contains(':') && !last.contains('@'))
+        {
+            format!("{image}:latest")
+        } else {
+            image.to_string()
+        };
+        let image = image.as_str();
+        if self.docker.inspect_image(image).await.is_ok() {
+            return Ok(());
+        }
         if !self.pull_missing {
             return Err(EngineError::Container(format!(
                 "image '{image}' not present locally and pulling is disabled (--no-pull)"
