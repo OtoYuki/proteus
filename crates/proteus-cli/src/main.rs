@@ -513,6 +513,69 @@ async fn main() -> Result<()> {
                 ]);
             }
 
+            if let Some(ref net) = metrics.interaction_network {
+                table.add_row(vec![
+                    Cell::new("Hydrogen Bonds (H-Bonds)"),
+                    Cell::new(format!(
+                        "{} total ({} BB-BB, {} BB-SC, {} SC-SC)",
+                        net.summary.total_hbonds,
+                        net.summary.bb_bb_hbonds,
+                        net.summary.bb_sc_hbonds,
+                        net.summary.sc_sc_hbonds
+                    )),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Ionic Salt Bridges (≤4.0Å)"),
+                    Cell::new(format!(
+                        "{} detected{}",
+                        net.summary.total_salt_bridges,
+                        if let Some(s) = net.salt_bridges.first() {
+                            format!(
+                                " (closest: {}{}:{}-{}{}:{} {:.2}Å)",
+                                s.cation_res_name,
+                                s.cation_res_seq,
+                                s.cation_atom_name,
+                                s.anion_res_name,
+                                s.anion_res_seq,
+                                s.anion_atom_name,
+                                s.distance
+                            )
+                        } else {
+                            "".to_string()
+                        }
+                    )),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Aromatic π-π Stacking"),
+                    Cell::new(format!(
+                        "{} conjugated pairs ({} parallel, {} T-shaped)",
+                        net.summary.total_pi_pi_stacks,
+                        net.pi_pi_stacks
+                            .iter()
+                            .filter(|p| p.category == proteus_core::PiStackingCategory::Parallel)
+                            .count(),
+                        net.pi_pi_stacks
+                            .iter()
+                            .filter(|p| p.category == proteus_core::PiStackingCategory::TShaped)
+                            .count(),
+                    )),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Cation-π Interactions"),
+                    Cell::new(format!(
+                        "{} active interactions",
+                        net.summary.total_cation_pi
+                    )),
+                ]);
+                table.add_row(vec![
+                    Cell::new("Non-Covalent Network Density"),
+                    Cell::new(format!(
+                        "{:.1} contacts / 100 res",
+                        net.summary.network_density
+                    )),
+                ]);
+            }
+
             if let Some(fitness) = metrics.candidate_fitness_score {
                 table.add_row(vec![
                     Cell::new("Candidate Fitness Score"),
@@ -816,6 +879,10 @@ async fn main() -> Result<()> {
                 favored_rama: f64,
                 rama_outliers: usize,
                 clashscore: f64,
+                hbond_count: usize,
+                salt_bridge_count: usize,
+                pi_stacking_count: usize,
+                cation_pi_count: usize,
                 fitness: f64,
             }
 
@@ -846,6 +913,22 @@ async fn main() -> Result<()> {
                                 });
                             let clashscore =
                                 metrics.clash_stats.as_ref().map_or(0.0, |c| c.clashscore);
+                            let (
+                                hbond_count,
+                                salt_bridge_count,
+                                pi_stacking_count,
+                                cation_pi_count,
+                            ) = metrics
+                                .interaction_network
+                                .as_ref()
+                                .map_or((0, 0, 0, 0), |net| {
+                                    (
+                                        net.summary.total_hbonds,
+                                        net.summary.total_salt_bridges,
+                                        net.summary.total_pi_pi_stacks,
+                                        net.summary.total_cation_pi,
+                                    )
+                                });
                             let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
 
                             candidates.push(CandidateRank {
@@ -861,6 +944,10 @@ async fn main() -> Result<()> {
                                 favored_rama,
                                 rama_outliers,
                                 clashscore,
+                                hbond_count,
+                                salt_bridge_count,
+                                pi_stacking_count,
+                                cation_pi_count,
                                 fitness,
                             });
                         }
@@ -889,6 +976,8 @@ async fn main() -> Result<()> {
                 "Rg (Å)",
                 "Core Burial",
                 "Clash",
+                "H-Bonds",
+                "Salt/π",
                 "Fitness / 100",
                 "Job ID",
             ]);
@@ -902,6 +991,12 @@ async fn main() -> Result<()> {
                     Cell::new(format!("{:.2}", c.rg)),
                     Cell::new(format!("{:.1}%", c.hydrophobic_burial)),
                     Cell::new(format!("{:.1}", c.clashscore)),
+                    Cell::new(c.hbond_count),
+                    Cell::new(format!(
+                        "{}/{}",
+                        c.salt_bridge_count,
+                        c.pi_stacking_count + c.cation_pi_count
+                    )),
                     Cell::new(format!("{:.1}", c.fitness)),
                     Cell::new(c.job_id.to_string()),
                 ]);
@@ -933,6 +1028,10 @@ async fn main() -> Result<()> {
                         favored_ramachandran_pct: c.favored_rama,
                         rama_outliers: c.rama_outliers,
                         clashscore: c.clashscore,
+                        hbond_count: c.hbond_count,
+                        salt_bridge_count: c.salt_bridge_count,
+                        pi_stacking_count: c.pi_stacking_count,
+                        cation_pi_count: c.cation_pi_count,
                         fitness: c.fitness,
                     });
                 }

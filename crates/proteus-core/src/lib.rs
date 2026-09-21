@@ -2,6 +2,7 @@
 
 pub mod clash;
 pub mod error;
+pub mod interactions;
 pub mod metrics;
 pub mod models;
 pub mod mutagenesis;
@@ -12,6 +13,7 @@ pub mod structure;
 
 pub use clash::*;
 pub use error::CoreError;
+pub use interactions::*;
 pub use models::*;
 pub use mutagenesis::*;
 pub use ranking::*;

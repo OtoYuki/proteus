@@ -374,6 +374,7 @@ impl ProteusRepository {
                 ramachandran_stats: None,
                 clash_stats: None,
                 sasa_metrics: None,
+                interaction_network: None,
                 candidate_fitness_score: None,
             }))
         } else {
@@ -513,6 +514,7 @@ mod tests {
             ramachandran_stats: None,
             clash_stats: None,
             sasa_metrics: None,
+            interaction_network: None,
             candidate_fitness_score: Some(88.5),
         };
         repo.insert_metrics(&metrics).await.unwrap();

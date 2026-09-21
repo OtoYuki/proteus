@@ -47,6 +47,7 @@ Enables full structural inspection over SSH without X11 forwarding, WebGL browse
 
 ### 4. Native Biophysical Validation Engines
 Executes all-atom biophysical calculations in sub-milliseconds:
+- **Non-Covalent Interaction Networks (NCIN):** Evaluates all-atom hydrogen bonds (Baker-Hubbard heavy-atom antecedent criteria across backbone and sidechains), ionic salt bridges ($\le 4.0\text{ \AA}$ between basic cations and acidic anions), $\pi$-$\pi$ aromatic stacking (parallel displaced and T-shaped edge-to-face), and cation-$\pi$ interactions over $O(N)$ spatial bounding-box cell lists.
 - **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
 - **MolProbity Ramachandran Distributions:** Calculates backbone dihedral angles ($\phi, \psi$) and classifies conformations across four residue-specific stereochemical contexts (General, Glycine, Proline, Pre-Proline).
 - **MolProbity Steric Clashscore:** Evaluates severe steric overlaps ($> 0.40\text{ \AA}$) per 1,000 heavy atoms using Bondi van der Waals radii, cell-list spatial hashing, and crystallographic exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges).
@@ -68,7 +69,7 @@ The compiled binary will be located at `target/release/proteus`.
 
 ### Verification & Test Suite
 ```bash
-# Run all 43 workspace unit and integration tests
+# Run all 48 workspace unit and integration tests
 cargo test --workspace
 
 # Strict lint check
@@ -148,18 +149,23 @@ proteus analyze --pdb structure.pdb
 ```
 Output:
 ```
-┌─────────────────────────────────┬─────────────────────────────────────────────────┐
-│ Metric                          ┆ Value                                           │
-╞═════════════════════════════════╪═════════════════════════════════════════════════╡
-│ Radius of Gyration (Rg)         ┆ 9.369 Å                                         │
-│ Tertiary Contact Density (≤8Å)  ┆ 11.1% (Cα pairs)                                │
-│ Mean pLDDT                      ┆ 82.50 (Confident)                               │
-│ Secondary Structure             ┆ α 42% │ β 18% │ Coil 40%                        │
-│ Ramachandran Distribution       ┆ Favored: 95.5% │ Allowed: 4.5% │ Outliers: 0    │
-│ SASA Total / Hydrophobic Burial ┆ 2842.1 Å² (54.3% buried core)                   │
-│ MolProbity Clashscore (>0.4Å)   ┆ 0.0 (0 severe steric overlaps)                  │
-│ Candidate Fitness Score         ┆ 78.4 / 100                                      │
-└─────────────────────────────────┴─────────────────────────────────────────────────┘
+┌───────────────────────────────────────┬─────────────────────────────────────────────────┐
+│ Biophysical Metric                    ┆ Value                                           │
+╞═══════════════════════════════════════╪═════════════════════════════════════════════════╡
+│ Radius of Gyration (Rg)               ┆ 9.676 Å                                         │
+│ Contact Density (C-alpha <= 8Å)       ┆ 9.86% (Cα pairs)                                │
+│ Mean pLDDT                            ┆ 82.50 (Confident)                               │
+│ Secondary Structure Composition       ┆ α-Helix: 69.6% | β-Strand: 28.3% | Coil: 2.2%   │
+│ Ramachandran Conformation             ┆ Favored: 95.5% | Allowed: 4.5% | Outliers: 0    │
+│ Solvent Accessible Surface Area       ┆ Total: 2976.6 Å² (Hydrophobic Burial: 92.8%)    │
+│ MolProbity Clashscore (>0.4Å)         ┆ 0.0 (0 severe steric overlaps)                  │
+│ Hydrogen Bonds (H-Bonds)              ┆ 54 total (43 BB-BB, 10 BB-SC, 1 SC-SC)          │
+│ Ionic Salt Bridges (≤4.0Å)            ┆ 1 detected (closest: ARG17:NH2-GLU23:OE2 3.97Å) │
+│ Aromatic π-π Stacking                 ┆ 0 conjugated pairs (0 parallel, 0 T-shaped)     │
+│ Cation-π Interactions                 ┆ 1 active interactions                           │
+│ Non-Covalent Network Density          ┆ 121.7 contacts / 100 res                        │
+│ Candidate Fitness Score               ┆ 84.8 / 100                                      │
+└───────────────────────────────────────┴─────────────────────────────────────────────────┘
 ```
 
 ### 5. Headless Daemon (`proteus serve`)
@@ -193,10 +199,20 @@ Subject to topological exclusions:
 - Backbone peptide linkages and proline pyrrolidine ring geometry ($|res_i - res_j| = 1$ within the same chain).
 - Covalent disulfide-bonded cysteine sulfur pairs ($d(S_\gamma, S_\gamma) \in [1.70, 2.60]\text{ \AA}$).
 
+### Non-Covalent Interaction Network (NCIN)
+- **Baker-Hubbard Hydrogen Bonds:**
+  $$2.4\,\text{Å} \le d(D, A) \le 3.5\,\text{Å}, \quad \theta(D_{\text{ante}}-D\cdots A) \ge 90^\circ, \quad \theta(A_{\text{ante}}-A\cdots D) \ge 90^\circ$$
+- **Ionic Salt Bridges:**
+  $$d(\text{cation}, \text{anion}) \le 4.0\,\text{Å} \quad\text{with}\quad res_{\text{cat}} \neq res_{\text{ani}}$$
+- **Aromatic $\pi$-$\pi$ Stacking:**
+  $$d(\mathbf{c}_1, \mathbf{c}_2) \le 6.5\,\text{Å}, \quad \theta = \arccos(|\mathbf{n}_1 \cdot \mathbf{n}_2|) \implies \begin{cases} \text{Parallel} & \theta \le 30^\circ \\ \text{T-Shaped} & 60^\circ \le \theta \le 120^\circ \end{cases}$$
+- **Cation-$\pi$ Interactions:**
+  $$d(\text{cation}, \mathbf{c}) \le 6.0\,\text{Å}, \quad \cos\alpha = \frac{|\mathbf{n} \cdot (\mathbf{r}_{\text{cat}} - \mathbf{c})|}{\|\mathbf{r}_{\text{cat}} - \mathbf{c}\|} \ge \frac{1}{\sqrt{2}}$$
+
 ### Composite Candidate Fitness Score
-$$S_{\text{fitness}} = 0.35 \cdot \text{pLDDT} + 0.25 \cdot f_{\text{favored}} + 0.20 \cdot f_{\text{burial}} + 0.20 \cdot f_{\text{helix}+\text{strand}} - P$$
-where the structural penalty $P$ accounts for Ramachandran outliers and steric clashes:
-$$P = 3.0 \cdot N_{\text{outliers}} + 0.5 \cdot \min(\text{clashscore}, 40.0)$$
+$$S_{\text{fitness}} = 0.30 \cdot \text{pLDDT} + 0.20 \cdot S_{\text{compactness}} + 0.15 \cdot f_{\text{favored}} + 0.15 \cdot f_{\text{burial}} + 0.20 \cdot B_{\text{network}} - P_{\text{clash}}$$
+where non-covalent tertiary network density $B_{\text{network}}$ rewards secondary/tertiary hydrogen bonds, salt bridges, and aromatic contacts:
+$$B_{\text{network}} = \min\left(100.0, \frac{0.5 N_{\text{bb}} + 1.0 N_{\text{sc-hbond}} + 2.5 N_{\text{salt}} + 2.0 N_{\pi\text{-}\pi} + 2.0 N_{\text{cat-}\pi}}{0.60 \cdot N_{\text{res}}}\right)$$
 
 ---
 

@@ -85,6 +85,7 @@ pub struct BiophysicalMetrics {
     pub ramachandran_stats: Option<RamachandranStats>,
     pub clash_stats: Option<ClashStats>,
     pub sasa_metrics: Option<SasaMetrics>,
+    pub interaction_network: Option<crate::interactions::InteractionNetwork>,
     pub candidate_fitness_score: Option<f64>,
 }
 

@@ -46,7 +46,16 @@ use uuid::Uuid;
             proteus_core::structure::RamachandranStats,
             proteus_core::clash::ClashStats,
             proteus_core::clash::StericClash,
-            proteus_core::sasa::SasaMetrics
+            proteus_core::sasa::SasaMetrics,
+            proteus_core::interactions::InteractionNetwork,
+            proteus_core::interactions::InteractionSummary,
+            proteus_core::interactions::HydrogenBond,
+            proteus_core::interactions::HBondCategory,
+            proteus_core::interactions::SaltBridge,
+            proteus_core::interactions::PiStacking,
+            proteus_core::interactions::PiStackingCategory,
+            proteus_core::interactions::CationPiInteraction,
+            proteus_core::ranking::CandidateFitness
         )
     ),
     tags(

@@ -490,6 +490,7 @@ mod tests {
                 }),
                 clash_stats: None,
                 sasa_metrics: None,
+                interaction_network: None,
                 candidate_fitness_score: Some(87.4),
             }),
             plddts: vec![92.0; 46],

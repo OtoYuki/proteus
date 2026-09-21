@@ -26,13 +26,17 @@ pub struct ScreeningRecord {
     pub favored_ramachandran_pct: f64,
     pub rama_outliers: usize,
     pub clashscore: f64,
+    pub hbond_count: usize,
+    pub salt_bridge_count: usize,
+    pub pi_stacking_count: usize,
+    pub cation_pi_count: usize,
     pub fitness: f64,
 }
 
 /// Serializes candidate screening records to standard RFC-4180 CSV format.
 pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
     let mut out = String::new();
-    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,clashscore,fitness\n");
+    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,clashscore,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness\n");
 
     for r in records {
         // Escape quotes in header if needed
@@ -43,7 +47,7 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
         };
 
         out.push_str(&format!(
-            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{:.2}\n",
+            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{},{},{},{},{:.2}\n",
             r.rank,
             r.job_id,
             safe_header,
@@ -57,6 +61,10 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
             r.favored_ramachandran_pct,
             r.rama_outliers,
             r.clashscore,
+            r.hbond_count,
+            r.salt_bridge_count,
+            r.pi_stacking_count,
+            r.cation_pi_count,
             r.fitness
         ));
     }
@@ -85,6 +93,10 @@ pub fn screening_record_schema() -> Schema {
         Field::new("favored_ramachandran_pct", DataType::Float64, false),
         Field::new("rama_outliers", DataType::Int64, false),
         Field::new("clashscore", DataType::Float64, false),
+        Field::new("hbond_count", DataType::Int64, false),
+        Field::new("salt_bridge_count", DataType::Int64, false),
+        Field::new("pi_stacking_count", DataType::Int64, false),
+        Field::new("cation_pi_count", DataType::Int64, false),
         Field::new("fitness", DataType::Float64, false),
     ])
 }
@@ -114,6 +126,10 @@ pub fn records_to_record_batch(
         .collect();
     let rama_outliers: Int64Array = records.iter().map(|r| r.rama_outliers as i64).collect();
     let clashscores: Float64Array = records.iter().map(|r| Some(r.clashscore)).collect();
+    let hbonds: Int64Array = records.iter().map(|r| r.hbond_count as i64).collect();
+    let salt_bridges: Int64Array = records.iter().map(|r| r.salt_bridge_count as i64).collect();
+    let pi_stacks: Int64Array = records.iter().map(|r| r.pi_stacking_count as i64).collect();
+    let cation_pis: Int64Array = records.iter().map(|r| r.cation_pi_count as i64).collect();
     let fitnesses: Float64Array = records.iter().map(|r| Some(r.fitness)).collect();
 
     let columns: Vec<ArrayRef> = vec![
@@ -130,6 +146,10 @@ pub fn records_to_record_batch(
         Arc::new(favored_ramas),
         Arc::new(rama_outliers),
         Arc::new(clashscores),
+        Arc::new(hbonds),
+        Arc::new(salt_bridges),
+        Arc::new(pi_stacks),
+        Arc::new(cation_pis),
         Arc::new(fitnesses),
     ];
 
@@ -214,6 +234,10 @@ mod tests {
             favored_ramachandran_pct: 95.5,
             rama_outliers: 0,
             clashscore: 1.25,
+            hbond_count: 28,
+            salt_bridge_count: 1,
+            pi_stacking_count: 2,
+            cation_pi_count: 1,
             fitness: 78.4,
         }
     }
@@ -267,7 +291,7 @@ mod tests {
         // Read Parquet back using ParquetRecordBatchReaderBuilder
         let file = std::fs::File::open(&parquet_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 14);
+        assert_eq!(builder.schema().fields().len(), 18);
 
         let mut reader = builder.build().unwrap();
         let batch = reader.next().unwrap().unwrap();
@@ -287,6 +311,20 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap();
         assert!((clash_col.value(0) - 1.25).abs() < 1e-5);
+
+        let hbond_col = batch
+            .column(13)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(hbond_col.value(0), 28);
+
+        let salt_col = batch
+            .column(14)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(salt_col.value(0), 1);
 
         // Test nested directory automatic creation
         let nested_path = dir.path().join("sub/nested/dir/results.parquet");
