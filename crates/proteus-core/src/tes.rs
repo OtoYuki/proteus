@@ -154,8 +154,42 @@ pub struct TesExecutorLog {
 pub struct TesOutputFileLog {
     pub url: String,
     pub path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// int64 in the TES schema, which the protobuf JSON mapping encodes as a **string**;
+    /// strict clients (Sprocket/Crankshaft's `tes` crate) reject a bare integer.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        with = "int64_as_string",
+        default
+    )]
     pub size_bytes: Option<u64>,
+}
+
+/// Serde helpers for TES int64 fields (`size_bytes`): serialize as decimal string, accept both
+/// string and integer on input.
+pub mod int64_as_string {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
+        match v {
+            Some(n) => n.to_string().serialize(s),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Num(u64),
+            Str(String),
+            None,
+        }
+        match Raw::deserialize(d)? {
+            Raw::Num(n) => Ok(Some(n)),
+            Raw::Str(s) => s.parse().map(Some).map_err(serde::de::Error::custom),
+            Raw::None => Ok(None),
+        }
+    }
 }
 
 /// Complete execution log record for a task attempt.

@@ -484,8 +484,13 @@ impl PipelineScheduler {
                 tokio::fs::write(&target_path, content).await?;
             } else if let Some(ref url) = input.url {
                 if let Some(src) = url.strip_prefix("file://") {
-                    if std::path::Path::new(src).exists() {
-                        tokio::fs::copy(src, &target_path).await?;
+                    let src = std::path::Path::new(src);
+                    if src.exists() {
+                        copy_recursive(src, &target_path).await?;
+                    } else {
+                        return Err(EngineError::Tes(format!(
+                            "input {url} does not exist on the server host"
+                        )));
                     }
                 } else if url.starts_with("http://") || url.starts_with("https://") {
                     let resp = reqwest::get(url).await.map_err(|e| {
@@ -496,7 +501,7 @@ impl PipelineScheduler {
                     })?;
                     tokio::fs::write(&target_path, bytes).await?;
                 } else if std::path::Path::new(url).exists() {
-                    tokio::fs::copy(url, &target_path).await?;
+                    copy_recursive(std::path::Path::new(url), &target_path).await?;
                 }
             }
         }
@@ -625,16 +630,34 @@ impl PipelineScheduler {
         }
         self.cancel_tokens.lock().unwrap().remove(task_id);
 
-        // 4. Output harvesting & Biophysics trigger
+        // 4. Output harvesting: upload to the declared URL (file:// supported), record the log,
+        //    and analyse structure files.
         for output in &task.outputs {
             let out_target = work_dir.join(output.path.trim_start_matches('/'));
             if out_target.exists() {
-                let size = tokio::fs::metadata(&out_target)
-                    .await
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let is_dir = out_target.is_dir();
+                let size = if is_dir {
+                    dir_size(&out_target).await
+                } else {
+                    tokio::fs::metadata(&out_target)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                };
+                let mut recorded_url = format!("file://{}", out_target.to_string_lossy());
+                if let Some(url) = output.url.as_deref().filter(|u| !u.is_empty()) {
+                    match upload_output(&out_target, url).await {
+                        Ok(()) => recorded_url = url.to_string(),
+                        Err(e) => {
+                            task_log
+                                .system_logs
+                                .push(format!("output upload to {url} failed: {e}"));
+                            task.state = TesState::SystemError;
+                        }
+                    }
+                }
                 task_log.outputs.push(TesOutputFileLog {
-                    url: format!("file://{}", out_target.to_string_lossy()),
+                    url: recorded_url,
                     path: output.path.clone(),
                     size_bytes: Some(size),
                 });
@@ -699,6 +722,68 @@ fn categorize_plddt(score: f64) -> String {
         "Low (Consider flexible/disordered)".to_string()
     } else {
         "Very Low (Unstructured)".to_string()
+    }
+}
+
+/// Total size of a directory tree in bytes.
+async fn dir_size(root: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut rd) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            match entry.metadata().await {
+                Ok(m) if m.is_dir() => stack.push(entry.path()),
+                Ok(m) => total += m.len(),
+                Err(_) => {}
+            }
+        }
+    }
+    total
+}
+
+/// Copy `src` (file or directory) to `dst`, creating parents.
+async fn copy_recursive(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    if src.is_dir() {
+        tokio::fs::create_dir_all(dst).await?;
+        let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
+        while let Some((s, d)) = stack.pop() {
+            let mut rd = tokio::fs::read_dir(&s).await?;
+            while let Some(entry) = rd.next_entry().await? {
+                let target = d.join(entry.file_name());
+                if entry.metadata().await?.is_dir() {
+                    tokio::fs::create_dir_all(&target).await?;
+                    stack.push((entry.path(), target));
+                } else {
+                    tokio::fs::copy(entry.path(), &target).await?;
+                }
+            }
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::copy(src, dst).await?;
+    }
+    Ok(())
+}
+
+/// Deliver a task output to its declared URL. `file://` is supported (local or shared
+/// filesystem, as Sprocket/Nextflow use on a single host); other schemes are reported.
+async fn upload_output(local: &std::path::Path, url: &str) -> Result<(), EngineError> {
+    if let Some(dest) = url.strip_prefix("file://") {
+        copy_recursive(local, std::path::Path::new(dest))
+            .await
+            .map_err(EngineError::Io)
+    } else {
+        Err(EngineError::Tes(format!(
+            "output URL scheme not supported: {url} (file:// only in this release)"
+        )))
     }
 }
 

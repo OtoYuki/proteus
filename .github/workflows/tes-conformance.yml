@@ -50,3 +50,37 @@ jobs:
         with:
           name: tes-compliance-report
           path: /tmp/otr-report/report.json
+
+  sprocket-wdl:
+    name: Sprocket (WDL) → TES backend → proteusd → container
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p proteus-cli
+      - name: Build the proteus image the WDL task runs in
+        run: docker build -t ghcr.io/otoyuki/proteus:ci .
+      - name: Start proteusd
+        run: |
+          mkdir -p /tmp/proteus-data /tmp/tes-store/in/file /tmp/tes-store/out
+          PROTEUS_DATA_DIR=/tmp/proteus-data RUST_LOG=info \
+            nohup target/release/proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --no-pull \
+            > /tmp/proteusd.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/v1/service-info >/dev/null && break; sleep 1; done
+      - name: Install Sprocket
+        run: |
+          V=$(curl -s https://api.github.com/repos/stjude-rust-labs/sprocket/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          curl -sL "https://github.com/stjude-rust-labs/sprocket/releases/download/$V/sprocket-$V-x86_64-unknown-linux-gnu.tar.gz" | tar xz
+          find . -maxdepth 3 -name sprocket -type f -exec mv {} /usr/local/bin/sprocket \;
+          sprocket --version
+      - name: Run the WDL through the TES backend
+        run: |
+          sprocket run -c examples/wdl/sprocket.toml -s examples/wdl/analyze.wdl \
+            @examples/wdl/inputs.json analyze_structure.image=ghcr.io/otoyuki/proteus:ci \
+            --output-dir /tmp/sprocket-out | tee /tmp/sprocket.log
+          grep -q "Radius of Gyration" /tmp/tes-store/out/*/work/metrics.txt
+          grep "Ramachandran" /tmp/tes-store/out/*/work/metrics.txt
+      - name: Daemon log
+        if: always()
+        run: tail -n 60 /tmp/proteusd.log

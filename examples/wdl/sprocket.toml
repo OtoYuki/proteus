@@ -1,0 +1,21 @@
+# Sprocket (https://sprocket.bio) configuration: run WDL tasks on a Proteus GA4GH TES server.
+#
+#   proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*'          # terminal 1
+#   mkdir -p /tmp/tes-store/in/file /tmp/tes-store/out                   # Sprocket's file store needs these
+#   sprocket run -c examples/wdl/sprocket.toml -s examples/wdl/analyze.wdl @examples/wdl/inputs.json
+#
+# Sprocket stages inputs into `inputs` and expects outputs delivered to `outputs`; proteusd
+# fetches/uploads file:// URLs (same host or shared filesystem). Use s3://, gs:// or az:// roots
+# for a remote TES once Proteus gains an object-store client.
+[run]
+backend = "proteus"
+
+[run.backends.proteus]
+type = "tes"
+url = "http://127.0.0.1:8080/v1"
+insecure = true
+interval = 1
+inputs = "file:///tmp/tes-store/in/"
+outputs = "file:///tmp/tes-store/out/"
+# With `proteus serve --auth-token …`:
+# auth = { type = "bearer", token = "…" }
