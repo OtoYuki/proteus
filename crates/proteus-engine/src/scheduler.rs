@@ -380,6 +380,15 @@ impl PipelineScheduler {
             }
         }
 
+        // Pre-create parent directories for declared outputs
+        for output in &task.outputs {
+            let rel_path = output.path.trim_start_matches('/');
+            let target_path = work_dir.join(rel_path);
+            if let Some(parent) = target_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+        }
+
         // 3. Running state
         task.state = TesState::Running;
         let task_start_time = Utc::now().to_rfc3339();
