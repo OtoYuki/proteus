@@ -4,7 +4,7 @@
 //! log-probabilities within 2.5e-3 (relative 1e-3) — fp32 accumulation-order noise, three
 //! orders of magnitude below any mutation-effect signal. Tolerances: 1e-2 / 5e-3.
 //!
-//! Reference values: `validate/reference/esm_<model>.json`, produced by
+//! Reference values: `validate/reference/esm/<model>.json`, produced by
 //! `validate/esm_reference.py`. Needs the checkpoints (downloaded from the Hub into the cache
 //! on first run), so the tests are `#[ignore]`d: `cargo test -p proteus-esm -- --ignored`.
 

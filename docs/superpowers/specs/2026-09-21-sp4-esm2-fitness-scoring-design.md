@@ -76,7 +76,7 @@ padding only (single sequences: none). fp32 on CPU.
 ### 3.3 Validation and benchmarks
 - `validate/esm_reference.py` (torch CPU): for `esm2_t6_8M` and `esm2_t12_35M`, sequences
   {1CRN, ubiquitin, GB1, a 300-mer from 1TIM}, produce logits at every position for the
-  unmasked sequence and for 5 masked positions each; commit `validate/reference/esm_*.json`
+  unmasked sequence and for 5 masked positions each; commit `validate/reference/esm/*.json`
   (~2 MB) and pin them in `crates/proteus-esm/tests/parity.rs` (needs the weights: test is
   `#[ignore]`, run by `make validate-esm` and a CI job with the Hub cache).
 - `bench/proteingym.py`: downloads the ProteinGym substitution CSVs for a curated list of
