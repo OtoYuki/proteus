@@ -368,10 +368,20 @@ impl ContainerExecutor {
                 let _ = input.shutdown().await;
             });
         }
-        self.docker
+        // A start failure is almost always "executable not found" inside the image: that is the
+        // executor's error (exit 127 by shell convention), so ignore_error semantics apply.
+        if let Err(e) = self
+            .docker
             .start_container(name, None::<StartContainerOptions<String>>)
             .await
-            .map_err(|e| EngineError::Container(format!("start container: {e}")))?;
+        {
+            return Ok(ExecutorResult {
+                stderr: format!("failed to start '{}' in {}: {e}", req.command[0], req.image),
+                exit_code: 127,
+                system_logs: vec![format!("container start failed: {e}")],
+                ..Default::default()
+            });
+        }
         debug!("started {name} ({})", req.image);
 
         let mut wait = self

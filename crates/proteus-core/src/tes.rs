@@ -127,6 +127,9 @@ pub struct TesResources {
     pub zones: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend_parameters: Option<HashMap<String, String>>,
+    /// TES 1.1: when true, the server must reject unknown `backend_parameters`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_parameters_strict: Option<bool>,
 }
 
 /// Log record for a single executor within a task.

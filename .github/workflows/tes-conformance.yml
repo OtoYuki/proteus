@@ -1,0 +1,52 @@
+name: tes-conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ga4gh-tes-1-1:
+    name: GA4GH TES 1.1 compliance suite (container executor, Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p proteus-cli
+      - name: Start proteusd (container executor via /var/run/docker.sock)
+        run: |
+          mkdir -p /tmp/proteus-data
+          PROTEUS_DATA_DIR=/tmp/proteus-data RUST_LOG=info \
+            nohup target/release/proteus serve --port 8080 --allow-image 'alpine*' --allow-image 'docker.io/library/alpine*' \
+            > /tmp/proteusd.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/v1/service-info && break; sleep 1; done
+          curl -s http://127.0.0.1:8080/v1/service-info | python3 -m json.tool
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install the ELIXIR/GA4GH compliance runner
+        run: |
+          git clone --depth 1 https://github.com/elixir-cloud-aai/openapi-test-runner /tmp/otr
+          pip install /tmp/otr
+      - name: Run the suite
+        working-directory: /tmp/otr
+        run: |
+          mkdir -p /tmp/otr-report
+          openapi-test-runner report --server http://127.0.0.1:8080/ --version 1.1.0 --output_path /tmp/otr-report | sed 's/\x1b\[[0-9;]*m//g' | grep -E "Compliance Test-|Passed -|Failed -|Total Tests"
+      - name: Fail on any failed test
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          r = json.load(open('/tmp/otr-report/report.json'))
+          s = r['summary']; print(s)
+          sys.exit(1 if s.get('failed', 0) or s.get('unknown', 0) else 0)
+          PY
+      - name: Daemon log
+        if: always()
+        run: tail -n 100 /tmp/proteusd.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tes-compliance-report
+          path: /tmp/otr-report/report.json

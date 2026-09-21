@@ -339,6 +339,16 @@ impl PipelineScheduler {
                 return Err(EngineError::Tes(msg));
             }
         }
+        // Proteus defines no backend parameters; under `backend_parameters_strict` any key is unknown.
+        if task.resources.backend_parameters_strict == Some(true) {
+            if let Some(params) = &task.resources.backend_parameters {
+                if let Some(key) = params.keys().next() {
+                    return Err(EngineError::Tes(format!(
+                        "unknown backend parameter '{key}' (backend_parameters_strict is set; this server accepts none)"
+                    )));
+                }
+            }
+        }
         Self::mount_roots(task)?;
         Ok(())
     }

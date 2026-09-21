@@ -2348,7 +2348,9 @@ name = "proteus-server"
 version = "0.3.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "chrono",
+ "form_urlencoded",
  "futures-util",
  "glob",
  "proteus-core",
