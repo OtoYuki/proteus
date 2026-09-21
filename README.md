@@ -76,7 +76,7 @@ Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-str
 ## Quickstart
 
 ### Prerequisites
-- **Rust Toolchain:** 1.85+ (tested on Rust 1.94)
+- **Rust Toolchain:** 1.88+ (MSRV, checked in CI; developed on 1.94)
 - **Container Runtime (Optional):** Podman rootless socket (`systemctl --user enable --now podman.socket`) or Docker daemon for live OCI container execution.
 
 ### Build

@@ -1,0 +1,2 @@
+[advisories]
+ignore = ["RUSTSEC-2024-0436"] # paste (unmaintained) via nalgebra/simba; no maintained replacement upstream

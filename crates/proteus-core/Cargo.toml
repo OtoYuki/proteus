@@ -2,6 +2,7 @@
 name = "proteus-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Domain models, FASTA parsing, in-silico mutagenesis, and native biophysical calculations for Proteus."

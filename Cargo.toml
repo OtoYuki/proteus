@@ -11,9 +11,10 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-authors = ["Proteus Contributors"]
+rust-version = "1.88"
+authors = ["Sushant Hona <serotoninotonin@gmail.com>", "Proteus Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/OtoYuki/proteus"
 homepage = "https://github.com/OtoYuki/proteus"
@@ -23,12 +24,12 @@ categories = ["science::bioinformatics", "command-line-utilities", "rendering::e
 
 [workspace.dependencies]
 # Internal workspace crates
-proteus-core = { path = "crates/proteus-core" }
-proteus-storage = { path = "crates/proteus-storage" }
-proteus-engine = { path = "crates/proteus-engine" }
-proteus-server = { path = "crates/proteus-server" }
-proteus-render = { path = "crates/proteus-render" }
-proteus-dssp = { path = "crates/proteus-dssp" }
+proteus-core = { path = "crates/proteus-core", version = "0.3.0" }
+proteus-storage = { path = "crates/proteus-storage", version = "0.3.0" }
+proteus-engine = { path = "crates/proteus-engine", version = "0.3.0" }
+proteus-server = { path = "crates/proteus-server", version = "0.3.0" }
+proteus-render = { path = "crates/proteus-render", version = "0.3.0" }
+proteus-dssp = { path = "crates/proteus-dssp", version = "0.3.0" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }
@@ -63,7 +64,7 @@ nalgebra = "0.33"
 
 # CLI & UX
 clap = { version = "4.5", features = ["derive", "env"] }
-indicatif = "0.17"
+indicatif = "0.18"
 comfy-table = "7.1"
 crossterm = "0.28"
 base64 = "0.22"

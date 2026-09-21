@@ -13,12 +13,12 @@ use crate::error::CoreError;
 
 /// Bytes of raw header text kept alongside a parsed structure for provenance detection
 /// (`EXPDTA`, `TITLE`, mmCIF `_exptl`/`_ma_qa_metric` live near the top of the file).
-const HEADER_PREVIEW_BYTES: usize = 16 * 1024;
+pub const HEADER_PREVIEW_BYTES: usize = 16 * 1024;
 
 /// A parsed structure plus the raw head of the file it came from.
 pub struct LoadedStructure {
     pub pdb: pdbtbx::PDB,
-    /// First [`HEADER_PREVIEW_BYTES`] of the decompressed text, for `confidence` detection.
+    /// First `HEADER_PREVIEW_BYTES` (16 KiB) of the decompressed text, for `confidence` detection.
     pub header_preview: String,
     pub format: StructureFormat,
 }
