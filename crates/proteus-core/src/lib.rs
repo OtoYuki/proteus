@@ -5,6 +5,7 @@ pub mod clash;
 pub mod confidence;
 pub mod error;
 pub mod interactions;
+pub mod io;
 pub mod metrics;
 pub mod models;
 pub mod mutagenesis;

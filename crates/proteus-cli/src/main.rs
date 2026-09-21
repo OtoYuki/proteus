@@ -648,9 +648,10 @@ async fn main() -> Result<()> {
         } => {
             let target_path = PathBuf::from(&target);
             let (pdb_content, title) = if target_path.exists() {
-                let content = tokio::fs::read_to_string(&target_path)
-                    .await
-                    .with_context(|| format!("Failed to read PDB file at {:?}", target_path))?;
+                let content =
+                    proteus_core::io::read_structure_text(&target_path).with_context(|| {
+                        format!("Failed to read structure file at {:?}", target_path)
+                    })?;
                 let name = target_path
                     .file_name()
                     .and_then(|s| s.to_str())
@@ -761,9 +762,10 @@ async fn main() -> Result<()> {
             let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
 
             if let Some(ref_path) = compare {
-                let ref_content = tokio::fs::read_to_string(&ref_path)
-                    .await
-                    .with_context(|| format!("Failed to read reference PDB at {:?}", ref_path))?;
+                let ref_content =
+                    proteus_core::io::read_structure_text(&ref_path).with_context(|| {
+                        format!("Failed to read reference structure at {:?}", ref_path)
+                    })?;
 
                 if interactive {
                     let sup_data = proteus_render::prepare_superposition_for_rendering(

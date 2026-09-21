@@ -1,7 +1,7 @@
 use crate::error::CoreError;
 use crate::models::{BiophysicalMetrics, PlddtDistribution};
 use nalgebra::{Matrix3, Vector3, SVD};
-use pdbtbx::{open, Atom, StrictnessLevel};
+use pdbtbx::Atom;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -152,30 +152,21 @@ pub struct DetailedBiophysicalAnalysis {
     )>,
 }
 
-/// Extract C-alpha coordinates and b-factors (pLDDT) from a PDB file.
+/// Analyse a structure file (PDB / mmCIF, optionally gzip-compressed) from disk.
 pub fn analyze_pdb_file(
     path: &Path,
     reference_path: Option<&Path>,
 ) -> Result<BiophysicalMetrics, CoreError> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| CoreError::StructureParseError("Invalid UTF-8 in PDB path".into()))?;
-    let (pdb, _errors) = open(path_str, StrictnessLevel::Loose)
-        .map_err(|e| CoreError::StructureParseError(format!("Failed to open PDB file: {e:?}")))?;
-
-    let ref_pdb = if let Some(ref_p) = reference_path {
-        let ref_str = ref_p.to_str().ok_or_else(|| {
-            CoreError::StructureParseError("Invalid UTF-8 in reference path".into())
-        })?;
-        let (p, _) = open(ref_str, StrictnessLevel::Loose).map_err(|e| {
-            CoreError::StructureParseError(format!("Failed to open reference PDB file: {e:?}"))
-        })?;
-        Some(p)
-    } else {
-        None
+    let loaded = crate::io::load_structure(path)?;
+    let ref_pdb = match reference_path {
+        Some(p) => Some(crate::io::open_structure(p)?),
+        None => None,
     };
-
-    let detailed = analyze_pdb_detailed(&pdb, ref_pdb.as_ref())?;
+    let detailed = analyze_pdb_detailed_with_header(
+        &loaded.pdb,
+        ref_pdb.as_ref(),
+        Some(&loaded.header_preview),
+    )?;
     Ok(detailed.metrics)
 }
 

@@ -7,7 +7,6 @@ pub mod tui;
 use error::RenderError;
 use geometry::mesh::{generate_cartoon_mesh, TriangleMesh};
 use nalgebra::Vector3;
-use pdbtbx::{open_raw, StrictnessLevel};
 use proteus_core::structure::assign_secondary_structure;
 use rasterizer::buffer::{ColorRGB, Framebuffer};
 use rasterizer::camera::OrbitCamera;
@@ -122,10 +121,8 @@ pub fn generate_disulfide_mesh(bonds: &[DisulfideBond]) -> TriangleMesh {
 
 /// Parse PDB string content into a high-fidelity structure bundle with ribbons and disulfides.
 pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, RenderError> {
-    let cursor = std::io::Cursor::new(pdb_content.as_bytes());
-    let reader = std::io::BufReader::new(cursor);
-    let (pdb, _errors) = open_raw(reader, StrictnessLevel::Loose)
-        .map_err(|e| RenderError::PdbParse(format!("{e:?}")))?;
+    let pdb = proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None)
+        .map_err(|e| RenderError::PdbParse(e.to_string()))?;
 
     let mut ca_coords = Vec::new();
     let mut plddts = Vec::new();
@@ -267,13 +264,10 @@ pub fn prepare_superposition_for_rendering(
     target_pdb: &str,
     reference_pdb: &str,
 ) -> Result<SuperpositionRenderData, RenderError> {
-    let cursor_tgt = std::io::Cursor::new(target_pdb.as_bytes());
-    let (tgt_pdb, _) = open_raw(std::io::BufReader::new(cursor_tgt), StrictnessLevel::Loose)
-        .map_err(|e| RenderError::PdbParse(format!("Target PDB parse failed: {e:?}")))?;
-
-    let cursor_ref = std::io::Cursor::new(reference_pdb.as_bytes());
-    let (ref_pdb, _) = open_raw(std::io::BufReader::new(cursor_ref), StrictnessLevel::Loose)
-        .map_err(|e| RenderError::PdbParse(format!("Reference PDB parse failed: {e:?}")))?;
+    let tgt_pdb = proteus_core::io::open_structure_bytes(target_pdb.as_bytes(), None)
+        .map_err(|e| RenderError::PdbParse(format!("Target structure parse failed: {e}")))?;
+    let ref_pdb = proteus_core::io::open_structure_bytes(reference_pdb.as_bytes(), None)
+        .map_err(|e| RenderError::PdbParse(format!("Reference structure parse failed: {e}")))?;
 
     let mut tgt_ca = Vec::new();
     let mut tgt_plddts = Vec::new();

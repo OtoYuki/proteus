@@ -2335,6 +2335,7 @@ name = "proteus-core"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "flate2",
  "nalgebra",
  "pdbtbx",
  "proteus-dssp",

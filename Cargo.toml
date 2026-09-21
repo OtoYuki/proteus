@@ -58,6 +58,7 @@ bollard = "0.18"
 
 # Scientific & Math
 pdbtbx = "0.11"
+flate2 = "1"
 nalgebra = "0.33"
 
 # CLI & UX
