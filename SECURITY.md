@@ -7,10 +7,14 @@ repository (Security → Advisories). Please do not open a public issue for expl
 
 ## Scope and known limitations
 
-`proteus serve` exposes a GA4GH TES v1.1 endpoint and, when a Podman/Docker socket is available,
-runs the container image named in each task. **It has no authentication and no image allow-list**;
-anyone who can reach the port can run arbitrary containers on the host. Run it only on localhost or
-behind an authenticating reverse proxy, and do not mount a container socket on an untrusted network.
-An allow-list and resource limits are tracked for the next release.
+`proteus serve` exposes a GA4GH TES v1.1 endpoint. **In 0.3.x, TES executors run as plain host
+processes: the task's `executors[].image` field is accepted but not used** (the OCI/Podman runner
+is only used for the prediction tiers, not for TES executors), and there is no authentication, no
+command allow-list and no resource limiting. Anyone who can reach the port can run arbitrary
+commands as the daemon's user. Bind it to localhost only (`--host 127.0.0.1`, the default) or put it
+behind an authenticating reverse proxy; never expose it on a shared network as is.
+
+Containerised executors honouring `image` and `resources`, a bearer-token option and an image
+allow-list are the first items of the next release (see `CHANGELOG.md` → Unreleased).
 
 Dependencies are checked with `cargo deny` and `cargo audit` in CI.

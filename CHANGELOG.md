@@ -5,6 +5,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Planned
+- TES executors run inside the task's container image with `resources` honoured; bearer-token auth; image allow-list.
+
 ## [0.3.0] — 2026-09-21
 
 The scientific-correctness release. Every biophysical metric is now checked against a reference

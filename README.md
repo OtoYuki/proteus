@@ -246,7 +246,7 @@ proteus serve --port 8080 --host 0.0.0.0
 ```
 Interactive Swagger UI documentation is served at `http://localhost:8080/swagger-ui`.
 
-> The daemon has no authentication and, with a container socket available, runs the image named in each TES task. Bind it to localhost or put it behind an authenticating proxy — see [SECURITY.md](SECURITY.md).
+> The daemon has no authentication, and in 0.3.x TES executors run as host processes (the `image` field is not yet honoured). Keep it on localhost or behind an authenticating proxy — see [SECURITY.md](SECURITY.md).
 
 ---
 
