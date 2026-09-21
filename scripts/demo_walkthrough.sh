@@ -40,7 +40,7 @@ echo ""
 echo -e "${BOLD}This live interactive session will demonstrate:${NC}"
 echo -e "  1. Native Rust Biophysical Profiling (O(N) SASA, MolProbity Ramachandran)"
 echo -e "  2. In-Silico Deep Mutational Scanning (Alanine Scanning)"
-echo -e "  3. High-Throughput Parallel Screening Funnel (Pareto Multi-Objective Ranking)"
+echo -e "  3. High-Throughput Parallel Screening Funnel (Weighted Composite Ranking)"
 echo -e "  4. High-Density Structured Dataset Export (CSV/JSON Data Lake)"
 echo -e "  5. Dual-Structure Superposition Snapshot with Kabsch RMSD"
 echo -e "  6. Interactive 60 FPS Terminal 3D Ribbon Viewer"
@@ -77,7 +77,7 @@ echo -e "${GREEN}✓ Notice residue 9 (Alanine) was automatically mutated to Gly
 pause_step
 
 # -----------------------------------------------------------------------------
-# STEP 3: High-Throughput Screening Funnel with Pareto Ranking
+# STEP 3: High-Throughput Screening Funnel with Composite Ranking
 # -----------------------------------------------------------------------------
 echo -e "${MAGENTA}▶ STEP 3: High-Throughput Screening Funnel (proteus screen)${NC}"
 echo -e "Feeding the variant library into the concurrent pipeline engine with 4 parallel workers..."
@@ -85,7 +85,7 @@ echo -e "${BLUE}Running:${NC} proteus screen $DEMO_DIR/ala_scan.fasta --runner s
 echo ""
 $PROTEUS_BIN screen "$DEMO_DIR/ala_scan.fasta" --runner simulated --workers 4 --export "$DEMO_DIR/screening_results.csv"
 echo ""
-echo -e "${GREEN}✓ Multi-objective Pareto ranker computed composite fitness synthesizing:${NC}"
+echo -e "${GREEN}✓ Weighted composite ranker computed fitness synthesizing:${NC}"
 echo -e "  [pLDDT stability] + [core hydrophobic burial] + [secondary structure content] + [MolProbity favorability]"
 pause_step
 

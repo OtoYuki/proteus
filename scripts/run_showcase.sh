@@ -60,7 +60,7 @@ echo -e "${CYAN}╚════════════════════�
 echo ""
 echo -e "${BOLD}Platform Summary:${NC}"
 echo -e "  • ${GREEN}Pure-Rust Core:${NC} All-Atom Biophysics, Shrake-Rupley SASA, MolProbity Clashscore"
-echo -e "  • ${GREEN}High-Throughput Funnel:${NC} Deep Mutational Scanning (DMS) & Pareto Multi-Objective Ranker"
+echo -e "  • ${GREEN}High-Throughput Funnel:${NC} Deep Mutational Scanning (DMS) & Weighted Composite Ranker"
 echo -e "  • ${GREEN}Columnar Data Lake:${NC} Snappy-compressed Apache Parquet with 18 biophysical dimensions"
 echo -e "  • ${GREEN}Storage Architecture:${NC} BLAKE3 Content-Addressable Storage (CAS) with O(1) deduplication"
 echo -e "  • ${GREEN}Orchestration Daemon:${NC} GA4GH Task Execution Service (TES v1.1) + Prometheus Telemetry"
@@ -110,7 +110,7 @@ echo ""
 echo -e "${BOLD}Screening Funnel Insights:${NC}"
 echo -e "  ✔ Multi-FASTA variants folded concurrently via simulated predictor."
 echo -e "  ✔ Every variant evaluated for pLDDT, Rg, core hydrophobic burial, H-bonds, and salt bridges."
-echo -e "  ✔ Pareto Multi-Objective Frontier automatically ranked candidates."
+echo -e "  ✔ Weighted composite fitness automatically ranked candidates."
 
 pause_step "Press [ENTER] to begin Phase 3: Columnar Apache Parquet Inspection"
 
@@ -126,7 +126,7 @@ PARQUET_SIZE=$(stat -c%s "$SHOWCASE_DIR/screen.parquet" 2>/dev/null || stat -f%z
 echo -e "  • File Size: ${BOLD}${PARQUET_SIZE} bytes${NC} (Snappy compressed)"
 echo -e "  • Stored Schema: 18 high-density biophysical columns:"
 echo -e "    ${DIM}[sequence_id, header, length, plddt_mean, plddt_median, radius_of_gyration,"
-echo -e "     contact_density, total_sasa, hydrophobic_burial, clashscore, total_hbonds,"
+echo -e "     contact_density, total_sasa, hydrophobic_burial, heavy_atom_overlap_score, total_hbonds,"
 echo -e "     bb_bb_hbonds, salt_bridges, pi_stacks, cation_pi, fitness_score, tier_label]${NC}"
 echo -e "  ✔ Ready for zero-copy ingestion by DuckDB, Apache Arrow, Polars, and Pandas."
 
