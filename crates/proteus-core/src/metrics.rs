@@ -253,7 +253,7 @@ pub fn analyze_pdb_detailed(
     let very_high_conf = plddts.iter().filter(|&&v| v >= 90.0).count() as f64 / n_plddt;
 
     // Ramachandran backbone dihedral angles with MolProbity residue-specific context
-    let mut phi_psi_context = Vec::new();
+    let mut rama_points: Vec<(Option<f64>, Option<f64>, crate::rama8000::RamaClass)> = Vec::new();
     let mut ramachandran_points = Vec::new();
     let n_res = backbones.len();
     for i in 0..n_res {
@@ -267,22 +267,27 @@ pub fn analyze_pdb_detailed(
         } else {
             None
         };
+        let omega = if i > 0 {
+            crate::backbone::omega(&backbones[i - 1], &backbones[i])
+        } else {
+            None
+        };
         let next_name = if i + 1 < n_res && !backbones[i + 1].chain_break_before {
             Some(backbones[i + 1].name.as_str())
         } else {
             None
         };
-        let context = crate::structure::ResidueContext::from_names(&backbones[i].name, next_name);
+        let class = crate::rama8000::RamaClass::classify(&backbones[i].name, next_name, omega);
         let region = match (phi, psi) {
-            (Some(p), Some(s)) => crate::structure::classify_ramachandran_context(p, s, context),
+            (Some(p), Some(s)) => crate::rama8000::evaluate(class, p, s),
             _ => crate::structure::RamachandranRegion::Outlier,
         };
         ramachandran_points.push((phi, psi, region));
-        phi_psi_context.push((phi, psi, context));
+        rama_points.push((phi, psi, class));
     }
 
     let ss_summary = crate::structure::assign_secondary_structure(&backbones);
-    let rama_stats = crate::structure::evaluate_ramachandran_with_context(&phi_psi_context);
+    let rama_stats = crate::structure::evaluate_ramachandran(&rama_points);
     let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
     let clash_stats = crate::clash::compute_clash_stats(pdb);
     let interaction_network = crate::interactions::compute_interaction_network(pdb);

@@ -495,8 +495,8 @@ mod tests {
             }),
             plddts: vec![92.0; 46],
             ramachandran_points: vec![
-                (Some(-60.0), Some(-45.0), RamachandranRegion::CoreHelix),
-                (Some(-120.0), Some(135.0), RamachandranRegion::CoreStrand),
+                (Some(-60.0), Some(-45.0), RamachandranRegion::Favored),
+                (Some(-120.0), Some(135.0), RamachandranRegion::Favored),
             ],
         };
 

@@ -7,6 +7,7 @@ pub mod interactions;
 pub mod metrics;
 pub mod models;
 pub mod mutagenesis;
+pub mod rama8000;
 pub mod ranking;
 pub mod sasa;
 pub mod sequence;
