@@ -171,7 +171,7 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// High-throughput library screening funnel: batch folding, Pareto ranking, and leaderboard
+    /// High-throughput library screening funnel: batch folding, ranking, and leaderboard
     Screen {
         /// Path to multi-sequence FASTA library file (or '-' for stdin)
         library: String,
