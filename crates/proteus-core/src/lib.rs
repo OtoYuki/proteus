@@ -10,6 +10,7 @@ pub mod ranking;
 pub mod sasa;
 pub mod sequence;
 pub mod structure;
+pub mod tes;
 
 pub use clash::*;
 pub use error::CoreError;
@@ -19,4 +20,5 @@ pub use mutagenesis::*;
 pub use ranking::*;
 pub use sasa::*;
 pub use structure::*;
+pub use tes::*;
 pub use uuid;

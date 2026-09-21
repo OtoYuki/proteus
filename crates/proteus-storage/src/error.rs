@@ -22,4 +22,10 @@ pub enum StorageError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("CAS integrity violation: {0}")]
+    IntegrityViolation(String),
+
+    #[error("CAS error: {0}")]
+    CasError(String),
 }

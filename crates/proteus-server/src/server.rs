@@ -2,10 +2,17 @@ use crate::api::{
     enqueue_job, get_job, get_metrics, get_prediction, get_prediction_pdb, get_sequence,
     health_check, stream_job_events, submit_sequence, view_structure, ApiDoc,
 };
+use crate::telemetry::Telemetry;
+use crate::tes_api::{cancel_task, create_task, get_service_info, get_task, list_tasks};
+use axum::extract::State;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
-use proteus_engine::PipelineScheduler;
+use proteus_engine::{EngineEvent, PipelineScheduler};
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
@@ -14,6 +21,61 @@ use utoipa_swagger_ui::SwaggerUi;
 #[derive(Clone)]
 pub struct AppState {
     pub scheduler: PipelineScheduler,
+    pub telemetry: Arc<Telemetry>,
+}
+
+impl AppState {
+    pub fn new(scheduler: PipelineScheduler) -> Self {
+        let telemetry = Arc::new(Telemetry::new());
+        let tel = telemetry.clone();
+        let mut rx = scheduler.subscribe();
+        tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                match event {
+                    EngineEvent::TesTaskStarted { .. } => {
+                        tel.tasks_running.fetch_add(1, Ordering::Relaxed);
+                        tel.active_workers.fetch_add(1, Ordering::Relaxed);
+                    }
+                    EngineEvent::TesTaskCompleted { .. } => {
+                        tel.tasks_complete.fetch_add(1, Ordering::Relaxed);
+                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
+                    }
+                    EngineEvent::TesTaskFailed { .. } => {
+                        tel.tasks_failed.fetch_add(1, Ordering::Relaxed);
+                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
+                    }
+                    EngineEvent::JobStarted { .. } => {
+                        tel.active_workers.fetch_add(1, Ordering::Relaxed);
+                    }
+                    EngineEvent::JobCompleted { .. } | EngineEvent::JobFailed { .. } => {
+                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        Self {
+            scheduler,
+            telemetry,
+        }
+    }
+}
+
+pub async fn prometheus_metrics(State(state): State<AppState>) -> Response {
+    state
+        .telemetry
+        .http_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+    let body = state.telemetry.render_prometheus();
+    (
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -24,6 +86,19 @@ pub fn build_router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health_check))
+        .route("/metrics", get(prometheus_metrics))
+        // GA4GH TES v1.1 Standard Endpoints
+        .route("/v1/tasks", post(create_task).get(list_tasks))
+        .route("/v1/tasks/{id}", get(get_task).post(cancel_task))
+        .route("/v1/tasks/{id}/cancel", post(cancel_task))
+        .route("/v1/service-info", get(get_service_info))
+        .route("/v1/tasks/service-info", get(get_service_info))
+        // GA4GH TES v1.1 Aliases
+        .route("/ga4gh/tes/v1/tasks", post(create_task).get(list_tasks))
+        .route("/ga4gh/tes/v1/tasks/{id}", get(get_task).post(cancel_task))
+        .route("/ga4gh/tes/v1/tasks/{id}/cancel", post(cancel_task))
+        .route("/ga4gh/tes/v1/service-info", get(get_service_info))
+        // Native Proteus API Endpoints
         .route("/api/v1/sequences", post(submit_sequence))
         .route("/api/v1/sequences/{id}", get(get_sequence))
         .route("/api/v1/jobs", post(enqueue_job))
@@ -49,7 +124,8 @@ pub async fn run_server(
     addr: SocketAddr,
     scheduler: PipelineScheduler,
 ) -> Result<(), std::io::Error> {
-    let state = AppState { scheduler };
+    let state = AppState::new(scheduler);
+
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Proteus server running on http://{}", addr);
@@ -57,6 +133,8 @@ pub async fn run_server(
         "Swagger UI documentation available at http://{}/swagger-ui",
         addr
     );
+    tracing::info!("Prometheus metrics available at http://{}/metrics", addr);
+    tracing::info!("GA4GH TES v1.1 endpoint available at http://{}/v1", addr);
     axum::serve(listener, app).await
 }
 
@@ -79,7 +157,7 @@ mod tests {
         let runner = Arc::new(SimulatedRunner::new());
         let tmp = tempdir().unwrap();
         let scheduler = PipelineScheduler::new(repo, runner, tmp.path().to_path_buf());
-        let state = AppState { scheduler };
+        let state = AppState::new(scheduler);
         let app = build_router(state);
 
         // Test GET /health
@@ -88,6 +166,129 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /metrics (Prometheus OpenMetrics)
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert!(body_str.contains("proteus_tasks_total{status=\"queued\"}"));
+        assert!(body_str.contains("proteus_active_workers"));
+        assert!(body_str.contains("proteus_cas_operations_total"));
+
+        // Test GET /v1/service-info
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/service-info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let service_info: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(service_info["id"], "org.ga4gh.proteus");
+        assert_eq!(service_info["type"]["artifact"], "tes");
+
+        // Test POST /v1/tasks (Submit TES task)
+        let tes_payload = serde_json::json!({
+            "name": "screening_variant_1",
+            "description": "Nextflow TES automated pipeline test",
+            "executors": [
+                {
+                    "image": "",
+                    "command": ["echo", "TES task executed"]
+                }
+            ]
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/tasks")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(tes_payload.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let create_resp: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let task_id = create_resp["id"].as_str().unwrap();
+        assert!(!task_id.is_empty());
+
+        // Test GET /v1/tasks/{id} with view=FULL
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/tasks/{task_id}?view=FULL"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /v1/tasks (List tasks)
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/tasks")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test GET /ga4gh/tes/v1/service-info (Alias)
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ga4gh/tes/v1/service-info")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Test POST /v1/tasks/{id}:cancel
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/tasks/{task_id}:cancel"))
                     .body(Body::empty())
                     .unwrap(),
             )

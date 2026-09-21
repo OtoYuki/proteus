@@ -55,7 +55,23 @@ use uuid::Uuid;
             proteus_core::interactions::PiStacking,
             proteus_core::interactions::PiStackingCategory,
             proteus_core::interactions::CationPiInteraction,
-            proteus_core::ranking::CandidateFitness
+            proteus_core::ranking::CandidateFitness,
+            proteus_core::tes::TesTask,
+            proteus_core::tes::TesState,
+            proteus_core::tes::TesExecutor,
+            proteus_core::tes::TesInput,
+            proteus_core::tes::TesOutput,
+            proteus_core::tes::TesFileType,
+            proteus_core::tes::TesResources,
+            proteus_core::tes::TesTaskLog,
+            proteus_core::tes::TesExecutorLog,
+            proteus_core::tes::TesOutputFileLog,
+            proteus_core::tes::TesCreateTaskResponse,
+            proteus_core::tes::TesListTasksResponse,
+            proteus_core::tes::TesCancelTaskResponse,
+            proteus_core::tes::TesServiceInfo,
+            proteus_core::tes::TesServiceType,
+            proteus_core::tes::TesServiceOrganization
         )
     ),
     tags(
@@ -245,6 +261,7 @@ pub async fn stream_job_events(
                 proteus_engine::EngineEvent::JobProgress { job_id, .. } => *job_id == id,
                 proteus_engine::EngineEvent::JobCompleted { job_id, .. } => *job_id == id,
                 proteus_engine::EngineEvent::JobFailed { job_id, .. } => *job_id == id,
+                _ => false,
             };
             if matches {
                 let data = serde_json::to_string(&event).unwrap_or_default();

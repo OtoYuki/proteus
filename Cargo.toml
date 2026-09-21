@@ -49,6 +49,7 @@ sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runti
 parquet = { version = "60", default-features = false, features = ["arrow", "flate2-zlib-rs", "zstd"] }
 arrow-schema = "60"
 arrow-array = "60"
+blake3 = "1.8"
 
 # Container Orchestration
 bollard = "0.18"

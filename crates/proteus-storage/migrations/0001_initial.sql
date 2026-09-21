@@ -57,3 +57,22 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_sequence_id ON jobs(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_predictions_job_id ON predictions(job_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_prediction_id ON metrics(prediction_id);
+
+CREATE TABLE IF NOT EXISTS cas_objects (
+    hash TEXT PRIMARY KEY NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    reference_count INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_cas_objects_created_at ON cas_objects(created_at);
+
+CREATE TABLE IF NOT EXISTS tes_tasks (
+    id TEXT PRIMARY KEY NOT NULL,
+    state TEXT NOT NULL,
+    name TEXT,
+    description TEXT,
+    task_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tes_tasks_state ON tes_tasks(state);

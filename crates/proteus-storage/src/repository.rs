@@ -427,6 +427,186 @@ impl ProteusRepository {
 
         Ok(res)
     }
+
+    // CAS Object methods
+    pub async fn record_cas_object(&self, hash: &str, size_bytes: i64) -> Result<(), StorageError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"INSERT INTO cas_objects (hash, size_bytes, created_at, reference_count)
+               VALUES (?, ?, ?, 1)
+               ON CONFLICT(hash) DO UPDATE SET reference_count = reference_count + 1"#,
+        )
+        .bind(hash)
+        .bind(size_bytes)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_cas_object(
+        &self,
+        hash: &str,
+    ) -> Result<Option<CasObjectRecord>, StorageError> {
+        let row = sqlx::query(
+            "SELECT hash, size_bytes, created_at, reference_count FROM cas_objects WHERE hash = ?",
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(r) = row {
+            Ok(Some(CasObjectRecord {
+                hash: r.get("hash"),
+                size_bytes: r.get("size_bytes"),
+                created_at: r.get("created_at"),
+                reference_count: r.get("reference_count"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn count_cas_objects(&self) -> Result<i64, StorageError> {
+        let row = sqlx::query("SELECT COUNT(*) as count FROM cas_objects")
+            .fetch_one(&self.pool)
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count)
+    }
+
+    pub async fn total_cas_bytes(&self) -> Result<i64, StorageError> {
+        let row = sqlx::query("SELECT COALESCE(SUM(size_bytes), 0) as total FROM cas_objects")
+            .fetch_one(&self.pool)
+            .await?;
+        let total: i64 = row.get("total");
+        Ok(total)
+    }
+
+    // TES Task methods
+    pub async fn insert_tes_task(
+        &self,
+        id: &str,
+        state: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        task_json: &str,
+    ) -> Result<(), StorageError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO tes_tasks (id, state, name, description, task_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(id)
+        .bind(state)
+        .bind(name)
+        .bind(description)
+        .bind(task_json)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_tes_task_state(
+        &self,
+        id: &str,
+        state: &str,
+        task_json: &str,
+    ) -> Result<(), StorageError> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE tes_tasks SET state = ?, task_json = ?, updated_at = ? WHERE id = ?")
+            .bind(state)
+            .bind(task_json)
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn get_tes_task(&self, id: &str) -> Result<Option<TesTaskRecord>, StorageError> {
+        let row = sqlx::query(
+            "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks WHERE id = ?"
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(r) = row {
+            Ok(Some(TesTaskRecord {
+                id: r.get("id"),
+                state: r.get("state"),
+                name: r.get("name"),
+                description: r.get("description"),
+                task_json: r.get("task_json"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn list_tes_tasks(
+        &self,
+        state: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<TesTaskRecord>, StorageError> {
+        let rows = if let Some(s) = state {
+            sqlx::query(
+                "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks WHERE state = ? ORDER BY created_at DESC LIMIT ?"
+            )
+            .bind(s)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks ORDER BY created_at DESC LIMIT ?"
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut tasks = Vec::with_capacity(rows.len());
+        for r in rows {
+            tasks.push(TesTaskRecord {
+                id: r.get("id"),
+                state: r.get("state"),
+                name: r.get("name"),
+                description: r.get("description"),
+                task_json: r.get("task_json"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            });
+        }
+
+        Ok(tasks)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CasObjectRecord {
+    pub hash: String,
+    pub size_bytes: i64,
+    pub created_at: String,
+    pub reference_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TesTaskRecord {
+    pub id: String,
+    pub state: String,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub task_json: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[cfg(test)]
@@ -536,5 +716,50 @@ mod tests {
         let logs = repo.get_logs_for_job(job.id).await.unwrap();
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].1, "Starting pipeline");
+
+        // 6. CAS object indexing
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        repo.record_cas_object(hash, 1024).await.unwrap();
+        // Second record increments reference count
+        repo.record_cas_object(hash, 1024).await.unwrap();
+
+        let cas_rec = repo.get_cas_object(hash).await.unwrap().unwrap();
+        assert_eq!(cas_rec.hash, hash);
+        assert_eq!(cas_rec.size_bytes, 1024);
+        assert_eq!(cas_rec.reference_count, 2);
+        assert_eq!(repo.count_cas_objects().await.unwrap(), 1);
+        assert_eq!(repo.total_cas_bytes().await.unwrap(), 1024);
+
+        // 7. TES task lifecycle
+        let task_id = "task-tes-12345";
+        repo.insert_tes_task(
+            task_id,
+            "QUEUED",
+            Some("screening_task"),
+            Some("Screening test variant"),
+            r#"{"id":"task-tes-12345","state":"QUEUED"}"#,
+        )
+        .await
+        .unwrap();
+
+        let fetched = repo.get_tes_task(task_id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, task_id);
+        assert_eq!(fetched.state, "QUEUED");
+        assert_eq!(fetched.name, Some("screening_task".into()));
+
+        repo.update_tes_task_state(
+            task_id,
+            "COMPLETE",
+            r#"{"id":"task-tes-12345","state":"COMPLETE"}"#,
+        )
+        .await
+        .unwrap();
+
+        let updated = repo.get_tes_task(task_id).await.unwrap().unwrap();
+        assert_eq!(updated.state, "COMPLETE");
+
+        let listed = repo.list_tes_tasks(Some("COMPLETE"), 10).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, task_id);
     }
 }

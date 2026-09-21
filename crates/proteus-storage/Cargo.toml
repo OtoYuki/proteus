@@ -19,6 +19,7 @@ tracing = { workspace = true }
 parquet = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
