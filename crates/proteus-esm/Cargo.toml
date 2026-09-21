@@ -1,0 +1,29 @@
+[package]
+name = "proteus-esm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ESM-2 protein language model inference in pure Rust (candle): masked-marginal mutation scoring, deep mutational scans."
+keywords = ["bioinformatics", "protein", "esm", "language-model", "candle"]
+categories = ["science::bioinformatics"]
+
+[dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+ureq = { workspace = true, optional = true }
+
+[features]
+default = ["hub"]
+hub = ["dep:ureq"]
+# GPU: enable candle-core/cuda or candle-core/metal in the consuming crate; not exposed here so
+# that `--all-features` builds on every platform.
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
