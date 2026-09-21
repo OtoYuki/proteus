@@ -222,15 +222,23 @@ pause_step "Press [ENTER] to begin Phase 6: Terminal 3D Ribbon Visualization"
 echo -e "\n${MAGENTA}════════════════════════════════════════════════════════════════════════════════════${NC}"
 echo -e "${MAGENTA}▶ PHASE 6: 3D Protein Cartoon Ribbon Terminal Visualization${NC}"
 echo -e "${MAGENTA}════════════════════════════════════════════════════════════════════════════════════${NC}"
-echo -e "Rendering Crambin cartoon ribbon directly inside terminal via software rasterizer:\n"
+echo -e "Rendering Crambin cartoon ribbon with SSAO & secondary structure colors (Magenta Helices, Amber Strands, Cyan Coils, Gold Disulfides):\n"
 
-"$BIN" view "$DATA_PDB" --width 70 --height 22
+"$BIN" view "$DATA_PDB" --color ss --width 80 --height 24
 
 echo ""
-echo -e "${BOLD}Interactive Exploration Commands:${NC}"
-echo -e "  • ${CYAN}proteus view $DATA_PDB --interactive${NC}"
-echo -e "    (Full 60 FPS orbit camera: rotate with arrow keys / WASD, zoom with +/-)"
-echo -e "  • ${CYAN}proteus view $DATA_PDB --interactive --dashboard${NC}"
+echo -e "${BOLD}1. Hardware-Accelerated 3D WebGL Viewer (Mol*):${NC}"
+"$BIN" view "$DATA_PDB" --html "$SHOWCASE_DIR/crambin_3d.html"
+echo -e "  ✔ Run ${CYAN}proteus view $DATA_PDB --web${NC} to launch it directly in your browser!"
+
+echo ""
+echo -e "${BOLD}2. Kitty Terminal Native GPU Graphics Protocol:${NC}"
+echo -e "  • ${CYAN}proteus view $DATA_PDB -b kitty --color ss${NC}"
+echo -e "    (Streams raw 24-bit RGB pixel buffer directly into your Kitty terminal)"
+
+echo ""
+echo -e "${BOLD}3. 60 FPS Interactive Orbit Camera & Live Biophysical Telemetry Dashboard:${NC}"
+echo -e "  • ${CYAN}proteus view $DATA_PDB --interactive --dashboard --color ss${NC}"
 echo -e "    (Split-screen 3D viewer + live Ramachandran plot + pLDDT spectrum + telemetry)"
 
 echo -e "\n${GREEN}════════════════════════════════════════════════════════════════════════════════════${NC}"
