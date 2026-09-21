@@ -104,3 +104,20 @@ expected behaviour (bigger model ≫ smaller model; masked ≈ wild-type margina
 sequences) on real experimental data, not that it beats anything.
 
 Reproduce: `bench/proteingym.py --assays 5 --max-len 60 --model facebook/esm2_t12_35M_UR50D`.
+
+## Storage under concurrent writers
+
+SQLite in WAL mode permits many readers but **one writer at a time**, and Proteus fans screening
+jobs across a worker pool, so every worker's status update contends for that writer. Measured by
+`cargo test -p proteus-storage --release --test concurrency -- --nocapture` on the host above:
+
+| scenario | result |
+|---|---|
+| 400 job inserts from 16 concurrent tasks | 33.1 ms → **12 071 writes/s**, zero rows lost |
+| 240 status updates to **one row** from 12 tasks | 20.4 ms → **11 792 updates/s**, converged, no lock errors surfaced |
+| readers during 200 concurrent inserts | **309 reads** completed in 15.6 ms — readers are not starved |
+
+This is a single-process, single-file measurement on NVMe; it says the storage layer is not the
+bottleneck at the scale Proteus currently schedules, and it is **not** a claim about tens of
+thousands of concurrent tasks across processes or hosts, which has not been tested.
+
