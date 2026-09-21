@@ -38,6 +38,11 @@ pub async fn create_task(
 
     match state.scheduler.submit_tes_task(task).await {
         Ok(id) => Ok((StatusCode::OK, Json(TesCreateTaskResponse { id }))),
+        // Policy/validation rejections (image allow-list, relative paths) are client errors.
+        Err(proteus_engine::error::EngineError::Tes(msg)) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": msg })),
+        )),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -159,5 +164,25 @@ pub async fn get_service_info(State(state): State<AppState>) -> impl IntoRespons
         .telemetry
         .http_requests_total
         .fetch_add(1, Ordering::Relaxed);
-    Json(TesServiceInfo::default())
+    let mut info = TesServiceInfo::default();
+    let tes = state.scheduler.tes_config();
+    info.tags
+        .insert("proteus.executor".into(), tes.executor.kind().into());
+    info.tags.insert(
+        "proteus.image_allowlist".into(),
+        if tes.allow_images.is_empty() {
+            "*".to_string()
+        } else {
+            tes.allow_images
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        },
+    );
+    info.tags.insert(
+        "proteus.executor_timeout_seconds".into(),
+        tes.executor_timeout.as_secs().to_string(),
+    );
+    Json(info)
 }

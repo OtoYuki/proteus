@@ -7,9 +7,11 @@ pub mod oci;
 pub mod runner;
 pub mod scheduler;
 pub mod simulated;
+pub mod tes_exec;
 
 pub use auto::AutoRunner;
 pub use error::EngineError;
 pub use esm_api::EsmApiRunner;
 pub use runner::ComputeRunner;
-pub use scheduler::{CancelOutcome, EngineEvent, PipelineScheduler};
+pub use scheduler::{CancelOutcome, EngineEvent, PipelineScheduler, TesExecutionConfig};
+pub use tes_exec::{ContainerExecutor, ExecutorRequest, ExecutorResult, HostExecutor, TesExecutor};

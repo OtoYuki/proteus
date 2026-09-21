@@ -288,6 +288,9 @@ pub struct TesServiceInfo {
     pub environment: String,
     pub version: String,
     pub storage: Vec<String>,
+    /// Free-form server properties (`proteus.executor`, `proteus.image_allowlist`, …).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tags: HashMap<String, String>,
 }
 
 impl Default for TesServiceInfo {
@@ -312,6 +315,7 @@ impl Default for TesServiceInfo {
             environment: "production".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             storage: vec!["file".into(), "http".into()],
+            tags: HashMap::new(),
         }
     }
 }

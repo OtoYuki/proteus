@@ -19,6 +19,7 @@ proteus-server = { workspace = true }
 proteus-render = { workspace = true }
 crossterm = { workspace = true }
 clap = { workspace = true }
+glob = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
 base64 = { workspace = true }

@@ -56,12 +56,12 @@ async fn test_tes_v1_nextflow_e2e_lifecycle() {
             name: Some("variant_fasta".into()),
             description: None,
             url: None,
-            path: "inputs/candidate.fasta".into(),
+            path: "/work/inputs/candidate.fasta".into(),
             type_: TesFileType::File,
             content: Some(fasta_content.into()),
         }],
         executors: vec![TesExecutor {
-            image: "".into(),
+            image: "docker.io/library/alpine:3.20".into(),
             command: vec![
                 "sh".into(),
                 "-c".into(),
@@ -81,9 +81,9 @@ EOF
                 "#
                 .into(),
             ],
-            workdir: None,
-            stdout: Some("outputs/stdout.log".into()),
-            stderr: Some("outputs/stderr.log".into()),
+            workdir: Some("/work".into()),
+            stdout: Some("/work/outputs/stdout.log".into()),
+            stderr: Some("/work/outputs/stderr.log".into()),
             stdin: None,
             env: std::collections::HashMap::new(),
             ignore_error: false,
@@ -93,14 +93,14 @@ EOF
                 name: Some("predicted_pdb".into()),
                 description: None,
                 url: None,
-                path: "outputs/structure.pdb".into(),
+                path: "/work/outputs/structure.pdb".into(),
                 type_: TesFileType::File,
             },
             TesOutput {
                 name: Some("screening_report".into()),
                 description: None,
                 url: None,
-                path: "outputs/report.txt".into(),
+                path: "/work/outputs/report.txt".into(),
                 type_: TesFileType::File,
             },
         ],
@@ -168,4 +168,169 @@ EOF
     assert!(metrics_text.contains("proteus_tasks_total{status=\"complete\"} 1"));
     assert!(metrics_text.contains("proteus_cas_operations_total"));
     assert!(metrics_text.contains("proteus_http_requests_total"));
+}
+
+/// Spin up a router-backed server with the given options; returns the base URL.
+async fn spawn(
+    options: proteus_server::ServerOptions,
+    tes: Option<proteus_engine::TesExecutionConfig>,
+) -> String {
+    let pool = create_in_memory_pool().await.unwrap();
+    let repo = ProteusRepository::new(pool);
+    let runner = Arc::new(SimulatedRunner::new());
+    let tmp = tempdir().unwrap();
+    let mut scheduler = PipelineScheduler::new(repo, runner, tmp.path().to_path_buf());
+    if let Some(tes) = tes {
+        scheduler = scheduler.with_tes_config(tes);
+    }
+    let router = proteus_server::build_router_with_options(AppState::new(scheduler), options);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    std::mem::forget(tmp);
+    format!("http://{addr}")
+}
+
+fn minimal_task(image: &str) -> TesTask {
+    TesTask {
+        executors: vec![TesExecutor {
+            image: image.into(),
+            command: vec!["true".into()],
+            workdir: Some("/work".into()),
+            stdout: None,
+            stderr: None,
+            stdin: None,
+            env: std::collections::HashMap::new(),
+            ignore_error: false,
+        }],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn bearer_token_guards_tes_and_native_apis_but_not_health() {
+    let base = spawn(
+        proteus_server::ServerOptions {
+            auth_token: Some("s3cret".into()),
+        },
+        None,
+    )
+    .await;
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    assert_eq!(
+        client
+            .get(format!("{base}/metrics"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    let r = client
+        .get(format!("{base}/v1/service-info"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(r.headers().get("www-authenticate").unwrap(), "Bearer");
+    let r = client
+        .get(format!("{base}/v1/service-info"))
+        .bearer_auth("wrong")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let r = client
+        .get(format!("{base}/v1/service-info"))
+        .bearer_auth("s3cret")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+    let r = client
+        .post(format!("{base}/api/v1/sequences"))
+        .json(&serde_json::json!({"header": "x", "fasta": ">x\nACD\n"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn image_allowlist_rejects_with_400_and_is_advertised() {
+    let tes = proteus_engine::TesExecutionConfig {
+        allow_images: vec![glob::Pattern::new("ghcr.io/otoyuki/*").unwrap()],
+        ..Default::default()
+    };
+    let base = spawn(Default::default(), Some(tes)).await;
+    let client = reqwest::Client::new();
+    let info: serde_json::Value = client
+        .get(format!("{base}/v1/service-info"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(info["tags"]["proteus.executor"], "host");
+    assert_eq!(info["tags"]["proteus.image_allowlist"], "ghcr.io/otoyuki/*");
+
+    let r = client
+        .post(format!("{base}/v1/tasks"))
+        .json(&minimal_task("docker.io/library/alpine:3.20"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("not allowed"));
+
+    let r = client
+        .post(format!("{base}/v1/tasks"))
+        .json(&minimal_task("ghcr.io/otoyuki/proteus:0.3.0"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn relative_or_system_paths_are_rejected() {
+    let base = spawn(Default::default(), None).await;
+    let client = reqwest::Client::new();
+    let mut t = minimal_task("docker.io/library/alpine:3.20");
+    t.outputs.push(TesOutput {
+        name: None,
+        description: None,
+        url: None,
+        path: "relative/out.txt".into(),
+        type_: TesFileType::File,
+    });
+    let r = client
+        .post(format!("{base}/v1/tasks"))
+        .json(&t)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
+    let mut t = minimal_task("docker.io/library/alpine:3.20");
+    t.executors[0].workdir = Some("/etc".into());
+    let r = client
+        .post(format!("{base}/v1/tasks"))
+        .json(&t)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
 }

@@ -34,11 +34,14 @@ proteus-dssp = { path = "crates/proteus-dssp", version = "0.3.0" }
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-util = "0.7"
+glob = "0.3"
 futures-util = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
+subtle = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # Serialization & Models

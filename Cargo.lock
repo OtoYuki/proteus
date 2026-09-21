@@ -1213,6 +1213,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2253,6 +2259,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "crossterm 0.28.1",
+ "glob",
  "indicatif",
  "proteus-core",
  "proteus-engine",
@@ -2306,6 +2313,7 @@ dependencies = [
  "bollard",
  "chrono",
  "futures-util",
+ "glob",
  "proteus-core",
  "proteus-storage",
  "reqwest",
@@ -2315,6 +2323,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -2341,12 +2350,14 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "glob",
  "proteus-core",
  "proteus-engine",
  "proteus-storage",
  "reqwest",
  "serde",
  "serde_json",
+ "subtle",
  "tempfile",
  "thiserror",
  "tokio",
@@ -2433,7 +2444,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

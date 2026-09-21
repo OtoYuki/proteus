@@ -7,9 +7,14 @@ use proteus_core::tes::{TesExecutorLog, TesOutputFileLog, TesState, TesTask, Tes
 use proteus_storage::cas::CasStore;
 use proteus_storage::repository::ProteusRepository;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+
+use crate::tes_exec::{mount_root, ExecutorRequest, HostExecutor, TesExecutor};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -58,6 +63,45 @@ pub enum CancelOutcome {
     NotFound,
 }
 
+/// How GA4GH TES tasks are executed.
+#[derive(Clone)]
+pub struct TesExecutionConfig {
+    pub executor: Arc<dyn TesExecutor>,
+    /// Glob patterns; when non-empty an executor image must match one of them.
+    pub allow_images: Vec<glob::Pattern>,
+    /// Wall-clock limit per executor.
+    pub executor_timeout: Duration,
+    /// Give containers outbound network access.
+    pub network: bool,
+}
+
+impl Default for TesExecutionConfig {
+    /// Host executor, no allow-list, 1 h timeout — the loopback-development default.
+    fn default() -> Self {
+        Self {
+            executor: Arc::new(HostExecutor),
+            allow_images: Vec::new(),
+            executor_timeout: Duration::from_secs(3600),
+            network: false,
+        }
+    }
+}
+
+impl TesExecutionConfig {
+    /// Error message when `image` is not covered by the allow-list, else `None`.
+    pub fn image_rejection(&self, image: &str) -> Option<String> {
+        if self.allow_images.is_empty() || self.allow_images.iter().any(|p| p.matches(image)) {
+            None
+        } else {
+            let allowed: Vec<&str> = self.allow_images.iter().map(|p| p.as_str()).collect();
+            Some(format!(
+                "executor image '{image}' is not allowed on this server; allowed patterns: {}",
+                allowed.join(", ")
+            ))
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct PipelineScheduler {
     repo: ProteusRepository,
@@ -65,6 +109,8 @@ pub struct PipelineScheduler {
     events_tx: broadcast::Sender<EngineEvent>,
     artifacts_dir: PathBuf,
     cas: Arc<CasStore>,
+    tes: TesExecutionConfig,
+    cancel_tokens: Arc<Mutex<HashMap<String, CancellationToken>>>,
 }
 
 impl PipelineScheduler {
@@ -85,7 +131,19 @@ impl PipelineScheduler {
             events_tx,
             artifacts_dir,
             cas,
+            tes: TesExecutionConfig::default(),
+            cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Replace the TES execution backend/policy (container executor, allow-list, timeout).
+    pub fn with_tes_config(mut self, tes: TesExecutionConfig) -> Self {
+        self.tes = tes;
+        self
+    }
+
+    pub fn tes_config(&self) -> &TesExecutionConfig {
+        &self.tes
     }
 
     pub fn with_cas(
@@ -101,6 +159,8 @@ impl PipelineScheduler {
             events_tx,
             artifacts_dir,
             cas,
+            tes: TesExecutionConfig::default(),
+            cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -266,7 +326,41 @@ impl PipelineScheduler {
     }
 
     /// Enqueue a GA4GH TES task for asynchronous background processing.
+    /// Reject tasks the server will not run: disallowed images, relative or system paths.
+    pub fn validate_tes_task(&self, task: &TesTask) -> Result<(), EngineError> {
+        if task.executors.is_empty() {
+            return Err(EngineError::Tes("task has no executors".into()));
+        }
+        for ex in &task.executors {
+            if ex.image.trim().is_empty() {
+                return Err(EngineError::Tes("executor image must not be empty".into()));
+            }
+            if let Some(msg) = self.tes.image_rejection(&ex.image) {
+                return Err(EngineError::Tes(msg));
+            }
+        }
+        Self::mount_roots(task)?;
+        Ok(())
+    }
+
+    /// Container directories that must be bind-mounted for this task.
+    fn mount_roots(task: &TesTask) -> Result<BTreeSet<String>, EngineError> {
+        let mut roots = BTreeSet::new();
+        for p in task
+            .inputs
+            .iter()
+            .map(|i| i.path.as_str())
+            .chain(task.outputs.iter().map(|o| o.path.as_str()))
+            .chain(task.volumes.iter().map(|v| v.as_str()))
+            .chain(task.executors.iter().filter_map(|e| e.workdir.as_deref()))
+        {
+            roots.insert(mount_root(p)?);
+        }
+        Ok(roots)
+    }
+
     pub async fn submit_tes_task(&self, mut task: TesTask) -> Result<String, EngineError> {
+        self.validate_tes_task(&task)?;
         if task.id.is_empty() {
             task.id = format!("task-{}", Uuid::new_v4());
         }
@@ -323,6 +417,9 @@ impl PipelineScheduler {
             self.repo
                 .update_tes_task_state(task_id, "CANCELED", &updated_json)
                 .await?;
+            if let Some(token) = self.cancel_tokens.lock().unwrap().get(task_id) {
+                token.cancel();
+            }
             let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
                 task_id: task_id.to_string(),
                 error: "Task canceled by user".into(),
@@ -417,11 +514,25 @@ impl PipelineScheduler {
             .await?;
 
         let mut executor_failed = false;
+        let cancel = CancellationToken::new();
+        self.cancel_tokens
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), cancel.clone());
+        let mount_roots = Self::mount_roots(&task)?;
+        task_log
+            .system_logs
+            .push(format!("executor backend: {}", self.tes.executor.kind()));
 
         for executor in &task.executors {
             // Check for cancellation
+            if cancel.is_cancelled() {
+                task.state = TesState::Canceled;
+                break;
+            }
             if let Some(cur) = self.repo.get_tes_task(task_id).await? {
                 if cur.state == "CANCELED" {
+                    self.cancel_tokens.lock().unwrap().remove(task_id);
                     return Ok(());
                 }
             }
@@ -431,34 +542,37 @@ impl PipelineScheduler {
             }
 
             let exec_start = Utc::now().to_rfc3339();
-            let exec_dir = executor
-                .workdir
-                .as_ref()
-                .map(|w| work_dir.join(w.trim_start_matches('/')))
-                .unwrap_or_else(|| work_dir.clone());
-            tokio::fs::create_dir_all(&exec_dir).await?;
-
-            let prog = &executor.command[0];
-            let args = &executor.command[1..];
-
-            let mut cmd = tokio::process::Command::new(prog);
-            cmd.args(args);
-            cmd.current_dir(&exec_dir);
-            for (k, v) in &executor.env {
-                cmd.env(k, v);
-            }
-
-            let exec_result = cmd.output().await;
-            let (stdout_str, stderr_str, exit_code) = match exec_result {
-                Ok(output) => {
-                    let out = String::from_utf8_lossy(&output.stdout).to_string();
-                    let err = String::from_utf8_lossy(&output.stderr).to_string();
-                    let code = output.status.code().unwrap_or(-1);
-                    (out, err, code)
+            let request = ExecutorRequest {
+                image: &executor.image,
+                command: &executor.command,
+                workdir: executor.workdir.as_deref(),
+                env: &executor.env,
+                stdin: executor.stdin.as_deref(),
+                work_dir: &work_dir,
+                mount_roots: &mount_roots,
+                cpu_cores: task.resources.cpu_cores,
+                ram_gb: task.resources.ram_gb,
+                network: self.tes.network
+                    || task
+                        .tags
+                        .get("proteus.network")
+                        .map(|v| v == "true")
+                        .unwrap_or(false),
+                timeout: self.tes.executor_timeout,
+                cancel: cancel.clone(),
+            };
+            let (stdout_str, stderr_str, exit_code) = match self.tes.executor.run(request).await {
+                Ok(r) => {
+                    task_log.system_logs.extend(r.system_logs);
+                    (r.stdout, r.stderr, r.exit_code)
                 }
                 Err(e) => {
-                    let err_msg = format!("Failed to spawn command '{prog}': {e}");
-                    (String::new(), err_msg, -1)
+                    task_log
+                        .system_logs
+                        .push(format!("executor backend error: {e}"));
+                    task.state = TesState::SystemError;
+                    executor_failed = true;
+                    (String::new(), e.to_string(), -1)
                 }
             };
 
@@ -483,15 +597,23 @@ impl PipelineScheduler {
                 end_time: Some(Utc::now().to_rfc3339()),
                 stdout: Some(stdout_str),
                 stderr: Some(stderr_str),
-                exit_code: Some(exit_code),
+                exit_code: Some(exit_code as i32),
             });
 
+            if task.state == TesState::SystemError {
+                break;
+            }
+            if cancel.is_cancelled() {
+                task.state = TesState::Canceled;
+                break;
+            }
             if exit_code != 0 && !executor.ignore_error {
                 executor_failed = true;
                 task.state = TesState::ExecutorError;
                 break;
             }
         }
+        self.cancel_tokens.lock().unwrap().remove(task_id);
 
         // 4. Output harvesting & Biophysics trigger
         for output in &task.outputs {
@@ -718,20 +840,20 @@ mod tests {
                 name: Some("input_fasta".into()),
                 description: None,
                 url: None,
-                path: "input.txt".into(),
+                path: "/data/input.txt".into(),
                 type_: proteus_core::tes::TesFileType::File,
                 content: Some("Proteus Bio-Compute Engine".into()),
             }],
             executors: vec![TesExecutor {
-                image: "".into(),
+                image: "docker.io/library/alpine:3.20".into(),
                 command: vec![
                     "sh".into(),
                     "-c".into(),
                     "cat input.txt > output.txt && echo 'Executor finished'".into(),
                 ],
-                workdir: None,
-                stdout: Some("exec.stdout".into()),
-                stderr: Some("exec.stderr".into()),
+                workdir: Some("/data".into()),
+                stdout: Some("/data/exec.stdout".into()),
+                stderr: Some("/data/exec.stderr".into()),
                 stdin: None,
                 env: std::collections::HashMap::new(),
                 ignore_error: false,
@@ -740,7 +862,7 @@ mod tests {
                 name: Some("output_file".into()),
                 description: None,
                 url: None,
-                path: "output.txt".into(),
+                path: "/data/output.txt".into(),
                 type_: proteus_core::tes::TesFileType::File,
             }],
             ..Default::default()
@@ -767,6 +889,6 @@ mod tests {
             .unwrap()
             .contains("Executor finished"));
         assert_eq!(finished_task.logs[0].outputs.len(), 1);
-        assert_eq!(finished_task.logs[0].outputs[0].path, "output.txt");
+        assert_eq!(finished_task.logs[0].outputs[0].path, "/data/output.txt");
     }
 }

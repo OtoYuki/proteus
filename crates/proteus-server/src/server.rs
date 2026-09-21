@@ -5,7 +5,7 @@ use crate::api::{
 use crate::telemetry::Telemetry;
 use crate::tes_api::{cancel_task, create_task, get_service_info, get_task, list_tasks};
 use axum::extract::State;
-use axum::http::header;
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Router;
@@ -22,6 +22,13 @@ use utoipa_swagger_ui::SwaggerUi;
 pub struct AppState {
     pub scheduler: PipelineScheduler,
     pub telemetry: Arc<Telemetry>,
+}
+
+/// Network-facing options for [`run_server`].
+#[derive(Clone, Default)]
+pub struct ServerOptions {
+    /// When set, every `/v1`, `/ga4gh` and `/api` request must carry `Authorization: Bearer <token>`.
+    pub auth_token: Option<String>,
 }
 
 impl AppState {
@@ -78,15 +85,46 @@ pub async fn prometheus_metrics(State(state): State<AppState>) -> Response {
         .into_response()
 }
 
+/// Reject requests whose `Authorization: Bearer …` does not match the configured token
+/// (constant-time comparison). Returns 401 with a `WWW-Authenticate` header.
+async fn require_bearer(
+    State(token): State<Arc<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    use subtle::ConstantTimeEq;
+    let presented = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .unwrap_or("");
+    let ok = presented.len() == token.len() && presented.as_bytes().ct_eq(token.as_bytes()).into();
+    if ok {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            axum::Json(serde_json::json!({ "error": "missing or invalid bearer token" })),
+        )
+            .into_response()
+    }
+}
+
 pub fn build_router(state: AppState) -> Router {
+    build_router_with_options(state, ServerOptions::default())
+}
+
+pub fn build_router_with_options(state: AppState, options: ServerOptions) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
-        .route("/health", get(health_check))
-        .route("/metrics", get(prometheus_metrics))
+    // Everything except /health, /metrics and the Swagger UI sits behind the optional bearer token.
+    let protected = Router::new()
         // GA4GH TES v1.1 Standard Endpoints
         .route("/v1/tasks", post(create_task).get(list_tasks))
         .route("/v1/tasks/{id}", get(get_task).post(cancel_task))
@@ -113,7 +151,19 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/metrics/by-prediction/{prediction_id}",
             get(get_metrics),
         )
-        .route("/view/{job_id}", get(view_structure))
+        .route("/view/{job_id}", get(view_structure));
+    let protected = match options.auth_token {
+        Some(token) if !token.is_empty() => protected.layer(axum::middleware::from_fn_with_state(
+            Arc::new(token),
+            require_bearer,
+        )),
+        _ => protected,
+    };
+
+    Router::new()
+        .route("/health", get(health_check))
+        .route("/metrics", get(prometheus_metrics))
+        .merge(protected)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -124,9 +174,31 @@ pub async fn run_server(
     addr: SocketAddr,
     scheduler: PipelineScheduler,
 ) -> Result<(), std::io::Error> {
+    run_server_with_options(addr, scheduler, ServerOptions::default()).await
+}
+
+pub async fn run_server_with_options(
+    addr: SocketAddr,
+    scheduler: PipelineScheduler,
+    options: ServerOptions,
+) -> Result<(), std::io::Error> {
+    let executor_kind = scheduler.tes_config().executor.kind();
+    let allowlist = scheduler.tes_config().allow_images.len();
+    if !addr.ip().is_loopback() {
+        if options.auth_token.is_none() {
+            tracing::warn!(
+                "binding to {} without --auth-token: anyone who can reach this port can submit tasks",
+                addr
+            );
+        }
+        if allowlist == 0 {
+            tracing::warn!("no --allow-image patterns: any container image will be accepted");
+        }
+    }
+    tracing::info!("TES executor backend: {executor_kind}");
     let state = AppState::new(scheduler);
 
-    let app = build_router(state);
+    let app = build_router_with_options(state, options);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Proteus server running on http://{}", addr);
     tracing::info!(
@@ -218,8 +290,9 @@ mod tests {
             "description": "Nextflow TES automated pipeline test",
             "executors": [
                 {
-                    "image": "",
-                    "command": ["echo", "TES task executed"]
+                    "image": "docker.io/library/alpine:3.20",
+                    "command": ["echo", "TES task executed"],
+                    "workdir": "/work"
                 }
             ]
         });
