@@ -24,7 +24,8 @@ cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not as
 | MolProbity Ramachandran (Top8000 contours from cctbx) | cctbx `ramalyze`, 100 % label agreement |
 | Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj ≤ 1 %, FreeSASA ≤ 4 % (L&R, ProtOr radii) |
 | hydrogen-bond network | mdtraj `baker_hubbard` (explicit-H reference, six NMR entries): 86–100 % recall, 58–76 % precision — heavy-atom criteria over-detect by 1.3–1.7× |
-| heavy-atom steric overlap, salt bridges, π interactions | Proteus-defined; labelled as such |
+| salt bridges, π–π stacking, cation–π | PLIP (intra-chain, 15 structures): salt-bridge precision **97.7 %** / recall 72 %; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %**. Cutoffs differ by design — ours is the stricter salt-bridge rule |
+| heavy-atom steric overlap | Proteus-defined; labelled as such |
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
 SASA 2.3–4.7× faster than mdtraj's C++ kernel at equal point count and ~33× faster than
@@ -270,9 +271,9 @@ Output (1CRN, crambin — an X-ray structure, so no pLDDT is reported):
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Aromatic π-π Stacking                    ┆ 0 conjugated pairs (0 parallel, 0 T-shaped)                       │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-│ Cation-π Interactions                    ┆ 1 active interactions                                             │
+│ Cation-π Interactions                    ┆ 0 active interactions                                             │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-│ Non-Covalent Network Density             ┆ 121.7 contacts / 100 res                                          │
+│ Non-Covalent Network Density             ┆ 119.6 contacts / 100 res                                          │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Candidate Fitness Score                  ┆ 98.2 / 100                                                        │
 └──────────────────────────────────────────┴───────────────────────────────────────────────────────────────────┘

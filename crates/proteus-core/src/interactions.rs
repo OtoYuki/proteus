@@ -16,10 +16,14 @@ pub enum HBondCategory {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct HydrogenBond {
     pub donor_res_idx: usize,
+    /// Chain id as written in the file.
+    pub donor_chain_id: String,
     pub donor_res_seq: isize,
     pub donor_res_name: String,
     pub donor_atom_name: String,
     pub acceptor_res_idx: usize,
+    /// Chain id as written in the file.
+    pub acceptor_chain_id: String,
     pub acceptor_res_seq: isize,
     pub acceptor_res_name: String,
     pub acceptor_atom_name: String,
@@ -34,10 +38,14 @@ pub struct HydrogenBond {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct SaltBridge {
     pub cation_res_idx: usize,
+    /// Chain id as written in the file.
+    pub cation_chain_id: String,
     pub cation_res_seq: isize,
     pub cation_res_name: String,
     pub cation_atom_name: String,
     pub anion_res_idx: usize,
+    /// Chain id as written in the file.
+    pub anion_chain_id: String,
     pub anion_res_seq: isize,
     pub anion_res_name: String,
     pub anion_atom_name: String,
@@ -59,9 +67,13 @@ pub enum PiStackingCategory {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PiStacking {
     pub ring1_res_idx: usize,
+    /// Chain id as written in the file.
+    pub ring1_chain_id: String,
     pub ring1_res_seq: isize,
     pub ring1_res_name: String,
     pub ring2_res_idx: usize,
+    /// Chain id as written in the file.
+    pub ring2_chain_id: String,
     pub ring2_res_seq: isize,
     pub ring2_res_name: String,
     pub centroid_distance: f64,
@@ -74,10 +86,14 @@ pub struct PiStacking {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CationPiInteraction {
     pub cation_res_idx: usize,
+    /// Chain id as written in the file.
+    pub cation_chain_id: String,
     pub cation_res_seq: isize,
     pub cation_res_name: String,
     pub cation_atom_name: String,
     pub ring_res_idx: usize,
+    /// Chain id as written in the file.
+    pub ring_chain_id: String,
     pub ring_res_seq: isize,
     pub ring_res_name: String,
     pub distance_to_centroid: f64,
@@ -114,6 +130,8 @@ pub struct InteractionNetwork {
 struct ExtractedAtom {
     /// Chain index (file order); neighbour exclusions only apply within a chain.
     chain: usize,
+    /// Chain id as written in the file, so a reported contact can name it.
+    chain_id: String,
     res_idx: usize,
     res_seq: isize,
     res_name: String,
@@ -126,11 +144,29 @@ struct ExtractedAtom {
 #[derive(Clone)]
 struct ExtractedAromaticRing {
     chain: usize,
+    chain_id: String,
     res_idx: usize,
     res_seq: isize,
     res_name: String,
     centroid: Vector3<f64>,
     normal: Vector3<f64>,
+}
+
+/// Maximum lateral displacement of two stacked rings, in Å: the radius of benzene plus a
+/// little slack, as used by McGaughey et al. (1998) and by PLIP.
+const PI_OFFSET_MAX: f64 = 2.0;
+
+/// Lateral offset between two aromatic rings: how far each centroid sits from the other ring's
+/// axis, taking the smaller of the two projections. Zero for perfectly stacked rings; large for
+/// rings that are parallel but slid sideways past each other.
+fn ring_offset(r1: &ExtractedAromaticRing, r2: &ExtractedAromaticRing) -> f64 {
+    let d = r2.centroid - r1.centroid;
+    // Distance from r2's centroid to r1's normal axis, and vice versa.
+    let along_1 = d.dot(&r1.normal);
+    let perp_1 = (d.norm_squared() - along_1 * along_1).max(0.0).sqrt();
+    let along_2 = d.dot(&r2.normal);
+    let perp_2 = (d.norm_squared() - along_2 * along_2).max(0.0).sqrt();
+    perp_1.min(perp_2)
 }
 
 /// Computes the angle in degrees between vectors (A - vertex) and (B - vertex).
@@ -157,6 +193,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
     let mut total_residues = 0;
 
     for (chain_idx, chain) in pdb.chains().enumerate() {
+        let chain_id = chain.id().trim().to_string();
         for residue in chain.residues() {
             total_residues += 1;
             let res_seq = residue.serial_number();
@@ -175,6 +212,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
             if let (Some(&n_pos), Some(&ca_pos)) = (atom_map.get("N"), atom_map.get("CA")) {
                 donors.push(ExtractedAtom {
                     chain: chain_idx,
+                    chain_id: chain_id.clone(),
                     res_idx: global_res_idx,
                     res_seq,
                     res_name: res_name.clone(),
@@ -188,6 +226,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
             if let (Some(&o_pos), Some(&c_pos)) = (atom_map.get("O"), atom_map.get("C")) {
                 acceptors.push(ExtractedAtom {
                     chain: chain_idx,
+                    chain_id: chain_id.clone(),
                     res_idx: global_res_idx,
                     res_seq,
                     res_name: res_name.clone(),
@@ -208,6 +247,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
                                 chain: chain_idx,
+                                chain_id: chain_id.clone(),
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -226,6 +266,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&nz) = atom_map.get("NZ") {
                         let item = ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -246,6 +287,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
                                 chain: chain_idx,
+                                chain_id: chain_id.clone(),
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -273,6 +315,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -287,6 +330,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
                                 chain: chain_idx,
+                                chain_id: chain_id.clone(),
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -306,6 +350,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
                                 chain: chain_idx,
+                                chain_id: chain_id.clone(),
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -324,6 +369,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&nd2) = atom_map.get("ND2") {
                         donors.push(ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -336,6 +382,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&od1) = atom_map.get("OD1") {
                         acceptors.push(ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -351,6 +398,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&ne2) = atom_map.get("NE2") {
                         donors.push(ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -363,6 +411,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&oe1) = atom_map.get("OE1") {
                         acceptors.push(ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -378,6 +427,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&og) = atom_map.get("OG") {
                         let item = ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -395,6 +445,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&og1) = atom_map.get("OG1") {
                         let item = ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -412,6 +463,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&oh) = atom_map.get("OH") {
                         let item = ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -438,6 +490,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -460,6 +513,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -473,6 +527,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(&ne1) = atom_map.get("NE1") {
                         donors.push(ExtractedAtom {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -497,6 +552,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
                             chain: chain_idx,
+                            chain_id: chain_id.clone(),
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -603,10 +659,12 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
 
                                 hbonds.push(HydrogenBond {
                                     donor_res_idx: donor.res_idx,
+                                    donor_chain_id: donor.chain_id.clone(),
                                     donor_res_seq: donor.res_seq,
                                     donor_res_name: donor.res_name.clone(),
                                     donor_atom_name: donor.atom_name.clone(),
                                     acceptor_res_idx: acc.res_idx,
+                                    acceptor_chain_id: acc.chain_id.clone(),
                                     acceptor_res_seq: acc.res_seq,
                                     acceptor_res_name: acc.res_name.clone(),
                                     acceptor_atom_name: acc.atom_name.clone(),
@@ -648,10 +706,12 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             if dist_sq <= max_salt_dist_sq {
                                 candidate_salt_bridges.push(SaltBridge {
                                     cation_res_idx: cat.res_idx,
+                                    cation_chain_id: cat.chain_id.clone(),
                                     cation_res_seq: cat.res_seq,
                                     cation_res_name: cat.res_name.clone(),
                                     cation_atom_name: cat.atom_name.clone(),
                                     anion_res_idx: ani.res_idx,
+                                    anion_chain_id: ani.chain_id.clone(),
                                     anion_res_seq: ani.res_seq,
                                     anion_res_name: ani.res_name.clone(),
                                     anion_atom_name: ani.atom_name.clone(),
@@ -728,13 +788,24 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                                     None
                                 };
 
+                                // Lateral displacement test (McGaughey 1998; PLIP uses the same
+                                // 2.0 Å = benzene radius + 0.5). Without it two rings that are
+                                // parallel and within 6.5 Å but slid apart sideways count as a
+                                // stack when their π systems do not overlap at all. Measured
+                                // against PLIP this term is what takes π–π precision from 20 %
+                                // to a usable number.
+                                let offset = ring_offset(r1, r2);
+                                let category = category.filter(|_| offset <= PI_OFFSET_MAX);
+
                                 if let Some(cat) = category {
                                     seen_ring_pairs.insert(pair_key);
                                     pi_pi_stacks.push(PiStacking {
                                         ring1_res_idx: r1.res_idx,
+                                        ring1_chain_id: r1.chain_id.clone(),
                                         ring1_res_seq: r1.res_seq,
                                         ring1_res_name: r1.res_name.clone(),
                                         ring2_res_idx: r2.res_idx,
+                                        ring2_chain_id: r2.chain_id.clone(),
                                         ring2_res_seq: r2.res_seq,
                                         ring2_res_name: r2.res_name.clone(),
                                         centroid_distance: dist_sq.sqrt(),
@@ -780,14 +851,24 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                                         (ring.normal.dot(&v).abs() / dist).clamp(0.0, 1.0);
                                     let angle_deg = cos_alpha.acos().to_degrees();
 
-                                    // Cation within cone of pi cloud (angle to normal <= 45°, cos_alpha >= cos(45°))
-                                    if cos_alpha >= std::f64::consts::FRAC_1_SQRT_2 {
+                                    // Cation within the cone of the π cloud (angle to normal
+                                    // ≤ 45°) *and* not slid off the ring face. The offset term
+                                    // is the same 2.0 Å used for π–π and by PLIP: without it a
+                                    // cation 6 Å away and barely inside the cone counts, though
+                                    // it sits beyond the ring edge rather than over its face.
+                                    let offset =
+                                        (dist_sq - ring.normal.dot(&v).powi(2)).max(0.0).sqrt();
+                                    if cos_alpha >= std::f64::consts::FRAC_1_SQRT_2
+                                        && offset <= PI_OFFSET_MAX
+                                    {
                                         candidate_cation_pi.push(CationPiInteraction {
                                             cation_res_idx: cat.res_idx,
+                                            cation_chain_id: cat.chain_id.clone(),
                                             cation_res_seq: cat.res_seq,
                                             cation_res_name: cat.res_name.clone(),
                                             cation_atom_name: cat.atom_name.clone(),
                                             ring_res_idx: ring.res_idx,
+                                            ring_chain_id: ring.chain_id.clone(),
                                             ring_res_seq: ring.res_seq,
                                             ring_res_name: ring.res_name.clone(),
                                             distance_to_centroid: dist,
@@ -911,10 +992,15 @@ mod tests {
             network.summary.network_density
         );
 
-        // Crambin contains Phe13, Tyr29, Tyr44. It should detect aromatic interactions.
-        assert!(
-            network.summary.total_pi_pi_stacks + network.summary.total_cation_pi >= 1,
-            "Expected aromatic interactions in Crambin"
+        // Crambin carries Phe13, Tyr29 and Tyr44, but none of them stack or sit over a
+        // cation's face: PLIP reports zero aromatic interactions here too
+        // (validate/reference/plip/1crn.json). This assertion used to demand >= 1 and passed
+        // only because the ring-offset test was missing, which counted rings that were
+        // parallel but slid apart. Agreement with the reference is the point, not a hit.
+        assert_eq!(
+            network.summary.total_pi_pi_stacks + network.summary.total_cation_pi,
+            0,
+            "PLIP finds no aromatic interactions in Crambin; Proteus should agree"
         );
     }
 

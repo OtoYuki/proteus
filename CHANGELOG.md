@@ -5,7 +5,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **π–π stacking and cation–π were over-reported, and the counts change.** Neither test included
+  a lateral-offset term, so two aromatic rings that were parallel and within the distance cutoff
+  but slid sideways past each other counted as stacked, and a cation beyond the ring edge counted
+  as sitting over its face. Measured against PLIP across 15 structures that was **20 % precision
+  on π–π** (55 reported where PLIP finds 11) and 33 % on cation–π. Both now apply the McGaughey
+  (1998) 2.0 Å offset criterion that PLIP uses: **π–π precision 20 % → 81.8 %** (11 reported,
+  matching PLIP's 11) and **cation–π 33.3 % → 73.9 %** (51 → 23). Found by adopting the reference,
+  not by inspection.
+  **This changes reported counts, the non-covalent network density and therefore fitness scores**
+  for structures with aromatics — 1CRN's network density goes 121.7 → 119.6 contacts/100 res.
+  A unit test that asserted crambin has ≥ 1 aromatic interaction was itself wrong: PLIP finds
+  none there, and the assertion now requires agreement with the reference.
+
 ### Added
+- **Salt bridges, π–π and cation–π have an external reference for the first time.** These were
+  the rows in the README that said "no widely used reference implementation with the same
+  definitions". [PLIP](https://github.com/pharmai/plip) is one, run in intra-chain mode over 15
+  X-ray structures by `validate/plip_reference.py`, compared by residue pair with recall *and*
+  precision, in `make validate` and therefore in CI. Observed: salt bridges **97.7 % precision**
+  at 72 % recall (a stricter cutoff by design), π–π 81.8 / 81.8 %, cation–π 73.9 / 65.4 %.
+- Every reported interaction now carries the **chain id** of both partners. `ARG17` in a
+  four-chain structure was ambiguous; it is `A:ARG17` now, and it is what makes the per-chain
+  PLIP comparison possible at all.
 - **The composite fitness score is now measured, not just labelled.** It ranks everything
   `proteus screen` outputs and had no external check, because no reference implementation of a
   Proteus-defined weighted sum exists. `fitness_discrimination.rs` instead measures the claim

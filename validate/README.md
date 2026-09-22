@@ -13,6 +13,9 @@ GitHub Actions job runs it on every push and pull request and uploads the table.
 | SASA (Shrake–Rupley, 960 pts, Bondi radii) | `mdtraj.shrake_rupley` (same algorithm and radii) | relative | 1 % |
 | SASA | FreeSASA Lee–Richards, ProtOr radii | relative | 4 % — different algorithm **and** radius set; an independent sanity check, not a tight bound (observed 0.2–3.4 %) |
 | hydrogen-bond network | `mdtraj.baker_hubbard` on all six structures with explicit H | **recall** of mdtraj's non-local bonds; **precision** of Proteus' bonds | recall ≥ 85 % (observed 85.7–100 %); precision ≥ 50 % (observed 58–76 %) |
+| salt bridges | PLIP, intra-chain, 15 structures | recall and precision by residue pair | recall ≥ 65 % (observed 72.0 %); precision ≥ 90 % (observed **97.7 %**) |
+| π–π stacking | PLIP, intra-chain | recall and precision by residue pair | both ≥ 70 % (observed 81.8 % / 81.8 %) |
+| cation–π | PLIP, intra-chain | recall and precision by residue pair | recall ≥ 55 % (observed 65.4 %); precision ≥ 60 % (observed 73.9 %) |
 
 ### Hydrogen bonds
 
@@ -45,9 +48,33 @@ stability or activity, and nothing here says a higher score means a better prote
 sequence-level fitness use `--scorer esm2`, whose ProteinGym Spearman numbers are in
 `bench/README.md`. Treat it as a triage filter that rejects models which are not folded.
 
-Still not validated (no reference run): the heavy-atom overlap score (a Python re-implementation
-of Proteus's own rule would only be a regression test) and **salt bridges, π–π stacking and
-cation–π** (no widely used reference implementation with the same definitions).
+### Salt bridges, π–π and cation–π
+
+These three had no reference until 2026-09-22. [PLIP](https://github.com/pharmai/plip)
+(Salentin et al. 2015) is one, run in **intra-chain** mode by `validate/plip_reference.py` over
+15 X-ray structures. The criteria differ deliberately, so the harness measures recall and
+precision by residue pair rather than asserting equality:
+
+| interaction | PLIP | Proteus |
+|---|---|---|
+| salt bridge | ≤ 5.5 Å between charge centres | ≤ 4.0 Å between closest atoms |
+| π–π | ≤ 5.5 Å centroids, ring offset ≤ 2.0 Å | ≤ 6.5 Å centroids, ring offset ≤ 2.0 Å |
+| cation–π | ≤ 6.0 Å, offset ≤ 2.0 Å | ≤ 6.0 Å, ≤ 45° to the ring normal, offset ≤ 2.0 Å |
+
+Salt-bridge recall is 72 % *by design*: a 4.0 Å atom-to-atom rule reports a subset of a 5.5 Å
+centre-to-centre one. The 97.7 % precision is the evidence that it is the right subset.
+
+**Adopting this reference found a real defect.** Proteus had no lateral-offset test on π–π or
+cation–π, so two rings that were parallel and within range but slid sideways past each other
+counted as stacked. Measured against PLIP that was 20 % precision on π–π (55 reported against
+PLIP's 11). Adding the McGaughey (1998) 2.0 Å offset term — the same one PLIP uses — took π–π to
+81.8 % precision at 11 reported, and cation–π from 33.3 % to 73.9 %.
+
+Scope: intra-chain only, because PLIP's INTRA mode profiles one chain against itself.
+Inter-chain contacts are covered by Proteus's own chain-awareness unit test.
+
+Still not validated (no reference run): the heavy-atom overlap score — a Python
+re-implementation of Proteus's own rule would only be a regression test.
 
 ## Corpus
 

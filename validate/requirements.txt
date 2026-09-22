@@ -2,3 +2,4 @@ mdtraj
 freesasa
 numpy
 cctbx-base
+plip
