@@ -71,7 +71,7 @@ Generates high-density mutant variant libraries directly from wildtype scaffolds
 
 ### 2. High-Throughput Screening Funnel & Parquet Data Lake
 Evaluates variant libraries across multi-threaded computational workers:
-- **Multi-Tier Inference:** Dispatches structural prediction jobs across fast ESMFold heuristics, Boltz-1/ColabFold OCI containers, or local simulation fallback.
+- **Multi-Tier Inference:** Dispatches structural prediction jobs to a local OCI container image when present, else the Meta ESMFold API. When neither is reachable the offline simulator produces a placeholder helix; those structures are flagged `engine = simulated`, excluded from the ranking unless `--runner simulated` is given, and never presented as predictions.
 - **Weighted Composite Fitness Score:** Ranks candidates by a weighted sum of pLDDT confidence (predicted models only), compactness ($R_g$ vs Flory scaling), MolProbity Ramachandran quality, hydrophobic core burial and non-covalent network density, minus a steric-overlap penalty. For experimental structures the pLDDT weight is redistributed over the other terms.
 - **Columnar Data Lake Export:** Serializes screened variant batches into ZSTD-compressed Apache Parquet files using canonical Apache Arrow schemas for direct query execution in DuckDB, Polars, or PyArrow.
 
@@ -113,7 +113,7 @@ proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --e
 - `--scorer esm2` ranks a screening library by sequence likelihood; `--scorer hybrid` combines it
   with the structural fitness score. Both add an `esm2_score` column to the Parquet export.
 
-### 5. Validated Against Reference Implementations
+### 6. Validated Against Reference Implementations
 Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:
 
 | id | fmt | kind | res | Δrg Å | SASA vs mdtraj | SASA vs freesasa | φ/ψ ≤tol | DSSP-8 | DSSP-3 | Rama labels | F/A/O proteus | F/A/O cctbx |
@@ -145,7 +145,7 @@ The compiled binary will be located at `target/release/proteus`.
 
 ### Verification & Test Suite
 ```bash
-# Run all 80 workspace unit, integration and doc tests
+# Run the workspace unit, integration and doc tests (129 at the time of writing)
 cargo test --workspace
 
 # Strict lint check
@@ -191,6 +191,8 @@ Pipe mutations directly into the screening funnel without saving intermediate FA
 ```bash
 proteus mutate wildtype.fasta --mode alanine | proteus screen - --export results.parquet
 ```
+Every export row carries an `engine` column (`esmfold-api`, `oci`, `simulated`); the Parquet
+file is tagged `proteus.schema_version = 4`.
 
 ### 3. Terminal 3D Structure Viewer (`proteus view`)
 Launch the interactive 3D viewer with the live split-screen biophysical dashboard:

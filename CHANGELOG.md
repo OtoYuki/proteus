@@ -5,6 +5,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Exports carry an `engine` column (`esmfold-api`, `oci`, `simulated`); `schema_version = 4`.
+  `proteus inspect` shows the engine. Every runner records `metadata.engine`.
+- `/metrics`: the task-duration and biophysics histograms and the CAS counters are now driven
+  by engine events (`BiophysicsAnalyzed`, `CasStored`); `proteus_task_queue_depth` and the CAS
+  `read` series, which nothing ever wrote, are gone.
+- `proteus submit --wait=false` enqueues and returns.
+
+### Fixed
+- `proteus screen --runner auto` ranked the offline simulator's placeholder helices as if
+  they were predictions whenever the ESMFold API was unreachable. Simulated structures are now
+  excluded from the leaderboard and export with a warning, unless `--runner simulated` is
+  explicit, in which case the leaderboard is labelled.
+- `proteus analyze --reference` failed with a coordinate-length mismatch when the reference
+  carried alternate conformations or a calcium ion named `CA`; the reference is normalised
+  like the query.
+- The Prometheus collector stopped counting for good after the first broadcast lag; cancelling
+  a running TES task decremented `proteus_active_workers` twice.
+- `proteus inspect` labelled secondary structure "P-SEA"; it is DSSP.
+
 ## [0.4.0] — 2026-09-22
 
 The TES-hardening release: executors run in their container image, the API takes a bearer
