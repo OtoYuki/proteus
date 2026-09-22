@@ -88,7 +88,8 @@ impl ComputeRunner for EsmApiRunner {
             pdb_path,
             plddt: None,
             metadata: Some(serde_json::json!({
-                "engine": "meta-esmfold-v1",
+                "engine": crate::runner::ENGINE_ESMFOLD_API,
+                "model": "meta-esmfold-v1",
                 "endpoint": self.endpoint,
                 "residues": sequence.length,
             })),

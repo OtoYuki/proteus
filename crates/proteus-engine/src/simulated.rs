@@ -81,6 +81,7 @@ impl ComputeRunner for SimulatedRunner {
         tokio::fs::write(&pdb_path, pdb_lines.join("\n")).await?;
 
         let metadata = serde_json::json!({
+            "engine": crate::runner::ENGINE_SIMULATED,
             "runner": "simulated",
             "tier": format!("{:?}", job.tier),
             "residue_count": sequence.length,

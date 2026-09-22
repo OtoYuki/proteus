@@ -238,6 +238,7 @@ impl ComputeRunner for OciRunner {
             pdb_path,
             plddt: None,
             metadata: Some(serde_json::json!({
+                "engine": crate::runner::ENGINE_OCI,
                 "runner": "oci",
                 "image": image,
                 "socket": self.socket_path

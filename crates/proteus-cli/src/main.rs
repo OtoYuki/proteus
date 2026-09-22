@@ -62,8 +62,8 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = RunnerMode::Auto)]
         runner: RunnerMode,
 
-        /// Run synchronously and wait for completion
-        #[arg(long, default_value_t = true)]
+        /// Run synchronously and wait for completion (`--wait=false` to enqueue and return)
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set, num_args = 0..=1, default_missing_value = "true")]
         wait: bool,
     },
 
@@ -366,6 +366,13 @@ fn resolve_runner(mode: RunnerMode) -> Result<Arc<dyn ComputeRunner>> {
             Ok(Arc::new(oci))
         }
     }
+}
+
+/// Whether a structure from `engine` may enter the screening leaderboard. The offline
+/// simulator writes an ideal helix that does not depend on the sequence, so its output is only
+/// ranked when the user asked for the simulator explicitly; a silent fallback is dropped.
+fn rankable(engine: &str, runner: RunnerMode) -> bool {
+    engine != proteus_engine::ENGINE_SIMULATED || runner == RunnerMode::Simulated
 }
 
 /// `$PROTEUS_DATA_DIR` if set (containers, CI), else `~/.local/share/proteus`.
@@ -1092,12 +1099,19 @@ async fn main() -> Result<()> {
                 fitness: f64,
                 esm2_score: Option<f32>,
                 rank_key: f64,
+                engine: String,
             }
 
             let mut candidates: Vec<CandidateRank> = Vec::new();
+            let mut simulated_dropped = 0usize;
 
             for (seq, &job_id) in sequences.iter().zip(job_ids.iter()) {
                 if let Ok(Some(pred)) = repo.get_prediction_by_job(job_id).await {
+                    let engine = proteus_engine::engine_name(pred.metadata.as_ref()).to_string();
+                    if !rankable(&engine, runner) {
+                        simulated_dropped += 1;
+                        continue;
+                    }
                     if let Ok(Some(metrics)) = repo.get_metrics_by_prediction(pred.id).await {
                         let plddt = pred.plddt.unwrap_or(metrics.plddt_distribution.mean);
                         if plddt >= min_plddt {
@@ -1170,6 +1184,7 @@ async fn main() -> Result<()> {
                                 fitness,
                                 esm2_score,
                                 rank_key,
+                                engine,
                             });
                         }
                     }
@@ -1183,9 +1198,23 @@ async fn main() -> Result<()> {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
+            if simulated_dropped > 0 {
+                eprintln!(
+                    "\nWARNING: {simulated_dropped} of {total_seqs} candidates were folded by the offline \
+                     simulator (no container image and the ESMFold API was unavailable). Their \
+                     structures are synthetic helices, not predictions, and are excluded from the \
+                     ranking. Re-run online, provide a runner image, or pass --runner simulated to \
+                     rank them anyway."
+                );
+            }
             println!(
-                "\n=== Screening Funnel Leaderboard (Cutoff: pLDDT >= {:.1}) ===",
-                min_plddt
+                "\n=== Screening Funnel Leaderboard (Cutoff: pLDDT >= {:.1}){} ===",
+                min_plddt,
+                if runner == RunnerMode::Simulated {
+                    " — SIMULATED: synthetic structures, not predictions"
+                } else {
+                    ""
+                }
             );
             let mut table = Table::new();
             table.load_preset(UTF8_FULL);
@@ -1269,6 +1298,7 @@ async fn main() -> Result<()> {
                         cation_pi_count: c.cation_pi_count,
                         fitness: c.fitness,
                         esm2_score: c.esm2_score.map(f64::from),
+                        engine: c.engine.clone(),
                     });
                 }
                 proteus_storage::save_screening_dataset(&records, &export_path)
@@ -1366,6 +1396,17 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
         Cell::new("Artifact on disk"),
     ]);
 
+    let engine = proteus_engine::engine_name(pred.metadata.as_ref());
+    table.add_row(vec![
+        Cell::new("Engine"),
+        Cell::new(engine),
+        Cell::new(if engine == proteus_engine::ENGINE_SIMULATED {
+            "SIMULATED: synthetic helix, not a prediction"
+        } else {
+            "Structure source"
+        }),
+    ]);
+
     let plddt_cell = if let Some(p) = pred.plddt {
         format!("{:.2}", p)
     } else {
@@ -1410,7 +1451,7 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
                 ss.strand_fraction * 100.0,
                 ss.coil_fraction * 100.0
             )),
-            Cell::new("P-SEA assignment"),
+            Cell::new("DSSP (Kabsch–Sander) assignment"),
         ]);
     }
 
@@ -1444,4 +1485,49 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
 
     println!("{table}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simulated_structures_rank_only_when_the_simulator_was_requested() {
+        assert!(!rankable(
+            proteus_engine::ENGINE_SIMULATED,
+            RunnerMode::Auto
+        ));
+        assert!(!rankable(
+            proteus_engine::ENGINE_SIMULATED,
+            RunnerMode::EsmApi
+        ));
+        assert!(rankable(
+            proteus_engine::ENGINE_SIMULATED,
+            RunnerMode::Simulated
+        ));
+        assert!(rankable(
+            proteus_engine::ENGINE_ESMFOLD_API,
+            RunnerMode::Auto
+        ));
+        assert!(rankable(proteus_engine::ENGINE_OCI, RunnerMode::Auto));
+    }
+
+    #[test]
+    fn submit_wait_can_be_switched_off() {
+        let wait_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Commands::Submit { wait, .. } => wait,
+            _ => unreachable!(),
+        };
+        assert!(wait_of(&["proteus", "submit", "--fasta", ">x\nAC"]));
+        assert!(wait_of(&[
+            "proteus", "submit", "--fasta", ">x\nAC", "--wait"
+        ]));
+        assert!(!wait_of(&[
+            "proteus",
+            "submit",
+            "--fasta",
+            ">x\nAC",
+            "--wait=false"
+        ]));
+    }
 }
