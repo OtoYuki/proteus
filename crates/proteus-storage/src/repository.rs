@@ -529,6 +529,28 @@ impl ProteusRepository {
         Ok(())
     }
 
+    /// As [`update_tes_task_state`](Self::update_tes_task_state), but refused when the task
+    /// has meanwhile been cancelled. Returns whether the row was written; `false` means the
+    /// caller lost a race with a cancel and must stop.
+    pub async fn update_tes_task_state_unless_canceled(
+        &self,
+        id: &str,
+        state: &str,
+        task_json: &str,
+    ) -> Result<bool, StorageError> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE tes_tasks SET state = ?, task_json = ?, updated_at = ? WHERE id = ? AND state != 'CANCELED'",
+        )
+        .bind(state)
+        .bind(task_json)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn get_tes_task(&self, id: &str) -> Result<Option<TesTaskRecord>, StorageError> {
         let row = sqlx::query(
             "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks WHERE id = ?"
@@ -763,5 +785,30 @@ mod tests {
         let listed = repo.list_tes_tasks(Some("COMPLETE"), 10).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, task_id);
+    }
+
+    #[tokio::test]
+    async fn non_terminal_state_writes_do_not_overwrite_a_cancel() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        repo.insert_tes_task("t", "QUEUED", None, None, "{}")
+            .await
+            .unwrap();
+        assert!(repo
+            .update_tes_task_state_unless_canceled("t", "INITIALIZING", "{}")
+            .await
+            .unwrap());
+        repo.update_tes_task_state("t", "CANCELED", "{}")
+            .await
+            .unwrap();
+        // The worker, unaware of the cancel, tries to move on: the write must be refused.
+        assert!(!repo
+            .update_tes_task_state_unless_canceled("t", "RUNNING", "{}")
+            .await
+            .unwrap());
+        assert_eq!(
+            repo.get_tes_task("t").await.unwrap().unwrap().state,
+            "CANCELED"
+        );
     }
 }

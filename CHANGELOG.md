@@ -23,6 +23,9 @@ All notable changes to this project are documented here. The format follows
   like the query.
 - The Prometheus collector stopped counting for good after the first broadcast lag; cancelling
   a running TES task decremented `proteus_active_workers` twice.
+- A cancel that arrived while a TES task was `INITIALIZING` could be overwritten by the worker's
+  next state write and the task ran to `COMPLETE`. The cancel token is now registered before
+  the first write and non-terminal writes are refused once the row is `CANCELED`.
 - `proteus inspect` labelled secondary structure "P-SEA"; it is DSSP.
 
 ## [0.4.0] — 2026-09-22

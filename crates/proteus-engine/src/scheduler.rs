@@ -615,13 +615,26 @@ impl PipelineScheduler {
             task_id: task_id.to_string(),
         });
 
+        // The cancel token is registered before the first state write so that a cancel arriving
+        // at any later point is seen; non-terminal writes are refused once the row is CANCELED.
+        let cancel = CancellationToken::new();
+        self.cancel_tokens
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), cancel.clone());
+
         // 1. Initializing state
         task.state = TesState::Initializing;
         let mut task_json = serde_json::to_string(&task)
             .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
-        self.repo
-            .update_tes_task_state(task_id, &task.state.to_string(), &task_json)
-            .await?;
+        if !self
+            .repo
+            .update_tes_task_state_unless_canceled(task_id, &task.state.to_string(), &task_json)
+            .await?
+        {
+            self.cancel_tokens.lock().unwrap().remove(task_id);
+            return Ok(());
+        }
 
         let work_dir = self.artifacts_dir.join("tes").join(task_id);
         tokio::fs::create_dir_all(&work_dir).await?;
@@ -629,7 +642,12 @@ impl PipelineScheduler {
         // 2. Stage inputs. A staging failure is the server's problem (SYSTEM_ERROR), and the
         //    task must still reach a terminal state.
         if let Err(msg) = self.stage_inputs(&task, &work_dir).await {
-            task.state = TesState::SystemError;
+            self.cancel_tokens.lock().unwrap().remove(task_id);
+            task.state = if cancel.is_cancelled() {
+                TesState::Canceled
+            } else {
+                TesState::SystemError
+            };
             task.logs.push(TesTaskLog {
                 start_time: Some(Utc::now().to_rfc3339()),
                 end_time: Some(Utc::now().to_rfc3339()),
@@ -667,16 +685,16 @@ impl PipelineScheduler {
         };
         task_json = serde_json::to_string(&task)
             .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
-        self.repo
-            .update_tes_task_state(task_id, &task.state.to_string(), &task_json)
-            .await?;
+        if !self
+            .repo
+            .update_tes_task_state_unless_canceled(task_id, &task.state.to_string(), &task_json)
+            .await?
+        {
+            self.cancel_tokens.lock().unwrap().remove(task_id);
+            return Ok(());
+        }
 
         let mut executor_failed = false;
-        let cancel = CancellationToken::new();
-        self.cancel_tokens
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), cancel.clone());
         let mount_roots = Self::mount_roots(&task)?;
         task_log
             .system_logs
@@ -855,6 +873,9 @@ impl PipelineScheduler {
             task.state = TesState::Complete;
         }
 
+        if cancel.is_cancelled() {
+            task.state = TesState::Canceled;
+        }
         task_log.end_time = Some(Utc::now().to_rfc3339());
         task.logs.push(task_log);
 
@@ -1294,6 +1315,65 @@ mod tests {
         }
         // One start, one cancel notification, and exactly one end-of-work report.
         assert_eq!((started, canceled, failed), (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn cancel_during_initialisation_is_not_overwritten_by_the_worker() {
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        // An input served by a local HTTP endpoint that answers only after 400 ms keeps the
+        // worker between its INITIALIZING and RUNNING writes for a known window.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            use tokio::io::AsyncWriteExt;
+            let _ = sock
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+                .await;
+        });
+        let mut task = sh_task("t-race", "sleep 30");
+        task.inputs
+            .push(file_input(&format!("http://127.0.0.1:{port}/in.txt")));
+        repo.insert_tes_task(
+            &task.id,
+            "QUEUED",
+            None,
+            None,
+            &serde_json::to_string(&task).unwrap(),
+        )
+        .await
+        .unwrap();
+        let worker = {
+            let s = scheduler.clone();
+            tokio::spawn(async move { s.process_tes_task("t-race").await })
+        };
+        // Cancel while the worker is INITIALIZING (staging the slow input).
+        for _ in 0..2000 {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            if repo.get_tes_task("t-race").await.unwrap().unwrap().state == "INITIALIZING" {
+                break;
+            }
+        }
+        assert_eq!(
+            repo.get_tes_task("t-race").await.unwrap().unwrap().state,
+            "INITIALIZING"
+        );
+        assert_eq!(
+            scheduler.cancel_tes_task("t-race").await.unwrap(),
+            CancelOutcome::Canceled
+        );
+        worker.await.unwrap().unwrap();
+        let done = finished(&repo, "t-race").await;
+        assert_eq!(done.state, TesState::Canceled, "{:?}", done.logs);
+        assert!(
+            done.logs
+                .iter()
+                .all(|l| l.logs.iter().all(|e| e.exit_code != Some(0))),
+            "the executor must not have run to completion: {:?}",
+            done.logs
+        );
     }
 
     #[tokio::test]
