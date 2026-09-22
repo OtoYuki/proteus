@@ -23,7 +23,7 @@ jobs:
         toolchain: [stable]
         include:
           - os: ubuntu-latest
-            toolchain: "1.88" # MSRV — keep in sync with rust-version in Cargo.toml
+            toolchain: "1.94" # MSRV — keep in sync with rust-version in Cargo.toml
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

@@ -14,7 +14,7 @@ members = [
 [workspace.package]
 version = "0.4.0"
 edition = "2021"
-rust-version = "1.88"
+rust-version = "1.94"
 authors = ["Sushant Hona <serotoninotonin@gmail.com>", "Proteus Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/OtoYuki/proteus"
@@ -54,7 +54,7 @@ uuid = { version = "1.13", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Database & Storage
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.9", default-features = false, features = ["sqlite", "runtime-tokio", "uuid", "chrono", "migrate"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "flate2-zlib-rs", "zstd"] }
 arrow-schema = "60"
 arrow-array = "60"
@@ -69,7 +69,7 @@ candle-nn = "0.11"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 pdbtbx = "0.12"
 flate2 = "1"
-nalgebra = "0.34"
+nalgebra = "0.35"
 
 # CLI & UX
 clap = { version = "4.5", features = ["derive", "env"] }

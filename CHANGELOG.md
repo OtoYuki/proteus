@@ -29,12 +29,13 @@ All notable changes to this project are documented here. The format follows
   design records and states where the shipped code differs from each.
 
 ### Changed
-- Dependencies: bollard 0.18 → 0.21 (query-parameter API), pdbtbx 0.11 → 0.12 (`ReadOptions`),
-  reqwest 0.12 → 0.13 (`rustls` + `webpki-roots` features), nalgebra 0.33 → 0.34,
-  comfy-table 7 → 8, crossterm 0.28 → 0.29, criterion 0.5 → 0.8, tower-http 0.6 → 0.7,
-  base64 0.22 → 0.23, toml 0.8 → 1. MSRV stays 1.88 (sqlx 0.9 needs 1.94 and nalgebra 0.35
-  needs 1.89, so both wait). `make validate` and the container executor were re-verified on
-  the new versions.
+- **MSRV 1.88 → 1.94.** Dependencies at their current majors: bollard 0.18 → 0.21
+  (query-parameter API), pdbtbx 0.11 → 0.12 (`ReadOptions`), reqwest 0.12 → 0.13 (`rustls` +
+  `webpki-roots` features), sqlx 0.8 → 0.9 (drops `rsa` from the lockfile, so the
+  RUSTSEC-2023-0071 audit ignore is gone), nalgebra 0.33 → 0.35 (drops eleven `glam`
+  versions from the graph), comfy-table 7 → 8, crossterm 0.28 → 0.29, criterion 0.5 → 0.8,
+  tower-http 0.6 → 0.7, base64 0.22 → 0.23, toml 0.8 → 1. `make validate`, the container
+  executor and `scripts/smoke.sh` were re-verified on the new versions.
 - Compactness term of the fitness score recalibrated to the empirical folded-protein law
   `Rg ≈ 2.2·N^0.38 Å` (was `2.82·N^0.392`, ~30 % too wide, which scored every model ≤ 1.4× the
   folded Rg as fully compact). Full credit ≤ 1.10×, none ≥ 2.0×. **Fitness scores change** for

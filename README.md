@@ -4,7 +4,7 @@
 [![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
 [![tes-conformance](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml)
 [![release](https://img.shields.io/github/v/release/OtoYuki/proteus?include_prereleases)](https://github.com/OtoYuki/proteus/releases)
-[![MSRV 1.88](https://img.shields.io/badge/MSRV-1.88-blue)](Cargo.toml)
+[![MSRV 1.94](https://img.shields.io/badge/MSRV-1.94-blue)](Cargo.toml)
 [![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
 
 High-throughput bio-compute orchestration engine and terminal biophysics workbench, in Rust.
@@ -36,7 +36,7 @@ Biopython; DSSP 1.2–14× vs mdtraj; φ/ψ + Ramachandran 33–167× vs mdtraj 
 ```bash
 # release binaries (Linux x86_64/aarch64, macOS x86_64/arm64)
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
-# from source (Rust 1.88+)
+# from source (Rust 1.94+)
 cargo install --git https://github.com/OtoYuki/proteus proteus-cli
 # container: the CLI works as is; `serve` needs the host's container socket for TES executors
 podman run --rm -v "$PWD:/w" ghcr.io/otoyuki/proteus analyze --pdb /w/structure.pdb
@@ -138,7 +138,7 @@ Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-str
 ## Quickstart
 
 ### Prerequisites
-- **Rust Toolchain:** 1.88+ (MSRV, checked in CI)
+- **Rust Toolchain:** 1.94+ (MSRV, checked in CI)
 - **Container Runtime (Optional):** Podman rootless socket (`systemctl --user enable --now podman.socket`) or Docker daemon for live OCI container execution.
 
 ### Build
