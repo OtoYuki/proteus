@@ -7,15 +7,31 @@
 [![MSRV 1.94](https://img.shields.io/badge/MSRV-1.94-blue)](Cargo.toml)
 [![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
 
-High-throughput bio-compute orchestration engine and terminal biophysics workbench, in Rust.
+The protein-engineering design loop as one binary, with a GA4GH TES server in it.
 
 ![proteus demo: analyze, interactive dashboard, pLDDT provenance, validation table](docs/media/demo.gif)
 
-Proteus runs the protein-engineering design loop end to end — sequence mutagenesis → structure
-prediction (ESMFold API, your own ESMFold/Boltz images via Podman/Docker, GA4GH TES v1.1) → all-atom
-biophysical validation → ranking → Apache Parquet — and lets you look at the result in the terminal
-you are already SSH'd into. The biophysics is pure Rust and **checked against mdtraj, FreeSASA and
-cctbx/MolProbity on 53 structures in CI**; the speed claims are measured, not asserted.
+```bash
+proteus mutate wt.fasta --mode saturation \
+  | proteus screen - --tier sota --export library.parquet     # mutate → fold → validate → rank
+proteus view <job> --interactive --dashboard                   # and look at it, over SSH
+```
+
+Every stage of that loop already has a good tool — Boltz folds, mdtraj and FreeSASA measure,
+PyMOL draws. What is usually missing is the **seam**: the glue that carries a scaffold through
+mutagenesis, structure prediction, all-atom validation, ranking and a columnar dataset without a
+pile of one-off Python that nobody keeps. Proteus is that seam, and it speaks
+**GA4GH TES 1.1**, so Nextflow and Sprocket can drive it as a compute backend instead of you
+writing a new pipeline.
+
+Two consequences worth stating up front:
+
+- **It refuses to rank a structure it could not really predict.** Offline placeholders are
+  excluded from the leaderboard unless you ask for them, and a tier that silently fell back
+  tells you which tier you asked for and why it could not honour it.
+- **Every scientific number is checked against someone else's implementation, in CI** — mdtraj,
+  FreeSASA, cctbx/MolProbity and PLIP over 53 structures. Where no reference exists, the row
+  below says so rather than letting you assume.
 
 | what | how it is checked |
 |---|---|
@@ -26,6 +42,15 @@ cctbx/MolProbity on 53 structures in CI**; the speed claims are measured, not as
 | hydrogen-bond network | mdtraj `baker_hubbard` (explicit-H reference, six NMR entries): 86–100 % recall, 58–76 % precision — heavy-atom criteria over-detect by 1.3–1.7× |
 | salt bridges, π–π stacking, cation–π | PLIP (intra-chain, 15 structures): salt-bridge precision **97.7 %** / recall 72 %; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %**. Cutoffs differ by design — ours is the stricter salt-bridge rule |
 | heavy-atom steric overlap | Proteus-defined; labelled as such |
+
+**What this is not.** Not a folding engine — it orchestrates ESMFold and Boltz rather than
+predicting structure itself. Not a replacement for Mol\*, PyMOL or ChimeraX for interactive
+analysis. The composite fitness score is a triage filter, not a predictor of experimental
+stability or activity; `--scorer esm2` is the sequence-level answer. And the terminal viewer is
+no longer unusual — [ProteinView](https://github.com/001TMF/ProteinView),
+[StrucTTY](https://github.com/steineggerlab/StrucTTY) and
+[pixelfold](https://github.com/fuyu-myk/pixelfold) all render structures in a terminal. What is
+still unoccupied is the loop and the TES server.
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
 SASA 2.3–4.7× faster than mdtraj's C++ kernel at equal point count and ~33× faster than
