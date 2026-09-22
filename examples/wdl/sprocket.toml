@@ -1,6 +1,6 @@
 # Sprocket (https://sprocket.bio) configuration: run WDL tasks on a Proteus GA4GH TES server.
 #
-#   proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*'          # terminal 1
+#   proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --allow-dir /tmp/tes-store   # terminal 1
 #   mkdir -p /tmp/tes-store/in/file /tmp/tes-store/out                   # Sprocket's file store needs these
 #   sprocket run -c examples/wdl/sprocket.toml -s examples/wdl/analyze.wdl @examples/wdl/inputs.json
 #

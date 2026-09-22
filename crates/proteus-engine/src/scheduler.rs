@@ -73,21 +73,55 @@ pub struct TesExecutionConfig {
     pub executor_timeout: Duration,
     /// Give containers outbound network access.
     pub network: bool,
+    /// Host directories that `file://` input and output URLs may reference. Empty = none.
+    pub allow_dirs: Vec<PathBuf>,
 }
 
 impl Default for TesExecutionConfig {
-    /// Host executor, no allow-list, 1 h timeout — the loopback-development default.
+    /// Host executor, no image allow-list, no `file://` directories, 1 h timeout — the
+    /// loopback-development default.
     fn default() -> Self {
         Self {
             executor: Arc::new(HostExecutor),
             allow_images: Vec::new(),
             executor_timeout: Duration::from_secs(3600),
             network: false,
+            allow_dirs: Vec::new(),
         }
     }
 }
 
 impl TesExecutionConfig {
+    /// Error message when a `file://` URL (or bare absolute host path) used as a task input or
+    /// output lies outside `allow_dirs`, else `None`. URLs with other schemes are not host
+    /// paths and always return `None`.
+    pub fn host_path_rejection(&self, url: &str) -> Option<String> {
+        let host_path = host_path_of(url)?;
+        let allowed = resolve_host_path(host_path).is_some_and(|real| {
+            self.allow_dirs
+                .iter()
+                .filter_map(|d| d.canonicalize().ok())
+                .any(|d| real.starts_with(&d))
+        });
+        if allowed {
+            None
+        } else {
+            let dirs: Vec<String> = self
+                .allow_dirs
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect();
+            Some(format!(
+                "'{url}' is outside the directories this server allows for file:// URLs ({})",
+                if dirs.is_empty() {
+                    "none configured; see --allow-dir".to_string()
+                } else {
+                    dirs.join(", ")
+                }
+            ))
+        }
+    }
+
     /// Error message when `image` is not covered by the allow-list, else `None`.
     pub fn image_rejection(&self, image: &str) -> Option<String> {
         if self.allow_images.is_empty() || self.allow_images.iter().any(|p| p.matches(image)) {
@@ -100,6 +134,34 @@ impl TesExecutionConfig {
             ))
         }
     }
+}
+
+/// The host path a task URL refers to: `file://<path>` or a bare absolute path. `None` for
+/// every other scheme.
+fn host_path_of(url: &str) -> Option<&std::path::Path> {
+    let p = url
+        .strip_prefix("file://")
+        .or_else(|| url.starts_with('/').then_some(url))?;
+    let p = std::path::Path::new(p);
+    p.is_absolute().then_some(p)
+}
+
+/// Resolve a host path through the filesystem: canonicalise the deepest existing ancestor
+/// (following symlinks) and re-append the not-yet-existing tail. `None` when the tail
+/// contains `..` or nothing on the path exists.
+fn resolve_host_path(path: &std::path::Path) -> Option<PathBuf> {
+    let mut existing = path;
+    let mut tail = Vec::new();
+    while !existing.exists() {
+        // `file_name()` is `None` for `..` and for the root, both of which end the search.
+        tail.push(existing.file_name()?.to_os_string());
+        existing = existing.parent()?;
+    }
+    let mut real = existing.canonicalize().ok()?;
+    for name in tail.into_iter().rev() {
+        real.push(name);
+    }
+    Some(real)
 }
 
 #[derive(Clone)]
@@ -339,6 +401,16 @@ impl PipelineScheduler {
                 return Err(EngineError::Tes(msg));
             }
         }
+        for url in task
+            .inputs
+            .iter()
+            .filter_map(|i| i.url.as_deref())
+            .chain(task.outputs.iter().filter_map(|o| o.url.as_deref()))
+        {
+            if let Some(msg) = self.tes.host_path_rejection(url) {
+                return Err(EngineError::Tes(msg));
+            }
+        }
         // Proteus defines no backend parameters; under `backend_parameters_strict` any key is unknown.
         if task.resources.backend_parameters_strict == Some(true) {
             if let Some(params) = &task.resources.backend_parameters {
@@ -363,6 +435,8 @@ impl PipelineScheduler {
             .chain(task.outputs.iter().map(|o| o.path.as_str()))
             .chain(task.volumes.iter().map(|v| v.as_str()))
             .chain(task.executors.iter().filter_map(|e| e.workdir.as_deref()))
+            .chain(task.executors.iter().filter_map(|e| e.stdout.as_deref()))
+            .chain(task.executors.iter().filter_map(|e| e.stderr.as_deref()))
         {
             roots.insert(mount_root(p)?);
         }
@@ -401,6 +475,56 @@ impl PipelineScheduler {
         });
 
         Ok(task.id)
+    }
+
+    /// Copy or fetch every declared input into the task work dir. `file://` sources (and bare
+    /// host paths) are checked against `allow_dirs` again here, so a task record that never went
+    /// through [`validate_tes_task`](Self::validate_tes_task) cannot read outside them either.
+    async fn stage_inputs(&self, task: &TesTask, work_dir: &std::path::Path) -> Result<(), String> {
+        for input in &task.inputs {
+            let target_path = work_dir.join(input.path.trim_start_matches('/'));
+            if let Some(parent) = target_path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            let Some(url) = input.url.as_deref() else {
+                if let Some(content) = &input.content {
+                    tokio::fs::write(&target_path, content)
+                        .await
+                        .map_err(|e| format!("{}: {e}", input.path))?;
+                }
+                continue;
+            };
+            if let Some(content) = &input.content {
+                tokio::fs::write(&target_path, content)
+                    .await
+                    .map_err(|e| format!("{}: {e}", input.path))?;
+            } else if let Some(src) = host_path_of(url) {
+                if let Some(msg) = self.tes.host_path_rejection(url) {
+                    return Err(msg);
+                }
+                if !src.exists() {
+                    return Err(format!("input {url} does not exist on the server host"));
+                }
+                copy_recursive(src, &target_path)
+                    .await
+                    .map_err(|e| format!("copy {url}: {e}"))?;
+            } else if url.starts_with("http://") || url.starts_with("https://") {
+                let resp = reqwest::get(url)
+                    .await
+                    .map_err(|e| format!("fetch {url}: {e}"))?;
+                let bytes = resp.bytes().await.map_err(|e| format!("read {url}: {e}"))?;
+                tokio::fs::write(&target_path, bytes)
+                    .await
+                    .map_err(|e| format!("{}: {e}", input.path))?;
+            } else {
+                return Err(format!(
+                    "input URL scheme not supported: {url} (file:// and http(s):// only)"
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Cancels a running or queued TES task.
@@ -472,38 +596,27 @@ impl PipelineScheduler {
         let work_dir = self.artifacts_dir.join("tes").join(task_id);
         tokio::fs::create_dir_all(&work_dir).await?;
 
-        // 2. Stage inputs
-        for input in &task.inputs {
-            let rel_path = input.path.trim_start_matches('/');
-            let target_path = work_dir.join(rel_path);
-            if let Some(parent) = target_path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-
-            if let Some(ref content) = input.content {
-                tokio::fs::write(&target_path, content).await?;
-            } else if let Some(ref url) = input.url {
-                if let Some(src) = url.strip_prefix("file://") {
-                    let src = std::path::Path::new(src);
-                    if src.exists() {
-                        copy_recursive(src, &target_path).await?;
-                    } else {
-                        return Err(EngineError::Tes(format!(
-                            "input {url} does not exist on the server host"
-                        )));
-                    }
-                } else if url.starts_with("http://") || url.starts_with("https://") {
-                    let resp = reqwest::get(url).await.map_err(|e| {
-                        EngineError::Tes(format!("Failed to fetch input URL {url}: {e}"))
-                    })?;
-                    let bytes = resp.bytes().await.map_err(|e| {
-                        EngineError::Tes(format!("Failed to read input response from {url}: {e}"))
-                    })?;
-                    tokio::fs::write(&target_path, bytes).await?;
-                } else if std::path::Path::new(url).exists() {
-                    copy_recursive(std::path::Path::new(url), &target_path).await?;
-                }
-            }
+        // 2. Stage inputs. A staging failure is the server's problem (SYSTEM_ERROR), and the
+        //    task must still reach a terminal state.
+        if let Err(msg) = self.stage_inputs(&task, &work_dir).await {
+            task.state = TesState::SystemError;
+            task.logs.push(TesTaskLog {
+                start_time: Some(Utc::now().to_rfc3339()),
+                end_time: Some(Utc::now().to_rfc3339()),
+                system_logs: vec![format!("input staging failed: {msg}")],
+                ..Default::default()
+            });
+            let final_json = serde_json::to_string(&task)
+                .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
+            self.repo
+                .update_tes_task_state(task_id, &task.state.to_string(), &final_json)
+                .await?;
+            let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
+                task_id: task_id.to_string(),
+                error: format!("input staging failed: {msg}"),
+            });
+            warn!("TES task {} input staging failed: {}", task_id, msg);
+            return Ok(());
         }
 
         // Pre-create parent directories for declared outputs
@@ -632,9 +745,24 @@ impl PipelineScheduler {
 
         // 4. Output harvesting: upload to the declared URL (file:// supported), record the log,
         //    and analyse structure files.
+        let mut delivery_failed = false;
+        let work_dir_real = tokio::fs::canonicalize(&work_dir).await?;
         for output in &task.outputs {
             let out_target = work_dir.join(output.path.trim_start_matches('/'));
             if out_target.exists() {
+                // An executor can plant a symlink inside the work dir; follow it and refuse
+                // anything that resolves outside (it would be a host file, not a task output).
+                match tokio::fs::canonicalize(&out_target).await {
+                    Ok(real) if real.starts_with(&work_dir_real) => {}
+                    _ => {
+                        task_log.system_logs.push(format!(
+                            "output {} resolves outside the task work dir; not delivered",
+                            output.path
+                        ));
+                        delivery_failed = true;
+                        continue;
+                    }
+                }
                 let is_dir = out_target.is_dir();
                 let size = if is_dir {
                     dir_size(&out_target).await
@@ -646,13 +774,17 @@ impl PipelineScheduler {
                 };
                 let mut recorded_url = format!("file://{}", out_target.to_string_lossy());
                 if let Some(url) = output.url.as_deref().filter(|u| !u.is_empty()) {
-                    match upload_output(&out_target, url).await {
+                    let upload = match self.tes.host_path_rejection(url) {
+                        Some(msg) => Err(EngineError::Tes(msg)),
+                        None => upload_output(&out_target, url).await,
+                    };
+                    match upload {
                         Ok(()) => recorded_url = url.to_string(),
                         Err(e) => {
                             task_log
                                 .system_logs
                                 .push(format!("output upload to {url} failed: {e}"));
-                            task.state = TesState::SystemError;
+                            delivery_failed = true;
                         }
                     }
                 }
@@ -683,7 +815,9 @@ impl PipelineScheduler {
             }
         }
 
-        if !executor_failed && task.state != TesState::Canceled {
+        if delivery_failed {
+            task.state = TesState::SystemError;
+        } else if !executor_failed && task.state != TesState::Canceled {
             task.state = TesState::Complete;
         }
 
@@ -800,6 +934,284 @@ mod tests {
     use proteus_core::models::{PipelineTier, Sequence};
     use proteus_storage::pool::create_in_memory_pool;
     use tempfile::tempdir;
+
+    /// Scheduler over an in-memory DB and the host executor, rooted at `artifacts`.
+    async fn host_scheduler(artifacts: &std::path::Path) -> (PipelineScheduler, ProteusRepository) {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let runner = Arc::new(SimulatedRunner::new());
+        let scheduler = PipelineScheduler::new(repo.clone(), runner, artifacts.to_path_buf());
+        (scheduler, repo)
+    }
+
+    fn sh_task(id: &str, script: &str) -> proteus_core::tes::TesTask {
+        proteus_core::tes::TesTask {
+            id: id.into(),
+            executors: vec![proteus_core::tes::TesExecutor {
+                image: "ignored".into(),
+                command: vec!["sh".into(), "-c".into(), script.into()],
+                workdir: Some("/data".into()),
+                stdout: None,
+                stderr: None,
+                stdin: None,
+                env: std::collections::HashMap::new(),
+                ignore_error: false,
+            }],
+            ..Default::default()
+        }
+    }
+
+    async fn finished(repo: &ProteusRepository, id: &str) -> proteus_core::tes::TesTask {
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let rec = repo.get_tes_task(id).await.unwrap().unwrap();
+            if !matches!(rec.state.as_str(), "QUEUED" | "INITIALIZING" | "RUNNING") {
+                return serde_json::from_str(&rec.task_json).unwrap();
+            }
+        }
+        panic!("task {id} did not finish");
+    }
+
+    #[tokio::test]
+    async fn executor_stdout_and_stderr_paths_are_validated_like_other_paths() {
+        let tmp = tempdir().unwrap();
+        let (scheduler, _) = host_scheduler(tmp.path()).await;
+        let mut task = sh_task("t-stdout", "echo hi");
+        task.executors[0].stdout = Some("/data/../../escaped.txt".into());
+        assert!(scheduler.validate_tes_task(&task).is_err());
+        let mut task = sh_task("t-stderr", "echo hi");
+        task.executors[0].stderr = Some("relative.txt".into());
+        assert!(scheduler.validate_tes_task(&task).is_err());
+    }
+
+    #[tokio::test]
+    async fn output_symlink_pointing_outside_the_work_dir_is_not_delivered() {
+        let tmp = tempdir().unwrap();
+        let secret = tmp.path().join("host-secret.txt");
+        std::fs::write(&secret, "TOP SECRET").unwrap();
+        let dest = tmp.path().join("delivered.txt");
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        });
+        let mut task = sh_task("t-symlink", &format!("ln -s {} out.txt", secret.display()));
+        task.outputs.push(proteus_core::tes::TesOutput {
+            name: None,
+            description: None,
+            url: Some(format!("file://{}", dest.display())),
+            path: "/data/out.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+        });
+        scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, "t-symlink").await;
+        assert!(
+            !dest.exists(),
+            "symlinked host file was copied to the output URL"
+        );
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+    }
+
+    fn file_input(url: &str) -> proteus_core::tes::TesInput {
+        proteus_core::tes::TesInput {
+            name: None,
+            description: None,
+            url: Some(url.into()),
+            path: "/data/in.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+            content: None,
+        }
+    }
+
+    fn file_output(url: &str) -> proteus_core::tes::TesOutput {
+        proteus_core::tes::TesOutput {
+            name: None,
+            description: None,
+            url: Some(url.into()),
+            path: "/data/out.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+        }
+    }
+
+    #[tokio::test]
+    async fn file_urls_outside_the_allowed_dirs_are_rejected_at_submit() {
+        let tmp = tempdir().unwrap();
+        let allowed = tmp.path().join("allowed");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret.txt"), "TOP SECRET").unwrap();
+        let (scheduler, _) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![allowed.clone()],
+            ..Default::default()
+        });
+
+        let mut task = sh_task("t-in", "cat in.txt");
+        task.inputs.push(file_input(&format!(
+            "file://{}/secret.txt",
+            elsewhere.display()
+        )));
+        let err = scheduler.validate_tes_task(&task).unwrap_err().to_string();
+        assert!(err.contains("allowed"), "{err}");
+
+        let mut task = sh_task("t-in-bare", "cat in.txt");
+        task.inputs
+            .push(file_input(&format!("{}/secret.txt", elsewhere.display())));
+        assert!(scheduler.validate_tes_task(&task).is_err());
+
+        let mut task = sh_task("t-out", "echo hi > out.txt");
+        task.outputs.push(file_output(&format!(
+            "file://{}/leak.txt",
+            elsewhere.display()
+        )));
+        let err = scheduler.validate_tes_task(&task).unwrap_err().to_string();
+        assert!(err.contains("allowed"), "{err}");
+
+        // Inside the allow-list: accepted, staged, and delivered.
+        std::fs::write(allowed.join("in.txt"), "hello").unwrap();
+        let mut task = sh_task("t-ok", "cat in.txt > out.txt");
+        task.inputs
+            .push(file_input(&format!("file://{}/in.txt", allowed.display())));
+        task.outputs.push(file_output(&format!(
+            "file://{}/out.txt",
+            allowed.display()
+        )));
+        scheduler.validate_tes_task(&task).unwrap();
+    }
+
+    #[tokio::test]
+    async fn file_urls_are_denied_when_no_allowed_dirs_are_configured() {
+        let tmp = tempdir().unwrap();
+        std::fs::write(tmp.path().join("in.txt"), "hello").unwrap();
+        let (scheduler, _) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mut task = sh_task("t-default", "cat in.txt");
+        task.inputs.push(file_input(&format!(
+            "file://{}/in.txt",
+            tmp.path().display()
+        )));
+        assert!(scheduler.validate_tes_task(&task).is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_file_input_is_a_system_error_not_a_stuck_task() {
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        });
+        let mut task = sh_task("t-missing", "cat in.txt");
+        task.inputs.push(file_input(&format!(
+            "file://{}/missing.txt",
+            tmp.path().display()
+        )));
+        scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, "t-missing").await;
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+        let log = &done.logs[0];
+        assert!(log.logs.is_empty(), "executor must not run: {:?}", log.logs);
+        assert!(log.system_logs.iter().any(|l| l.contains("missing.txt")));
+    }
+
+    #[tokio::test]
+    async fn staging_rechecks_allowed_dirs_for_tasks_that_bypassed_validation() {
+        let tmp = tempdir().unwrap();
+        let allowed = tmp.path().join("allowed");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("secret.txt"), "TOP SECRET").unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![allowed],
+            ..Default::default()
+        });
+        let mut task = sh_task("t-bypass", "cat in.txt");
+        task.inputs.push(file_input(&format!(
+            "file://{}/secret.txt",
+            elsewhere.display()
+        )));
+        task.state = TesState::Queued;
+        // Straight into the store, as a row written by an older build would be.
+        repo.insert_tes_task(
+            &task.id,
+            "QUEUED",
+            None,
+            None,
+            &serde_json::to_string(&task).unwrap(),
+        )
+        .await
+        .unwrap();
+        scheduler.process_tes_task("t-bypass").await.unwrap();
+        let done = finished(&repo, "t-bypass").await;
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+        assert!(done.logs[0].logs.is_empty(), "executor must not run");
+    }
+
+    #[tokio::test]
+    async fn delivery_rechecks_allowed_dirs_for_tasks_that_bypassed_validation() {
+        let tmp = tempdir().unwrap();
+        let allowed = tmp.path().join("allowed");
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![allowed],
+            ..Default::default()
+        });
+        let leak = elsewhere.join("leak.txt");
+        let mut task = sh_task("t-bypass-out", "echo hi > out.txt");
+        task.outputs
+            .push(file_output(&format!("file://{}", leak.display())));
+        task.state = TesState::Queued;
+        repo.insert_tes_task(
+            &task.id,
+            "QUEUED",
+            None,
+            None,
+            &serde_json::to_string(&task).unwrap(),
+        )
+        .await
+        .unwrap();
+        scheduler.process_tes_task("t-bypass-out").await.unwrap();
+        let done = finished(&repo, "t-bypass-out").await;
+        assert!(
+            !leak.exists(),
+            "output was written outside the allowed dirs"
+        );
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+    }
+
+    #[tokio::test]
+    async fn output_upload_failure_is_a_system_error() {
+        let tmp = tempdir().unwrap();
+        // A regular file where the destination's parent directory would have to be.
+        let blocker = tmp.path().join("blocker");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let dest = blocker.join("out.txt");
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        });
+        let mut task = sh_task("t-upload", "echo hi > out.txt");
+        task.outputs.push(proteus_core::tes::TesOutput {
+            name: None,
+            description: None,
+            url: Some(format!("file://{}", dest.display())),
+            path: "/data/out.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+        });
+        scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, "t-upload").await;
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+        assert!(done.logs[0]
+            .system_logs
+            .iter()
+            .any(|l| l.contains("output upload") && l.contains("failed")));
+    }
 
     #[tokio::test]
     async fn test_pipeline_scheduler_end_to_end() {

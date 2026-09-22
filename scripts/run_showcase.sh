@@ -140,7 +140,7 @@ echo -e "${MAGENTA}▶ PHASE 4: GA4GH Task Execution Service (TES v1.1) Daemon &
 echo -e "${MAGENTA}════════════════════════════════════════════════════════════════════════════════════${NC}"
 echo -e "Launching headless daemon on port ${BOLD}${DAEMON_PORT}${NC}..."
 
-"$BIN" serve --port "$DAEMON_PORT" > "$SHOWCASE_DIR/proteusd.log" 2>&1 &
+"$BIN" serve --port "$DAEMON_PORT" --allow-dir "$(dirname "$DATA_PDB")" > "$SHOWCASE_DIR/proteusd.log" 2>&1 &
 DAEMON_PID=$!
 sleep 1
 

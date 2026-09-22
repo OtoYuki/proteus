@@ -334,3 +334,44 @@ async fn relative_or_system_paths_are_rejected() {
         .unwrap();
     assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn file_url_allowlist_rejects_with_400_and_is_advertised() {
+    let dir = tempdir().unwrap();
+    let tes = proteus_engine::TesExecutionConfig {
+        allow_dirs: vec![dir.path().to_path_buf()],
+        ..Default::default()
+    };
+    let base = spawn(Default::default(), Some(tes)).await;
+    let client = reqwest::Client::new();
+    let info: serde_json::Value = client
+        .get(format!("{base}/v1/service-info"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        info["tags"]["proteus.file_allowlist"],
+        dir.path().display().to_string()
+    );
+
+    let mut t = minimal_task("docker.io/library/alpine:3.20");
+    t.outputs.push(TesOutput {
+        name: None,
+        description: None,
+        url: Some("file:///etc/leak.txt".into()),
+        path: "/work/out.txt".into(),
+        type_: TesFileType::File,
+    });
+    let r = client
+        .post(format!("{base}/v1/tasks"))
+        .json(&t)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("allows"));
+}

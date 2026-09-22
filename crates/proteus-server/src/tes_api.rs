@@ -273,6 +273,14 @@ pub async fn get_service_info(State(state): State<AppState>) -> impl IntoRespons
         },
     );
     info.tags.insert(
+        "proteus.file_allowlist".into(),
+        tes.allow_dirs
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    info.tags.insert(
         "proteus.executor_timeout_seconds".into(),
         tes.executor_timeout.as_secs().to_string(),
     );

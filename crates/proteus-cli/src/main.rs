@@ -239,6 +239,11 @@ enum Commands {
         #[arg(long = "allow-image", value_name = "GLOB")]
         allow_images: Vec<String>,
 
+        /// Host directory that task `file://` input and output URLs may reference
+        /// (repeatable). Default: the daemon's own artifacts directory.
+        #[arg(long = "allow-dir", value_name = "DIR")]
+        allow_dirs: Vec<PathBuf>,
+
         /// Require `Authorization: Bearer <token>` on the TES and native APIs
         #[arg(long, env = "PROTEUS_AUTH_TOKEN", hide_env_values = true)]
         auth_token: Option<String>,
@@ -1283,6 +1288,7 @@ async fn main() -> Result<()> {
             runner,
             executor,
             allow_images,
+            allow_dirs,
             auth_token,
             no_pull,
             executor_network,
@@ -1324,6 +1330,11 @@ async fn main() -> Result<()> {
                 allow_images: patterns,
                 executor_timeout: std::time::Duration::from_secs(executor_timeout),
                 network: executor_network,
+                allow_dirs: if allow_dirs.is_empty() {
+                    vec![artifacts_dir.clone()]
+                } else {
+                    allow_dirs
+                },
             };
             let scheduler =
                 PipelineScheduler::new(repo, compute_runner, artifacts_dir).with_tes_config(tes);

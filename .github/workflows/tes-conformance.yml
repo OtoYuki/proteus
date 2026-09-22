@@ -73,7 +73,7 @@ jobs:
         run: |
           mkdir -p /tmp/proteus-data /tmp/tes-store/in/file /tmp/tes-store/out
           PROTEUS_DATA_DIR=/tmp/proteus-data RUST_LOG=info \
-            nohup target/release/proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --no-pull \
+            nohup target/release/proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --no-pull --allow-dir /tmp/tes-store \
             > /tmp/proteusd.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/v1/service-info >/dev/null && break; sleep 1; done
       - name: Install Sprocket

@@ -7,7 +7,7 @@ task to `proteusd`, which runs it in a container through the Podman/Docker socke
 
 ```bash
 # 1. TES server (container executor; allow only the images you expect)
-proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*'
+proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --allow-dir /tmp/tes-store
 
 # 2. Sprocket's file-backed storage roots (it does not create them itself)
 mkdir -p /tmp/tes-store/in/file /tmp/tes-store/out

@@ -40,6 +40,9 @@ impl AtomDescriptor {
     }
 }
 
+/// Upper bound on dense grid cells (16 MB of `i32` heads); wider cells are used beyond it.
+const MAX_CELLS: usize = 2_000_000;
+
 /// 3D Spatial Voxel Grid for O(N) neighbor lookup in Shrake-Rupley SASA.
 /// Eliminates the classic O(N^2) pairwise distance bottleneck using a cell-linked list.
 struct SpatialCellList {
@@ -82,12 +85,27 @@ impl SpatialCellList {
         min -= Vector3::new(0.01, 0.01, 0.01);
         max += Vector3::new(0.01, 0.01, 0.01);
 
+        // Neighbour search covers the 27 cells around an atom, so any cell size >= the
+        // requested one is correct. Widen cells until the dense grid fits `MAX_CELLS`
+        // (sparse structures, giant assemblies, or a stray far-away atom).
+        let extent = max - min;
+        let mut cell_size = cell_size;
+        let grid = |cell: f64| -> (usize, usize, usize) {
+            let inv = 1.0 / cell;
+            (
+                ((extent.x * inv).floor() as usize + 1).max(1),
+                ((extent.y * inv).floor() as usize + 1).max(1),
+                ((extent.z * inv).floor() as usize + 1).max(1),
+            )
+        };
+        let (mut nx, mut ny, mut nz) = grid(cell_size);
+        while nx.saturating_mul(ny).saturating_mul(nz) > MAX_CELLS {
+            cell_size *= 2.0;
+            (nx, ny, nz) = grid(cell_size);
+        }
         let inv_cell_size = 1.0 / cell_size;
-        let nx = (((max.x - min.x) * inv_cell_size).floor() as usize + 1).max(1);
-        let ny = (((max.y - min.y) * inv_cell_size).floor() as usize + 1).max(1);
-        let nz = (((max.z - min.z) * inv_cell_size).floor() as usize + 1).max(1);
 
-        let total_cells = nx.saturating_mul(ny).saturating_mul(nz).min(2_000_000);
+        let total_cells = nx * ny * nz;
         let mut head = vec![-1i32; total_cells];
         let mut next = vec![-1i32; n];
 
@@ -97,10 +115,8 @@ impl SpatialCellList {
             let cz = (((coords[i].z - min.z) * inv_cell_size).floor() as usize).min(nz - 1);
 
             let cell_idx = cx + cy * nx + cz * nx * ny;
-            if cell_idx < total_cells {
-                next[i] = head[cell_idx];
-                head[cell_idx] = i as i32;
-            }
+            next[i] = head[cell_idx];
+            head[cell_idx] = i as i32;
         }
 
         Self {
@@ -300,6 +316,22 @@ mod tests {
         assert_eq!(sasa.polar_sasa, 0.0);
         assert!(sasa.apolar_sasa > 100.0);
         assert_eq!(sasa.hydrophobic_burial_ratio, 0.0); // Completely exposed
+    }
+
+    #[test]
+    fn far_apart_atoms_do_not_overflow_the_cell_grid() {
+        // Bounding box of 900 Å per axis → (900/6.4)³ ≈ 2.8 M cells, above the dense-grid cap.
+        let atoms = vec![
+            AtomDescriptor::new(Vector3::new(0.0, 0.0, 0.0), "C"),
+            AtomDescriptor::new(Vector3::new(900.0, 900.0, 900.0), "C"),
+        ];
+        let sasa = compute_sasa_with_points(&atoms, 96);
+        let isolated = 4.0 * std::f64::consts::PI * 3.1 * 3.1;
+        assert!(
+            (sasa.total_sasa - 2.0 * isolated).abs() < 1e-6,
+            "{}",
+            sasa.total_sasa
+        );
     }
 
     #[test]

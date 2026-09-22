@@ -75,6 +75,12 @@ pub fn mount_root(path: &str) -> Result<String, EngineError> {
             "TES paths must be absolute container paths, got '{path}'"
         )));
     }
+    // Container paths are joined onto the host work dir; a `..` would climb out of it.
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(EngineError::Tes(format!(
+            "TES paths may not contain '..', got '{path}'"
+        )));
+    }
     let root = p
         .components()
         .find_map(|c| match c {
@@ -474,6 +480,14 @@ mod tests {
         assert!(mount_root("relative/path").is_err());
         assert!(mount_root("/etc/passwd").is_err());
         assert!(mount_root("/usr/bin/x").is_err());
+    }
+
+    #[test]
+    fn mount_root_rejects_parent_dir_components() {
+        // `/data/../..` would resolve above the task work dir once joined on the host.
+        assert!(mount_root("/data/../etc/passwd").is_err());
+        assert!(mount_root("/data/sub/../../../home/x").is_err());
+        assert!(mount_root("/data/./in.pdb").is_ok());
     }
 
     #[tokio::test]

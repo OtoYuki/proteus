@@ -28,9 +28,23 @@ All notable changes to this project are documented here. The format follows
 - `examples/wdl/`: Sprocket (WDL) → TES → proteusd → container, verified in CI.
 - `--executor host|container`, `--executor-timeout`, `--executor-network`.
 
+- `--allow-dir DIR` (repeatable): `file://` input/output URLs must resolve inside an allowed
+  host directory (default: the artifacts directory); advertised as `proteus.file_allowlist`.
+
 ### Changed
 - `--executor host` (the 0.3.x behaviour) is refused unless bound to loopback.
-- Tasks with relative paths, empty images or mounts over system directories are rejected (400).
+- Tasks with relative paths, `..` components, empty images or mounts over system directories
+  are rejected (400); executor `stdout`/`stderr` paths are validated like every other path.
+
+### Fixed
+- **Security:** `inputs[].path` (and every other task path) could contain `..` and escape the
+  task work dir on the host; `file://` URLs could read and write any host path the daemon can.
+- A task whose output failed to upload to its declared URL was reported `COMPLETE`; it is now
+  `SYSTEM_ERROR`, as is an output that resolves outside the work dir through a symlink.
+- A task whose input could not be staged (missing `file://` source, unsupported scheme) stayed
+  `INITIALIZING` forever; it now ends in `SYSTEM_ERROR` with the reason in `system_logs`.
+- `proteus analyze`/`screen` panicked (`index out of bounds` in the SASA cell list) on
+  structures whose bounding box exceeds ~800 Å per axis; the grid now widens its cells instead.
 
 ## [0.3.0] — 2026-09-21
 

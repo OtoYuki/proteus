@@ -268,10 +268,13 @@ proteus serve --port 8080 --host 0.0.0.0
 ```
 Interactive Swagger UI documentation is served at `http://localhost:8080/swagger-ui`.
 
-TES executors run inside their container image through the Podman/Docker socket, with `resources` enforced. Lock it down with `--auth-token` and `--allow-image`:
+TES executors run inside their container image through the Podman/Docker socket, with `resources` enforced. Lock it down with `--auth-token`, `--allow-image` and `--allow-dir`:
 ```bash
-proteus serve --host 0.0.0.0 --port 8080 --auth-token "$TOKEN" --allow-image 'ghcr.io/otoyuki/*' --allow-image 'docker.io/library/alpine:*'
+proteus serve --host 0.0.0.0 --port 8080 --auth-token "$TOKEN" \
+  --allow-image 'ghcr.io/otoyuki/*' --allow-image 'docker.io/library/alpine:*' \
+  --allow-dir /srv/tes-store
 ```
+`file://` input and output URLs may only point inside `--allow-dir` directories (default: the daemon's own artifacts directory); everything else is rejected with 400.
 The server passes the GA4GH TES 1.1 compliance suite (23/23 tests, run in CI with the container executor) — see [SECURITY.md](SECURITY.md) for what is and is not covered.
 
 ### 6. Run it from a workflow engine
