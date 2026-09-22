@@ -163,13 +163,24 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
     // The kitty protocol writes raw pixel escapes; a terminal that does not speak it prints
     // the payload as garbage. Say so once rather than letting the user think it is corrupt.
-    if render_backend == proteus_render::terminal::TerminalBackend::Kitty
-        && !proteus_render::terminal::KittyRenderer::is_supported()
     {
-        eprintln!(
-            "note: $TERM does not look like a kitty-graphics terminal (kitty, ghostty, wezterm); \
-             if the output is garbage, use --backend halfblock or braille"
-        );
+        use proteus_render::terminal::{KittyRenderer, SixelRenderer, TerminalBackend};
+        let unsupported = match render_backend {
+            TerminalBackend::Kitty if !KittyRenderer::is_supported() => {
+                Some(("kitty graphics", "kitty, ghostty, wezterm"))
+            }
+            TerminalBackend::Sixel if !SixelRenderer::is_supported() => Some((
+                "Sixel",
+                "xterm -ti vt340, mlterm, foot, contour, WezTerm, Windows Terminal",
+            )),
+            _ => None,
+        };
+        if let Some((protocol, terminals)) = unsupported {
+            eprintln!(
+                "note: $TERM does not look like a {protocol} terminal ({terminals}); if the \
+                 output is garbage, use --backend halfblock or braille"
+            );
+        }
     }
     // Parsed once here; the snapshot/interactive paths reuse it.
     let structure_data = if compare.is_none() {

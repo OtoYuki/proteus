@@ -37,7 +37,7 @@ pub enum Commands {
     Inspect(cmd::inspect::Args),
     /// Direct offline biophysical analysis of a PDB file using native Rust engine
     Analyze(cmd::analyze::Args),
-    /// 3D structural ribbon visualization in the terminal (HalfBlock / Braille / Kitty)
+    /// 3D structural ribbon visualization in the terminal (half-block / Braille / Sixel / kitty)
     View(cmd::view::Args),
     /// In-silico Deep Mutational Scanning (DMS) variant library generator
     Mutate(cmd::mutate::Args),
@@ -99,6 +99,8 @@ pub enum CliBackend {
     HalfBlock,
     #[value(name = "braille")]
     Braille,
+    #[value(name = "sixel")]
+    Sixel,
     #[value(name = "kitty")]
     Kitty,
 }
@@ -108,6 +110,7 @@ impl From<CliBackend> for proteus_render::terminal::TerminalBackend {
         match b {
             CliBackend::HalfBlock => proteus_render::terminal::TerminalBackend::HalfBlock,
             CliBackend::Braille => proteus_render::terminal::TerminalBackend::Braille,
+            CliBackend::Sixel => proteus_render::terminal::TerminalBackend::Sixel,
             CliBackend::Kitty => proteus_render::terminal::TerminalBackend::Kitty,
         }
     }

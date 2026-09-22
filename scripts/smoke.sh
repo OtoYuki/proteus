@@ -69,10 +69,16 @@ expect "inspect names the engine" 'simulated'
 expect "inspect shows the tier row" 'Tier'
 
 # --- viewers: every backend draws something; HTML export is a Mol* page
-for backend in halfblock braille kitty; do
+for backend in halfblock braille sixel kitty; do
     check "view --backend $backend" "$BIN" view "$PDB" --backend "$backend" --width 80 --height 24
     check "  frame is not blank ($backend)" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
 done
+# Sixel must be decodable by libsixel, not merely non-empty, where libsixel is installed.
+if command -v sixel2png >/dev/null; then
+    "$BIN" view "$PDB" --backend sixel --width 60 --height 20 > "$WORK/out.six" 2>/dev/null
+    check "libsixel decodes our sixel output" sixel2png -i "$WORK/out.six" -o "$WORK/out.png"
+    check "  decoded image is non-empty" test -s "$WORK/out.png"
+fi
 check "view --compare" "$BIN" view "$PDB" --compare "$CIF" --backend halfblock --width 80 --height 24
 check "view --html" "$BIN" view "$PDB" --html "$WORK/view.html"
 check "html embeds Mol*" grep -q 'molstar' "$WORK/view.html"
