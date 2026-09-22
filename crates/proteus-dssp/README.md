@@ -14,6 +14,20 @@ Validated residue-by-residue against `mdtraj.compute_dssp` on a 53-structure cor
 NMR, cryo-EM, AlphaFold-DB) in the [Proteus](https://github.com/OtoYuki/proteus) repository's
 `validate/` harness, which runs in CI: ≥ 98 % per-residue agreement on eight states.
 
+## How this compares
+
+[`molex`](https://github.com/foldit-org/molex) also implements Kabsch–Sander in Rust, as part of
+a broader structure library with Python and C bindings — if you want parsing, density maps or
+bindings, look there first. This crate differs in three ways, and they are the only reasons to
+prefer it:
+
+- **Eight states** (`H B E G I T S -`) plus a three-state reduction, where molex reports three.
+  If you need to tell a 3₁₀ helix from an α-helix, or a bend from a turn, you need eight.
+- **Zero dependencies and nothing else in the crate.** It takes backbone N/CA/C/O per residue
+  and returns an assignment; it does not parse files or model chemistry.
+- **Validated against an external implementation on real structures**, not against hand-written
+  expectations — the agreement number above is reproducible with one command in the parent repo.
+
 ```toml
 [dependencies]
 proteus-dssp = { git = "https://github.com/OtoYuki/proteus" }

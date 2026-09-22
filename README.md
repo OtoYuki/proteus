@@ -24,6 +24,22 @@ pile of one-off Python that nobody keeps. Proteus is that seam, and it speaks
 **GA4GH TES 1.1**, so Nextflow and Sprocket can drive it as a compute backend instead of you
 writing a new pipeline.
 
+### Where this sits next to other tools
+
+Proteus is not the only Rust implementation of any one of its parts, and the README does not
+claim otherwise:
+
+| if you want | consider |
+|---|---|
+| a TES server for a **Kubernetes cluster** | [planetary](https://github.com/stjude-rust-labs/planetary) (St. Jude Rust Labs) — Proteus runs as a **single binary against a local container socket**, which is the other deployment model, not a better one |
+| structure parsing, BinaryCIF, density maps, **Python/C bindings** | [molex](https://github.com/foldit-org/molex) |
+| ESM **embeddings** across CUDA/MLX backends | [esm-rs](https://github.com/tcztzy/esm-rs) — Proteus's ESM work is variant-effect scoring, not representation |
+| a polished terminal viewer with Sixel and iTerm2 | [ProteinView](https://github.com/001TMF/ProteinView) |
+| interactive analysis in a browser | [Mol\*](https://molstar.org), which Proteus does not try to replace |
+
+What Proteus does that these do not is close the whole loop in one binary, and check every
+number it prints against an implementation someone else wrote.
+
 Two consequences worth stating up front:
 
 - **It refuses to rank a structure it could not really predict.** Offline placeholders are
@@ -49,8 +65,11 @@ analysis. The composite fitness score is a triage filter, not a predictor of exp
 stability or activity; `--scorer esm2` is the sequence-level answer. And the terminal viewer is
 no longer unusual — [ProteinView](https://github.com/001TMF/ProteinView),
 [StrucTTY](https://github.com/steineggerlab/StrucTTY) and
-[pixelfold](https://github.com/fuyu-myk/pixelfold) all render structures in a terminal. What is
-still unoccupied is the loop and the TES server.
+[pixelfold](https://github.com/fuyu-myk/pixelfold) all render structures in a terminal. Nor is
+the TES server unique — [planetary](https://github.com/stjude-rust-labs/planetary) serves TES
+from Rust on Kubernetes. What is genuinely unoccupied is narrower: **the whole loop in one
+binary that runs against a local container socket, with every number it prints checked against
+someone else's implementation.**
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
 SASA 2.3–4.7× faster than mdtraj's C++ kernel at equal point count and ~33× faster than
@@ -324,7 +343,7 @@ proteus serve --host 0.0.0.0 --port 8080 --auth-token "$TOKEN" \
   --allow-dir /srv/tes-store
 ```
 `file://` input and output URLs may only point inside `--allow-dir` directories (default: the daemon's own artifacts directory); everything else is rejected with 400.
-The server passes the GA4GH TES 1.1 compliance suite (23/23 tests, run in CI with the container executor) — see [SECURITY.md](SECURITY.md) for what is and is not covered.
+The server passes the GA4GH TES 1.1 compliance suite (ELIXIR `openapi-test-runner`, 23/23 test cases / 187 assertions, run in CI with the container executor, not a mock) — see [SECURITY.md](SECURITY.md) for what is and is not covered.
 
 ### 6. Run it from a workflow engine
 Any TES client works. Two examples ship with the repo; the Sprocket one runs in CI, the Nextflow one is exercised by hand (Nextflow 26 + nf-ga4gh 1.5):

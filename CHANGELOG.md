@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Positioning corrected against a proper landscape search.** Three "only in Rust" claims were
+  wrong, and are now stated accurately with the neighbours named and linked in the README:
+  - [`molex`](https://github.com/foldit-org/molex) implements Kabsch–Sander DSSP in Rust.
+    `proteus-dssp` is the 8-state one, standalone and dependency-free, and the one validated
+    against mdtraj on real structures — not the only one.
+  - [`esm-rs`](https://github.com/tcztzy/esm-rs) runs ESM on candle with CUDA/MLX backends.
+    `proteus-esm` is aimed at variant-effect scoring rather than embeddings — not the only one.
+  - [`planetary`](https://github.com/stjude-rust-labs/planetary) serves GA4GH TES from Rust on
+    Kubernetes. Proteus is the single-binary, local-container-socket deployment — a different
+    model, not a better one.
+  Also: mdtraj validates its own DSSP against stored `mkdssp` references, so our harness is
+  *unusually thorough*, not categorically different. The phrasing everywhere now reflects that.
+
 ### Fixed
 - **Secondary structure in the render is now pinned to the coordinates, not the file's
   annotations.** Predicted structures carry no `HELIX`/`SHEET` records — an ESMFold response has

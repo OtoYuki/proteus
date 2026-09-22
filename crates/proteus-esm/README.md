@@ -18,6 +18,26 @@ let muts = [parse_mutation("P19A")?, parse_mutation("C4S")?];
 let scores = score_masked_marginal(&model, wt, &muts)?;   // log p(mt) − log p(wt) at the masked position
 ```
 
+## How this compares
+
+Rust ESM inference is not new territory — [`esm-rs`](https://github.com/tcztzy/esm-rs) runs ESM
+and ESM++ on candle with CUDA/MLX backends and compares numerically against PyTorch, and
+[`plm-local`](https://github.com/zachcp/plm-local) runs protein language models locally. If you
+want **embeddings**, look at those first; `esm-rs` in particular covers more backends than this
+crate does.
+
+This crate is aimed one step further down the pipeline: **variant effect**, not representation.
+
+- **Mutation scoring**, wild-type and masked marginals (Meier et al. 2021), and full 20×L deep
+  mutational scans — not embedding extraction.
+- **`MarginalScorer` caches the wild-type forward pass**, so scoring a library is one pass
+  rather than one per variant (875 variants in 0.6 s on CPU).
+- **Parity pinned in CI** against `transformers.EsmForMaskedLM` on committed reference logits,
+  and accuracy reported on real data (ProteinGym v1.1 Spearman ρ, mean |ρ| 0.42 with the 35M
+  checkpoint) rather than only on synthetic checks.
+- **No `hf-hub` dependency** — a ~40-line fetcher, so the dependency tree stays small and the
+  MSRV stays put.
+
 Zero-shot scores from any protein language model are a triage signal, not a measurement. ESM-2's
 published weak spots are **viral proteins** and **long multi-domain sequences**; it is a
 reasonable signal for human and microbial ones. ESM-2 rather than ESM-3 because ESM-3's weights
