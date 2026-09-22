@@ -14,6 +14,6 @@ let scores = score_masked_marginal(&model, wt, &muts)?;   // log p(mt) − log p
 ```
 
 Numerical parity with `transformers.EsmForMaskedLM` (fp32) is pinned by `tests/parity.rs`
-against reference logits committed under `validate/reference/esm/*.json`: logits within 1e-2,
+against reference logits committed under `tests/data/*.json` (from `validate/esm_reference.py`): logits within 1e-2,
 amino-acid log-probabilities within 5e-3 (observed ≤ 2.5e-3) on three proteins for the 8M and 35M
 checkpoints. CPU only by default; enable `candle-core/cuda` or `candle-core/metal` downstream.

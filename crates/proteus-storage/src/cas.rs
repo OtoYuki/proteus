@@ -18,14 +18,14 @@ pub struct CasEntry {
     pub path: PathBuf,
 }
 
-/// Content-Addressable Storage (CAS) backed by BLAKE3 cryptographic hashing.
+/// Content-addressable store keyed by the BLAKE3 hash of the object bytes.
 ///
-/// Features:
-/// - Fast 256-bit SIMD tree hashing via BLAKE3 (>10 GB/s on modern multi-core).
-/// - Two-level directory prefix fan-out (`objects/ab/cd/<hash>`) preventing Linux inode saturation.
-/// - Atomic write staging via temporary files (`tmp/<uuid>.tmp`) to ensure zero corrupted partial reads.
-/// - In-place O(1) deduplication across screening campaigns.
-/// - Strict cryptographic integrity validation on read.
+/// - Objects live at `objects/ab/cd/<hash>` (two-level fan-out so one directory never holds
+///   every object).
+/// - Writes go to `tmp/<uuid>.tmp` and are renamed into place, so a reader never sees a
+///   partial object.
+/// - Storing bytes that already exist is a no-op (the path is derived from the hash).
+/// - Reads re-hash the bytes and fail with `IntegrityViolation` on mismatch.
 #[derive(Debug, Clone)]
 pub struct CasStore {
     root: PathBuf,

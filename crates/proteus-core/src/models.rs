@@ -10,9 +10,9 @@ use uuid::Uuid;
 pub enum PipelineTier {
     /// Fast single-sequence transformer screening (ESMFold / ESM-2)
     FastScreening,
-    /// SOTA all-atom diffusion biomolecular structure prediction (Boltz-1)
+    /// All-atom diffusion structure prediction (Boltz) in a user-supplied container image
     HighFidelity,
-    /// Molecular mechanics relaxation and thermodynamic equilibration (OpenMM / Amber)
+    /// Molecular-mechanics relaxation (OpenMM). Not implemented: refused by every runner
     FullValidation,
 }
 

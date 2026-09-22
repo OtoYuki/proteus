@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 description = "Pure-Rust software 3D rasterizer, cartoon ribbon extruder, and terminal viewport engine for Proteus."
 
 [dependencies]

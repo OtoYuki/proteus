@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reference ESM-2 outputs from Hugging Face transformers (CPU, fp32) for proteus-esm parity tests.
 
-Writes validate/reference/esm/<model>.json with, per sequence: token ids, the full unmasked logits
+Writes crates/proteus-esm/tests/data/<model>.json (the parity-test fixtures) with, per sequence: token ids, the full unmasked logits
 matrix, and the log-probability row at each of five masked positions.
 
 Needs a separate venv (torch is large):  uv venv .esm-venv --python 3.12 &&
@@ -44,7 +44,7 @@ for mid in models:
             entry["masked"][str(p)] = torch.log_softmax(lm[p + 1], -1).tolist()
         out["sequences"][name] = entry
         print(mid, name, "logits", tuple(logits.shape))
-    out_dir = ROOT / "validate" / "reference" / "esm"
+    out_dir = ROOT / "crates" / "proteus-esm" / "tests" / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / f"{mid.split('/')[-1]}.json"
     dest.write_text(json.dumps(out))

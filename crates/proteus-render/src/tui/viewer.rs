@@ -51,7 +51,8 @@ impl Default for ViewerConfig {
     }
 }
 
-/// Run interactive 60 FPS 3D terminal protein ribbon viewer.
+/// Run the interactive terminal ribbon viewer (frames are paced at 16 ms; the achieved rate is
+/// shown in the HUD and depends on the terminal and structure size).
 pub fn run_interactive_viewer(
     mesh: &TriangleMesh,
     mut camera: OrbitCamera,

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
 description = "Pure-Rust Kabsch-Sander DSSP secondary-structure assignment (DSSP 2.x semantics)."
 keywords = ["bioinformatics", "dssp", "protein", "secondary-structure"]

@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 description = "Embedded SQLite persistence and Apache Parquet data lake exporter for Proteus."
 
 [dependencies]

@@ -188,7 +188,7 @@ fn segmented_cartoon_mesh(
     mesh
 }
 
-/// Parse PDB string content into a high-fidelity structure bundle with ribbons and disulfides.
+/// Parse PDB/mmCIF text into the render bundle: ribbon mesh, disulfide mesh, camera, metrics.
 pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, RenderError> {
     let pdb = proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None)
         .map_err(|e| RenderError::PdbParse(e.to_string()))?;

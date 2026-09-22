@@ -12,7 +12,7 @@ High-throughput bio-compute orchestration engine and terminal biophysics workben
 ![proteus demo: analyze, interactive dashboard, pLDDT provenance, validation table](docs/media/demo.gif)
 
 Proteus runs the protein-engineering design loop end to end — sequence mutagenesis → structure
-prediction (ESMFold API, Boltz/ColabFold containers via Podman/Docker, GA4GH TES v1.1) → all-atom
+prediction (ESMFold API, your own ESMFold/Boltz images via Podman/Docker, GA4GH TES v1.1) → all-atom
 biophysical validation → ranking → Apache Parquet — and lets you look at the result in the terminal
 you are already SSH'd into. The biophysics is pure Rust and **checked against mdtraj, FreeSASA and
 cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not asserted.
@@ -48,17 +48,19 @@ podman run --rm -p 8080:8080 -v /run/user/$(id -u)/podman/podman.sock:/var/run/d
 
 ## Architecture
 
-The project is organized as a Cargo workspace across seven decoupled crates:
+The project is a Cargo workspace of eight crates; `proteus-dssp` and `proteus-esm` have no
+dependency on the rest and are usable on their own:
 
 ```
 crates/
 ├── proteus-core/       Domain models, FASTA parser, DMS mutagenesis, and native biophysics
 ├── proteus-dssp/       Standalone pure-Rust Kabsch–Sander DSSP secondary-structure assignment
-├── proteus-storage/    Embedded SQLite repository (SQLx WAL) and Apache Parquet data lake exporter
-├── proteus-engine/     Async DAG task scheduler and OCI/Podman container runner (bollard)
+├── proteus-esm/        Standalone ESM-2 masked-LM inference on candle (mutation scoring, DMS scans)
+├── proteus-storage/    Embedded SQLite repository (SQLx WAL), BLAKE3 CAS, Parquet/CSV/JSON export
+├── proteus-engine/     Async job scheduler, prediction runners, TES task execution (bollard)
 ├── proteus-render/     Software 3D rasterizer, Bishop ribbon extruder, and TUI dashboard
-├── proteus-server/     Headless Axum daemon (proteusd) with SSE event streams and OpenAPI docs
-└── proteus-cli/        Unified CLI binary (proteus) for screening, inspection, and daemon hosting
+├── proteus-server/     Headless Axum daemon (proteusd): GA4GH TES 1.1, native API, SSE, OpenAPI
+└── proteus-cli/        The `proteus` binary: mutate, screen, analyze, view, esm, submit, serve
 ```
 
 ---
@@ -87,9 +89,9 @@ Enables full structural inspection over SSH without X11 forwarding, WebGL browse
 - **Live TUI Dashboard:** Split-screen layout displaying real-time 3D rotation alongside an ASCII Ramachandran ($\phi, \psi$) conformational scatter plot, per-residue pLDDT spectrum, and biophysical metrics.
 
 ### 4. Native Biophysical Validation Engines
-Executes all-atom biophysical calculations in sub-milliseconds:
+All-atom biophysics in pure Rust (a full crambin profile takes ~8 ms, 6VXX with 22 812 atoms ~0.6 s; see `bench/`):
 - **Non-Covalent Interaction Networks (NCIN):** Evaluates all-atom hydrogen bonds (Baker-Hubbard heavy-atom antecedent criteria across backbone and sidechains), ionic salt bridges ($\le 4.0\text{ \AA}$ between basic cations and acidic anions), $\pi$-$\pi$ aromatic stacking (parallel displaced and T-shaped edge-to-face), and cation-$\pi$ interactions over $O(N)$ spatial bounding-box cell lists.
-- **Shrake-Rupley SASA:** Computes solvent-accessible surface area and hydrophobic core burial ratios using a 92-point Fibonacci sphere tessellation and an $O(N)$ spatial grid cell-list.
+- **Shrake-Rupley SASA:** Solvent-accessible surface area and hydrophobic core burial from a 960-point Fibonacci sphere per atom (mdtraj's default, Bondi radii) over an $O(N)$ spatial cell list.
 - **MolProbity Ramachandran Evaluation:** Backbone $\phi/\psi$ are scored against the six Top8000 percentile contour grids (general, Gly, cis-Pro, trans-Pro, pre-Pro, Ile/Val) converted from cctbx, with MolProbity's Favored ≥ 2 % / Allowed ≥ 0.05–0.2 % thresholds. Labels agree with cctbx `ramalyze` on 100 % of residues across the validation corpus.
 - **Kabsch–Sander DSSP (`proteus-dssp`):** Eight-state secondary structure from backbone H-bond energies (α/3₁₀/π helices, bridges, ladders, bends, turns), a standalone pure-Rust crate validated residue-by-residue against mdtraj.
 - **Heavy-Atom Steric Overlap (MolProbity-style, no hydrogens):** Counts severe heavy-atom overlaps ($> 0.40\text{ \AA}$) per 1,000 atoms using Bondi van der Waals radii, cell-list spatial hashing, and covalent exclusions (intra-residue bonding, peptide backbone linkages, proline pyrrolidine ring geometry, and disulfide bridges). This is **not** the MolProbity clashscore, which adds hydrogens with Reduce first; it under-counts on deposited structures and is intended as a relative screen for grossly overlapping predicted models.
@@ -136,7 +138,7 @@ Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-str
 ## Quickstart
 
 ### Prerequisites
-- **Rust Toolchain:** 1.88+ (MSRV, checked in CI; developed on 1.94)
+- **Rust Toolchain:** 1.88+ (MSRV, checked in CI)
 - **Container Runtime (Optional):** Podman rootless socket (`systemctl --user enable --now podman.socket`) or Docker daemon for live OCI container execution.
 
 ### Build
@@ -147,8 +149,11 @@ The compiled binary will be located at `target/release/proteus`.
 
 ### Verification & Test Suite
 ```bash
-# Run the workspace unit, integration and doc tests (129 at the time of writing)
+# Workspace unit, integration and doc tests
 cargo test --workspace
+
+# End-to-end smoke test of the release binary (add `--tes IMAGE` to run a TES task in a container)
+cargo build --release && scripts/smoke.sh
 
 # Strict lint check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -203,12 +208,14 @@ proteus view structure.pdb --interactive --dashboard
 ```
 
 Interactive keyboard controls:
-- `Arrow Keys` / `HJKL`: Rotate structure pitch and yaw.
-- `+` / `-`: Zoom in and zoom out.
-- `Space`: Toggle automatic rotation.
-- `C`: Cycle color schemes (pLDDT spectrum, secondary structure, cyan, green, amber).
-- `D`: Toggle biophysical telemetry dashboard.
-- `Q` / `Esc`: Exit viewer.
+- `Arrow Keys` / `hjkl`: orbit (yaw / pitch).
+- `+` / `-`: zoom.
+- `Space`: toggle auto-rotation.
+- `Tab` / `b`: toggle the telemetry dashboard (needs `--dashboard`).
+- `c`: cycle colour scheme (pLDDT → secondary structure → rainbow).
+- `o`: toggle SSAO and outlines; `d`: toggle disulfide sticks.
+- `r`: reset the camera to the principal-axis view it opened with.
+- `q` / `Esc` / `Ctrl-C`: quit.
 
 Superimpose two structures to visually inspect conformational changes:
 ```bash
@@ -320,7 +327,7 @@ Subject to topological exclusions:
 - **Baker-Hubbard Hydrogen Bonds:**
   $$2.4\,\text{Å} \le d(D, A) \le 3.5\,\text{Å}, \quad \theta(D_{\text{ante}}-D\cdots A) \ge 90^\circ, \quad \theta(A_{\text{ante}}-A\cdots D) \ge 90^\circ$$
 - **Ionic Salt Bridges:**
-  $$d(\text{cation}, \text{anion}) \le 4.0\,\text{Å} \quad\text{with}\quad res_{\text{cat}} \neq res_{\text{ani}}$$
+  $$d(\text{cation}, \text{anion}) \le 4.0\,\text{Å} \quad\text{with}\quad (chain, res)_{\text{cat}} \neq (chain, res)_{\text{ani}}$$
 - **Aromatic $\pi$-$\pi$ Stacking:**
   $$d(\mathbf{c}_1, \mathbf{c}_2) \le 6.5\,\text{Å}, \quad \theta = \arccos(|\mathbf{n}_1 \cdot \mathbf{n}_2|) \implies \begin{cases} \text{Parallel} & \theta \le 30^\circ \\ \text{T-Shaped} & 60^\circ \le \theta \le 120^\circ \end{cases}$$
 - **Cation-$\pi$ Interactions:**
@@ -329,7 +336,8 @@ Subject to topological exclusions:
 ### Composite Candidate Fitness Score
 $$S_{\text{fitness}} = 0.30 \cdot \text{pLDDT} + 0.20 \cdot S_{\text{compactness}} + 0.15 \cdot f_{\text{favored}} + 0.15 \cdot f_{\text{burial}} + 0.20 \cdot B_{\text{network}} - P_{\text{clash}}$$
 where non-covalent tertiary network density $B_{\text{network}}$ rewards secondary/tertiary hydrogen bonds, salt bridges, and aromatic contacts:
-$$B_{\text{network}} = \min\left(100.0, \frac{0.5 N_{\text{bb}} + 1.0 N_{\text{sc-hbond}} + 2.5 N_{\text{salt}} + 2.0 N_{\pi\text{-}\pi} + 2.0 N_{\text{cat-}\pi}}{0.60 \cdot N_{\text{res}}}\right)$$
+$$B_{\text{network}} = \min\left(100,\; 100 \cdot \frac{0.5 N_{\text{bb}} + 1.0 N_{\text{sc-hbond}} + 2.5 N_{\text{salt}} + 2.0 N_{\pi\text{-}\pi} + 2.0 N_{\text{cat-}\pi}}{0.60 \cdot N_{\text{res}}}\right)$$
+When the model carries no pLDDT (experimental structure), $w_{\text{pLDDT}} = 0$ and the other four weights are divided by $0.70$.
 
 ---
 

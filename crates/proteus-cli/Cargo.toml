@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 description = "Unified CLI binary for Proteus: mutation, screening, biophysical analysis, and terminal 3D inspection."
 
 [[bin]]

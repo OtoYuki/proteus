@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 repository.workspace = true
 description = "ESM-2 protein language model inference in pure Rust (candle): masked-marginal mutation scoring, deep mutational scans."
 keywords = ["bioinformatics", "protein", "esm", "language-model", "candle"]

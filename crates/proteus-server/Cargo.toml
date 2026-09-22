@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 description = "Headless Axum daemon (proteusd) with Server-Sent Events and OpenAPI documentation for Proteus."
 
 [dependencies]

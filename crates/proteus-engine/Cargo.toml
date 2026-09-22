@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+readme = "README.md"
 description = "Asynchronous DAG pipeline scheduler and OCI/Podman container runner for Proteus."
 
 [dependencies]
