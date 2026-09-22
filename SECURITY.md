@@ -25,7 +25,9 @@ ran executors as host processes without authentication; do not expose them. Hard
   (`/etc`, `/usr`, …). Outputs that resolve outside the task work dir (a planted symlink) are
   not delivered and the task ends in `SYSTEM_ERROR`.
 - `--executor host` runs commands directly on the daemon host, ignores `image`, and is refused
-  unless `--host` is loopback. Development only.
+  unless `--host` is loopback. Development only: workflow engines write container paths
+  (`/work/…`, `/mnt/task/…`) into their command scripts, which do not exist on the host, so
+  Nextflow and Sprocket tasks need the container executor.
 
 What is **not** covered: TLS (terminate it in a reverse proxy), per-user authorization or GA4GH
 Passports, rate limiting, disk quotas (`disk_gb` is accepted but not enforced), and output

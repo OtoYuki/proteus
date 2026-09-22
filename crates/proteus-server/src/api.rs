@@ -435,6 +435,18 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
     };
     let representation_params =
         proteus_core::io::molstar_representation_params(predicted, format, scale);
+    let engine = proteus_engine::engine_name(pred.metadata.as_ref());
+    let provenance = if engine == proteus_engine::ENGINE_SIMULATED {
+        "SIMULATED: synthetic helix, not a prediction".to_string()
+    } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
+        format!(
+            "Engine: {engine} (tier '{}' not honoured: {})",
+            d.requested, d.reason
+        )
+    } else {
+        format!("Engine: {engine}")
+    };
+    let provenance = html_escape(&provenance);
     // The structure is embedded rather than fetched by the page: Mol*'s own fetch carries no
     // Authorization header, so behind --auth-token a second request would be refused.
     let text = match proteus_core::io::read_structure_text(std::path::Path::new(&pred.pdb_path)) {
@@ -471,6 +483,7 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
     <div id="header">
         <h1>Proteus Bio-Compute 3D Viewer</h1>
         <p>Job ID: {job_id}</p>
+        <p>{provenance}</p>
     </div>
     <div id="app"></div>
     <script>
@@ -493,4 +506,13 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
 </html>"#
     );
     axum::response::Html(html).into_response()
+}
+
+/// Minimal escaping for text interpolated into the viewer page.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }

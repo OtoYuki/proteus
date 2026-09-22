@@ -183,19 +183,25 @@ echo -e "Task Submitted with ID: ${GREEN}${TASK_ID}${NC}"
 
 # Poll for completion
 echo -e "\n${BOLD}3. Polling Task Status (GET /v1/tasks/${TASK_ID}?view=FULL):${NC}"
-for i in {1..10}; do
+# The first run pulls the executor image, which can take a minute.
+STATE=""
+for i in {1..120}; do
     TASK_RES=$(curl -s "http://localhost:${DAEMON_PORT}/v1/tasks/${TASK_ID}?view=FULL")
     STATE=$(echo "$TASK_RES" | jq -r .state)
     echo -e "  [Check $i] State: ${BOLD}${STATE}${NC}"
-    if [[ "$STATE" == "COMPLETE" || "$STATE" == "EXECUTOR_ERROR" || "$STATE" == "SYSTEM_ERROR" ]]; then
+    if [[ "$STATE" == "COMPLETE" || "$STATE" == "EXECUTOR_ERROR" || "$STATE" == "SYSTEM_ERROR" || "$STATE" == "CANCELED" ]]; then
         break
     fi
-    sleep 0.5
+    sleep 1
 done
 
 echo ""
-echo "$TASK_RES" | jq '{id: .id, state: .state, outputs: .outputs, exit_code: .logs[0].logs[0].exit_code}'
+echo "$TASK_RES" | jq '{id: .id, state: .state, outputs: .logs[0].outputs, exit_code: .logs[0].logs[0].exit_code, system_logs: .logs[0].system_logs}'
 
+if [[ "$STATE" != "COMPLETE" ]]; then
+    echo -e "\n${YELLOW}✗ Task ended in state ${STATE} — see ${SHOWCASE_DIR}/proteusd.log${NC}"
+    exit 1
+fi
 echo -e "\n${GREEN}✔ Task execution completed successfully under GA4GH TES standard!${NC}"
 echo -e "${GREEN}✔ PDB output was automatically captured into BLAKE3 CAS and analyzed into SQLite.${NC}"
 

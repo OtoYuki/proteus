@@ -12,6 +12,16 @@ All notable changes to this project are documented here. The format follows
   by engine events (`BiophysicsAnalyzed`, `CasStored`); `proteus_task_queue_depth` and the CAS
   `read` series, which nothing ever wrote, are gone.
 - `proteus submit --wait=false` enqueues and returns.
+- The auto runner records `tier_requested` / `tier_honoured` / `fallback_reason` in the
+  prediction metadata. `proteus inspect` shows a Tier row, `proteus screen` warns when ranked
+  structures did not run at the requested tier (e.g. `--tier sota` with no Boltz image ran the
+  ESMFold API), and the viewers' titles carry the engine.
+- `proteus-esm`: `MarginalScorer` caches the wild-type (and per-position masked) forward passes,
+  so scoring a variant library is one forward pass for wild-type marginals instead of one per
+  variant; `proteus screen --scorer esm2` on 875 variants takes 0.6 s instead of minutes.
+- The terminal viewer opens on the model's principal-axis frame (longest axis across the
+  screen, viewer looking down the shortest) and fits the oriented extents to the viewport;
+  `r` resets to that frame.
 
 ### Changed
 - Compactness term of the fitness score recalibrated to the empirical folded-protein law
@@ -49,6 +59,24 @@ All notable changes to this project are documented here. The format follows
 - `bench/README.md`: the φ/ψ row is labelled as mdtraj's per-call Python API, not a C++ kernel;
   `bench/render.py` no longer discards the hand-written sections when regenerating.
 - CI workflows run with a read-only `GITHUB_TOKEN`.
+- Interaction network: the "bonded neighbour" exclusions compared residue numbers without the
+  chain, so an inter-chain contact between equally numbered residues (A5–B5) was dropped; the
+  exclusions are now chain-aware (#2).
+- TES `GET /v1/tasks` fetched and deserialised every task on each poll; `state` and
+  `name_prefix` filters and paging now run in SQL (`%`/`_` in a prefix are literals). Tag
+  filters still scan the state/prefix-filtered rows.
+- TES output URLs given as bare absolute paths (what Nextflow's nf-ga4gh plugin sends) passed
+  validation but failed at delivery with "output URL scheme not supported", so every Nextflow
+  task ended in `SYSTEM_ERROR` after running. Bare paths are accepted for outputs as they
+  already were for inputs, under the same `--allow-dir` check.
+- C-alpha-only models (the simulated runner's output, coarse-grained traces) rendered as an
+  empty frame: with no C/N atoms every residue counted as a chain break. Continuity now falls
+  back to the CA–CA distance (≤ 4.2 Å). Sub-pixel-thin geometry that straddled a pixel boundary
+  was also skipped by the rasteriser; each triangle now lights at least its centroid pixel.
+- `examples/nextflow`: the config pinned `nf-ga4gh@0.3.0` (never published; current is 1.5.0)
+  and an endpoint with `/v1`, which the plugin appends itself, and the pipeline never invoked
+  proteus. It now runs `proteus mutate`/`proteus analyze` in the proteus container through TES.
+  README no longer claims the Nextflow example runs in CI (only the Sprocket one does).
 
 ## [0.4.0] — 2026-09-22
 

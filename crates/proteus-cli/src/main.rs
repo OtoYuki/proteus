@@ -740,7 +740,19 @@ async fn main() -> Result<()> {
                 let content = tokio::fs::read_to_string(&pred.pdb_path)
                     .await
                     .with_context(|| format!("Failed to read PDB at {:?}", pred.pdb_path))?;
-                (content, format!("Job {job_id}"))
+                // The title is the only provenance the viewers show, so say what the file is.
+                let engine = proteus_engine::engine_name(pred.metadata.as_ref());
+                let title = if engine == proteus_engine::ENGINE_SIMULATED {
+                    format!("Job {job_id} — SIMULATED: synthetic helix, not a prediction")
+                } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
+                    format!(
+                        "Job {job_id} ({engine}; tier '{}' not honoured)",
+                        d.requested
+                    )
+                } else {
+                    format!("Job {job_id} ({engine})")
+                };
+                (content, title)
             } else {
                 anyhow::bail!(
                     "Target '{}' is neither an existing file path nor a valid job UUID",
@@ -1146,6 +1158,9 @@ async fn main() -> Result<()> {
 
             let mut candidates: Vec<CandidateRank> = Vec::new();
             let mut simulated_dropped = 0usize;
+            // Ranked structures that did not run at the requested tier, by fallback reason.
+            let mut downgraded: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
 
             for (seq, &job_id) in sequences.iter().zip(job_ids.iter()) {
                 if let Ok(Some(pred)) = repo.get_prediction_by_job(job_id).await {
@@ -1153,6 +1168,11 @@ async fn main() -> Result<()> {
                     if !rankable(&engine, runner) {
                         simulated_dropped += 1;
                         continue;
+                    }
+                    if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
+                        *downgraded
+                            .entry(format!("requested '{}': {}", d.requested, d.reason))
+                            .or_default() += 1;
                     }
                     if let Ok(Some(metrics)) = repo.get_metrics_by_prediction(pred.id).await {
                         let plddt = pred.plddt.unwrap_or(metrics.plddt_distribution.mean);
@@ -1258,6 +1278,18 @@ async fn main() -> Result<()> {
                      ranking. Re-run online, provide a runner image, or pass --runner simulated to \
                      rank them anyway."
                 );
+            }
+            if !downgraded.is_empty() {
+                let n: usize = downgraded.values().sum();
+                eprintln!(
+                    "\nWARNING: {n} of {} ranked structures did not run at the requested tier \
+                     (--tier {}); `proteus inspect <job>` shows the engine and reason:",
+                    candidates.len(),
+                    format!("{tier:?}").to_lowercase()
+                );
+                for (reason, count) in &downgraded {
+                    eprintln!("  {count}× {reason}");
+                }
             }
             println!(
                 "\n=== Screening Funnel Leaderboard (Cutoff: pLDDT >= {:.1}){} ===",
@@ -1457,6 +1489,30 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
         } else {
             "Structure source"
         }),
+    ]);
+
+    let tier_requested = match repo.get_job(job_id).await? {
+        Some(job) => job.tier_slug().to_string(),
+        None => "unknown".to_string(),
+    };
+    let tier_tracked = pred
+        .metadata
+        .as_ref()
+        .and_then(|m| m.get("tier_honoured"))
+        .is_some();
+    let (tier_cell, tier_note) = match proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
+        Some(d) => (
+            format!("{tier_requested} (NOT honoured)"),
+            format!("DOWNGRADED: {}", d.reason),
+        ),
+        None if tier_tracked => (tier_requested, "Ran at the requested tier".to_string()),
+        // Explicit --runner: the user picked the engine, so no downgrade is recorded.
+        None => (tier_requested, "Runner chosen explicitly".to_string()),
+    };
+    table.add_row(vec![
+        Cell::new("Tier"),
+        Cell::new(tier_cell),
+        Cell::new(tier_note),
     ]);
 
     let plddt_cell = if let Some(p) = pred.plddt {

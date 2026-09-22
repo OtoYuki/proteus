@@ -991,13 +991,12 @@ async fn copy_recursive(
     Ok(())
 }
 
-/// Deliver a task output to its declared URL. `file://` is supported (local or shared
-/// filesystem, as Sprocket/Nextflow use on a single host); other schemes are reported.
+/// Deliver a task output to its declared URL. `file://` URLs and bare absolute host paths
+/// (what Nextflow's nf-ga4gh plugin sends) are supported, on a local or shared filesystem;
+/// other schemes are reported.
 async fn upload_output(local: &std::path::Path, url: &str) -> Result<(), EngineError> {
-    if let Some(dest) = url.strip_prefix("file://") {
-        copy_recursive(local, std::path::Path::new(dest))
-            .await
-            .map_err(EngineError::Io)
+    if let Some(dest) = host_path_of(url) {
+        copy_recursive(local, dest).await.map_err(EngineError::Io)
     } else {
         Err(EngineError::Tes(format!(
             "output URL scheme not supported: {url} (file:// only in this release)"
@@ -1226,6 +1225,28 @@ mod tests {
         let done = finished(&repo, "t-bypass").await;
         assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
         assert!(done.logs[0].logs.is_empty(), "executor must not run");
+    }
+
+    /// Nextflow's nf-ga4gh plugin hands the server bare absolute paths (no `file://`) for
+    /// inputs and outputs. Both directions must accept them under the same allow-list.
+    #[tokio::test]
+    async fn bare_absolute_paths_work_as_input_and_output_urls() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("in.txt");
+        std::fs::write(&src, "payload").unwrap();
+        let dest = tmp.path().join("delivered").join("out.txt");
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![tmp.path().to_path_buf()],
+            ..Default::default()
+        });
+        let mut task = sh_task("t-bare", "cp in.txt out.txt");
+        task.inputs.push(file_input(&src.display().to_string()));
+        task.outputs.push(file_output(&dest.display().to_string()));
+        scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, "t-bare").await;
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "payload");
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ URL, a `command` file (bash), `workdir: /mnt/task/work`, three outputs (`work` d
 stages the inputs, runs `bash /mnt/task/command` in the image with those limits, copies the
 outputs to their URLs and reports `size_bytes` as strings, as the TES int64 mapping requires.
 
-The same server also runs `examples/nextflow/` (`nextflow run … -with-tes`).
+The same server also runs `examples/nextflow/` (`nextflow run examples/nextflow/screening.nf`;
+the checked-in `nextflow.config` selects the nf-ga4gh TES executor).
 `.github/workflows/tes-conformance.yml` runs the ELIXIR/GA4GH compliance suite and this
-workflow in CI.
+workflow in CI; the Nextflow example is run by hand.

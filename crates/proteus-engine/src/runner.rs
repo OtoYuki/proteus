@@ -29,6 +29,36 @@ pub fn engine_name(metadata: Option<&serde_json::Value>) -> &str {
         .unwrap_or("unknown")
 }
 
+/// A structure that did not run at the tier the job asked for. Written by the auto runner
+/// when it falls back; carried in `metadata` so `inspect`/`screen` can say so.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierDowngrade {
+    /// The tier slug the job requested (`fast`, `boltz`, `relax`).
+    pub requested: String,
+    /// Why the requested tier was not run.
+    pub reason: String,
+}
+
+/// Reads a tier downgrade back out of prediction metadata (`tier_honoured == false`).
+pub fn tier_downgrade(metadata: Option<&serde_json::Value>) -> Option<TierDowngrade> {
+    let m = metadata?;
+    if m.get("tier_honoured").and_then(|v| v.as_bool()) != Some(false) {
+        return None;
+    }
+    Some(TierDowngrade {
+        requested: m
+            .get("tier_requested")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        reason: m
+            .get("fallback_reason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("no reason recorded")
+            .to_string(),
+    })
+}
+
 #[async_trait::async_trait]
 pub trait ComputeRunner: Send + Sync {
     /// Execute computation for a given sequence and job, returning structure output.
@@ -76,6 +106,33 @@ mod tests {
         assert_eq!(
             engine_name(Some(&serde_json::json!({ "engine": "oci" }))),
             "oci"
+        );
+    }
+
+    #[test]
+    fn tier_downgrade_is_read_only_when_marked_unhonoured() {
+        assert_eq!(tier_downgrade(None), None);
+        assert_eq!(
+            tier_downgrade(Some(&serde_json::json!({ "engine": "oci" }))),
+            None
+        );
+        assert_eq!(
+            tier_downgrade(Some(
+                &serde_json::json!({ "engine": "oci", "tier_honoured": true })
+            )),
+            None
+        );
+        assert_eq!(
+            tier_downgrade(Some(&serde_json::json!({
+                "engine": "esmfold-api",
+                "tier_requested": "boltz",
+                "tier_honoured": false,
+                "fallback_reason": "image not present"
+            }))),
+            Some(TierDowngrade {
+                requested: "boltz".into(),
+                reason: "image not present".into()
+            })
         );
     }
 }

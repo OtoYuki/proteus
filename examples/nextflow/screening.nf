@@ -1,97 +1,82 @@
 /*
- * Proteus High-Throughput Bio-Compute Screening Pipeline
- * GA4GH Task Execution Service (TES v1.1) Reference Workflow
+ * Proteus on GA4GH TES from Nextflow (nf-ga4gh plugin).
+ *
+ * Every process runs the `proteus` binary inside the proteus container on a TES server:
+ *   MUTATE   — in-silico alanine scan of the scaffold sequence (one task)
+ *   ANALYZE  — all-atom biophysics of each input structure (one task per file)
+ *   SUMMARY  — gather the per-structure reports
+ *
+ * Folding is not part of this workflow: it is a scatter/gather of offline proteus commands, so it
+ * runs unchanged on any TES 1.1 endpoint. Point `params.structures` at predicted models to score
+ * them the same way.
  */
 
-nextflow.enable.dsl = 2
+params.scaffold   = "${projectDir}/1crn.fasta"
+params.structures = "${projectDir}/../../crates/proteus-core/tests/data/1crn.{pdb,cif}"
+params.image      = "ghcr.io/otoyuki/proteus:latest"
+params.outdir     = "${projectDir}/results"
 
-params.target_fasta = "${projectDir}/1crn.fasta"
-params.outdir       = "${projectDir}/results"
-
-process MUTATE_TARGET {
-    tag "Mutating target"
-    publishDir "${params.outdir}/variants", mode: 'copy'
+process MUTATE {
+    tag "${scaffold.baseName}"
+    container params.image
+    publishDir "${params.outdir}", mode: 'copy'
 
     input:
-    path target_fasta
+    path scaffold
 
     output:
-    path "variant_*.fasta", emit: variants
+    path "variants.fasta"
 
     script:
     """
-    # In-silico mutagenesis: generate single-point variants
-    cat << 'EOF' > variant_1.fasta
->1crn_A1T Crambin Thr1 Variant
-TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN
-EOF
-
-    cat << 'EOF' > variant_2.fasta
->1crn_R17K Crambin Lys17 Salt Bridge Variant
-TTCCPSIVAKSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN
-EOF
+    set -euo pipefail
+    proteus mutate ${scaffold} --mode alanine --start 1 --end 6 --output variants.fasta
     """
 }
 
-process SCREEN_CANDIDATE {
-    tag "Screening ${variant_fasta.baseName}"
-    publishDir "${params.outdir}/structures", mode: 'copy'
+process ANALYZE {
+    tag "${structure.name}"
+    container params.image
+    publishDir "${params.outdir}/metrics", mode: 'copy'
 
     input:
-    path variant_fasta
+    path structure
 
     output:
-    path "${variant_fasta.baseName}.pdb", emit: structure
-    path "${variant_fasta.baseName}_report.txt", emit: report
+    path "${structure.name}.metrics.txt"
 
     script:
     """
-    # Executed remotely via Proteus GA4GH TES daemon
-    echo "Processing \$(cat ${variant_fasta} | head -n 1) on Proteus TES backend..."
-    
-    # Generate predicted structural coordinates and evaluate all-atom biophysics
-    # (In production, dispatches Boltz-1 or ESMFold container via OCI runner)
-    cat << 'EOF' > ${variant_fasta.baseName}.pdb
-HEADER    PROTEUS SCREENING CANDIDATE
-ATOM      1  N   THR A   1      17.047  14.099   3.625  1.00 13.79           N
-ATOM      2  CA  THR A   1      16.967  12.784   4.338  1.00 10.80           C
-ATOM      3  C   THR A   1      15.685  12.755   5.133  1.00  9.19           C
-ATOM      4  O   THR A   1      15.268  13.825   5.594  1.00  9.85           O
-ATOM      5  CB  THR A   1      18.170  12.703   5.337  1.00 13.02           C
-ATOM      6  OG1 THR A   1      19.334  12.829   4.463  1.00 15.06           O
-ATOM      7  CG2 THR A   1      18.150  11.354   6.082  1.00 13.78           C
-TER       8      THR A   1
-END
-EOF
-
-    echo "Biophysical analysis complete for ${variant_fasta.baseName}" > ${variant_fasta.baseName}_report.txt
+    set -euo pipefail
+    proteus analyze --pdb ${structure} | tee ${structure.name}.metrics.txt
     """
 }
 
-process AGGREGATE_DATA_LAKE {
-    tag "Aggregating Parquet Data Lake"
+process SUMMARY {
+    container params.image
     publishDir "${params.outdir}", mode: 'copy'
 
     input:
     path reports
 
     output:
-    path "screening_summary.txt"
+    path "summary.txt"
 
     script:
     """
-    echo "=============================================" > screening_summary.txt
-    echo "PROTEUS NEXTFLOW SCREENING CAMPAIGN COMPLETED" >> screening_summary.txt
-    echo "Timestamp: \$(date -u)" >> screening_summary.txt
-    echo "Total Candidates Screened: ${reports.size()}" >> screening_summary.txt
-    echo "=============================================" >> screening_summary.txt
-    cat ${reports} >> screening_summary.txt
+    set -euo pipefail
+    {
+        echo "structures analysed: ${reports.size()}"
+        for f in ${reports}; do
+            echo "== \$f"
+            cat "\$f"
+        done
+    } > summary.txt
     """
 }
 
 workflow {
-    ch_target = Channel.fromPath(params.target_fasta)
-    MUTATE_TARGET(ch_target)
-    SCREEN_CANDIDATE(MUTATE_TARGET.out.variants.flatten())
-    AGGREGATE_DATA_LAKE(SCREEN_CANDIDATE.out.report.collect())
+    MUTATE(Channel.fromPath(params.scaffold))
+    ANALYZE(Channel.fromPath(params.structures, checkIfExists: true))
+    SUMMARY(ANALYZE.out.collect())
 }

@@ -282,12 +282,13 @@ proteus serve --host 0.0.0.0 --port 8080 --auth-token "$TOKEN" \
 The server passes the GA4GH TES 1.1 compliance suite (23/23 tests, run in CI with the container executor) — see [SECURITY.md](SECURITY.md) for what is and is not covered.
 
 ### 6. Run it from a workflow engine
-Any TES client works. Two are checked in CI:
+Any TES client works. Two examples ship with the repo; the Sprocket one runs in CI, the Nextflow one is exercised by hand (Nextflow 26 + nf-ga4gh 1.5):
 ```bash
-# Nextflow
-nextflow run examples/nextflow/screening.nf -with-tes http://127.0.0.1:8080/v1
-# Sprocket (WDL, St. Jude Rust Labs)
+# Sprocket (WDL, St. Jude Rust Labs) — checked in CI
 sprocket run -c examples/wdl/sprocket.toml -s examples/wdl/analyze.wdl @examples/wdl/inputs.json
+# Nextflow (nf-ga4gh plugin; the config selects the TES executor and reads PROTEUS_TES_ENDPOINT)
+proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --allow-dir "$PWD/work"
+nextflow run examples/nextflow/screening.nf
 ```
 See [`examples/wdl/README.md`](examples/wdl/README.md) for what crosses the wire.
 

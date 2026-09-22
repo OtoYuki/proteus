@@ -6,11 +6,16 @@ task analyze {
     meta {
         description: "All-atom biophysics of a PDB/mmCIF file, executed in the proteus container"
     }
+    parameter_meta {
+        structure: "PDB or mmCIF file (optionally gzipped) to analyse"
+        image: "Container image that provides the `proteus` binary"
+    }
     input {
         File structure
         String image = "ghcr.io/otoyuki/proteus:latest"
     }
     command <<<
+        set -euo pipefail
         proteus analyze --pdb ~{structure} | tee metrics.txt
     >>>
     output {
@@ -24,6 +29,13 @@ task analyze {
 }
 
 workflow analyze_structure {
+    meta {
+        description: "Analyse one structure with proteus through a GA4GH TES backend"
+    }
+    parameter_meta {
+        structure: "PDB or mmCIF file to analyse"
+        image: "Container image that provides the `proteus` binary"
+    }
     input {
         File structure
         String image = "ghcr.io/otoyuki/proteus:latest"

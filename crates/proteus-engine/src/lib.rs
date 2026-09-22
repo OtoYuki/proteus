@@ -12,6 +12,9 @@ pub mod tes_exec;
 pub use auto::AutoRunner;
 pub use error::EngineError;
 pub use esm_api::EsmApiRunner;
-pub use runner::{engine_name, ComputeRunner, ENGINE_ESMFOLD_API, ENGINE_OCI, ENGINE_SIMULATED};
+pub use runner::{
+    engine_name, tier_downgrade, ComputeRunner, TierDowngrade, ENGINE_ESMFOLD_API, ENGINE_OCI,
+    ENGINE_SIMULATED,
+};
 pub use scheduler::{CancelOutcome, EngineEvent, PipelineScheduler, TesExecutionConfig};
 pub use tes_exec::{ContainerExecutor, ExecutorRequest, ExecutorResult, HostExecutor, TesExecutor};

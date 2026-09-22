@@ -12,13 +12,13 @@ BLUE='\033[1;34m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-PROTEUS_BIN="/home/s1re/dev/proteus/target/release/proteus"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROTEUS_BIN="$ROOT_DIR/target/release/proteus"
 if [ ! -f "$PROTEUS_BIN" ]; then
-    PROTEUS_BIN="/home/s1re/dev/proteus/target/debug/proteus"
+    PROTEUS_BIN="$ROOT_DIR/target/debug/proteus"
 fi
-
-PDB_FILE="/home/s1re/dev/proteus/crates/proteus-core/tests/data/1crn.pdb"
-FASTA_FILE="/home/s1re/dev/proteus/crates/proteus-core/tests/data/1crn.fasta"
+PDB_FILE="$ROOT_DIR/crates/proteus-core/tests/data/1crn.pdb"
+FASTA_FILE="$ROOT_DIR/crates/proteus-core/tests/data/1crn.fasta"
 DEMO_DIR="/tmp/proteus_demo"
 mkdir -p "$DEMO_DIR"
 
