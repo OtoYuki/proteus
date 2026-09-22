@@ -118,7 +118,7 @@ Enables full structural inspection over SSH without X11 forwarding, WebGL browse
 - **Lighting & Post-Processing:** Software $z$-buffer rasterizer with directional Blinn-Phong shading, Screen-Space Ambient Occlusion (SSAO), and edge-detection cel-outlines.
 - **Covalent Disulfide Bridges:** Automatically detects and renders cystine covalent bonds ($S_\gamma - S_\gamma$) as high-visibility sidechain cylinders.
 - **Multi-Structure Superposition:** Visualizes pairwise structural alignments in distinct dual-color palettes with Kabsch RMSD metrics.
-- **Terminal Compositing:** High-resolution sub-pixel Braille (2x4 dots/cell), ANSI 24-bit half-block (1x2 pixels/cell), and Kitty graphics protocol for raw 24-bit RGB pixel blitting.
+- **Terminal Compositing:** ANSI 24-bit half-block (1×2 px/cell), sub-pixel Braille (2×4 dots/cell), **DEC Sixel** (xterm, mlterm, foot, contour, WezTerm, Windows Terminal) and the kitty graphics protocol. Sixel is 6–21× cheaper on the wire than kitty at the same resolution, which is what you want over SSH, and its encoder is round-tripped through libsixel's own decoder in CI rather than eyeballed.
 - **Live TUI Dashboard:** Split-screen layout displaying real-time 3D rotation alongside an ASCII Ramachandran ($\phi, \psi$) conformational scatter plot, per-residue pLDDT spectrum, and biophysical metrics.
 
 ### 4. Native Biophysical Validation Engines

@@ -360,7 +360,8 @@ pub(crate) fn framebuffer_size(
     match backend {
         TerminalBackend::HalfBlock => (cols, rows * 2),
         TerminalBackend::Braille => (cols * 2, rows * 4),
-        TerminalBackend::Kitty => (cols * 8, rows * 16),
+        // Sixel and kitty both blit true pixels, so both get a full cell's worth.
+        TerminalBackend::Kitty | TerminalBackend::Sixel => (cols * 8, rows * 16),
     }
 }
 
@@ -407,6 +408,7 @@ pub fn render_structure_snapshot(
     match backend {
         TerminalBackend::HalfBlock => Ok(HalfBlockRenderer::render_snapshot(&fb)),
         TerminalBackend::Braille => Ok(BrailleRenderer::render_snapshot(&fb)),
+        TerminalBackend::Sixel => Ok(crate::terminal::SixelRenderer::render_snapshot(&fb)),
         TerminalBackend::Kitty => {
             let mut out = Vec::new();
             KittyRenderer::render(&fb, &mut out)?;
@@ -517,7 +519,7 @@ pub fn render_superposition_snapshot(
     let (px_width, px_height) = match backend {
         TerminalBackend::HalfBlock => (width, height * 2),
         TerminalBackend::Braille => (width * 2, height * 4),
-        TerminalBackend::Kitty => (width * 8, height * 16),
+        TerminalBackend::Kitty | TerminalBackend::Sixel => (width * 8, height * 16),
     };
 
     let mut fb = Framebuffer::new(px_width, px_height);
@@ -548,6 +550,7 @@ pub fn render_superposition_snapshot(
     let output_str = match backend {
         TerminalBackend::HalfBlock => HalfBlockRenderer::render_snapshot(&fb),
         TerminalBackend::Braille => BrailleRenderer::render_snapshot(&fb),
+        TerminalBackend::Sixel => crate::terminal::SixelRenderer::render_snapshot(&fb),
         TerminalBackend::Kitty => {
             let mut out = Vec::new();
             KittyRenderer::render(&fb, &mut out)?;
@@ -772,6 +775,40 @@ mod tests {
         assert!(
             ta[0] > 0 && ta[1] > 0,
             "crambin has both a helix and a sheet; got {ta:?}"
+        );
+    }
+
+    /// Sixel exists for reach, but it is also the cheapest true-pixel path on the wire, which
+    /// is what matters when the terminal is at the other end of an SSH session. The kitty
+    /// protocol sends raw RGB, so its payload is a fixed function of the viewport; Sixel
+    /// run-length encodes, and a protein render is mostly background.
+    ///
+    /// Measured at 110×30 cells: 1CRN 20.9× smaller, 1PGB 16.9×, 1TEN 14.3×, 4HHB 6.2× (a
+    /// four-chain structure fills more of the frame, so it compresses least).
+    #[test]
+    fn sixel_is_cheaper_on_the_wire_than_kitty() {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-core/tests/data/1crn.pdb"
+        ))
+        .unwrap();
+        let data = parse_pdb_structure(&text).unwrap();
+        let scheme = data.default_color_scheme();
+        let sixel =
+            render_structure_snapshot(&data, 110, 30, TerminalBackend::Sixel, scheme).unwrap();
+        let kitty =
+            render_structure_snapshot(&data, 110, 30, TerminalBackend::Kitty, scheme).unwrap();
+        assert!(
+            sixel.len() * 4 < kitty.len(),
+            "sixel {} bytes vs kitty {} — the run-length encoding is not working",
+            sixel.len(),
+            kitty.len()
+        );
+        // Both describe the same framebuffer, so the resolution advice must be the same too.
+        assert_eq!(
+            data.angstroms_per_pixel(110, 30, TerminalBackend::Sixel),
+            data.angstroms_per_pixel(110, 30, TerminalBackend::Kitty),
+            "sixel and kitty blit the same pixels and must report the same resolution"
         );
     }
 

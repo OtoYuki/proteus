@@ -31,7 +31,13 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
+      - name: libsixel, so the Sixel encoder is checked by its own reference decoder
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsixel-bin
       - run: cargo nextest run --workspace --all-features
+      - name: Sixel round-trip through libsixel
+        if: runner.os == 'Linux'
+        run: cargo test -p proteus-render --lib -- --ignored libsixel --nocapture
       - run: cargo test --workspace --doc
 
   lint:

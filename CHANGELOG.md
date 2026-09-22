@@ -55,6 +55,18 @@ All notable changes to this project are documented here. The format follows
   none there, and the assertion now requires agreement with the reference.
 
 ### Added
+- **A Sixel backend** (`--backend sixel`). Sixel reaches terminals the kitty protocol does not —
+  xterm (`-ti vt340`), mlterm, foot, contour, WezTerm, Windows Terminal — and on several of them
+  it is the only true-pixel path there is. It is also **6–21× cheaper on the wire** than kitty
+  at the same resolution (1CRN 20.9×, 1PGB 16.9×, 1TEN 14.3×, 4HHB 6.2×), because kitty sends
+  raw RGB while Sixel run-length encodes and a protein render is mostly background — which
+  matters when the terminal is at the far end of an SSH session.
+  The encoder is checked by **libsixel's own `sixel2png`**, not by our idea of the format: the
+  round-trip must reproduce the framebuffer pixel for pixel, and `scripts/smoke.sh` decodes a
+  real render with it on every run. Sixel is palette-indexed, so the 24-bit framebuffer is
+  median-cut quantised to ≤ 256 colours; the cost is *measured* rather than assumed
+  (`encode_with_stats` reports palette size and worst channel error — 0 for a cartoon render,
+  which stays inside the budget).
 - **The validation corpus grows 43 → 53**, chosen for coverage rather than count: crambin at
   0.54 Å (alternate conformations everywhere), Top7 (a de novo designed fold, which is what
   Proteus screens), collagen (polyproline II, which DSSP assigns to no canonical state), a
