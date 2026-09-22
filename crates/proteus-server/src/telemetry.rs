@@ -1,5 +1,9 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use proteus_engine::EngineEvent;
 
 /// Buckets for task duration histogram (in seconds).
 pub const TASK_DURATION_BUCKETS: [f64; 10] =
@@ -18,17 +22,17 @@ pub struct Telemetry {
     pub tasks_failed: AtomicU64,
     pub tasks_canceled: AtomicU64,
 
-    // Concurrency gauges
+    // Concurrency gauge
     pub active_workers: AtomicI64,
-    pub task_queue_depth: AtomicI64,
 
     // CAS counters
     pub cas_hits: AtomicU64,
     pub cas_misses: AtomicU64,
     pub cas_stores: AtomicU64,
-    pub cas_reads: AtomicU64,
     pub cas_bytes_stored: AtomicU64,
-    pub cas_bytes_read: AtomicU64,
+
+    /// Start instants of TES tasks currently running, for the duration histogram.
+    task_starts: Mutex<HashMap<String, Instant>>,
 
     // HTTP counters
     pub http_requests_total: AtomicU64,
@@ -47,6 +51,54 @@ pub struct Telemetry {
 impl Telemetry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Fold one engine event into the counters. Every counter on `/metrics` is driven from
+    /// here, so what the endpoint shows is exactly what the engine emitted.
+    pub fn observe(&self, event: &EngineEvent) {
+        match event {
+            EngineEvent::TesTaskStarted { task_id } => {
+                self.tasks_running.fetch_add(1, Ordering::Relaxed);
+                self.active_workers.fetch_add(1, Ordering::Relaxed);
+                self.task_starts
+                    .lock()
+                    .unwrap()
+                    .insert(task_id.clone(), Instant::now());
+            }
+            EngineEvent::TesTaskCompleted { task_id }
+            | EngineEvent::TesTaskFailed { task_id, .. } => {
+                if matches!(event, EngineEvent::TesTaskCompleted { .. }) {
+                    self.tasks_complete.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.tasks_failed.fetch_add(1, Ordering::Relaxed);
+                }
+                self.active_workers.fetch_sub(1, Ordering::Relaxed);
+                if let Some(started) = self.task_starts.lock().unwrap().remove(task_id) {
+                    self.record_task_duration(started.elapsed());
+                }
+            }
+            // A cancel notice is not an end-of-work report; the worker sends that itself.
+            EngineEvent::TesTaskCanceled { .. } => {}
+            EngineEvent::JobStarted { .. } => {
+                self.active_workers.fetch_add(1, Ordering::Relaxed);
+            }
+            EngineEvent::JobCompleted { .. } | EngineEvent::JobFailed { .. } => {
+                self.active_workers.fetch_sub(1, Ordering::Relaxed);
+            }
+            EngineEvent::CasStored { duplicate, bytes } => {
+                if *duplicate {
+                    self.cas_hits.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.cas_misses.fetch_add(1, Ordering::Relaxed);
+                    self.cas_stores.fetch_add(1, Ordering::Relaxed);
+                    self.cas_bytes_stored.fetch_add(*bytes, Ordering::Relaxed);
+                }
+            }
+            EngineEvent::BiophysicsAnalyzed { duration_ms, .. } => {
+                self.record_biophysical_duration(Duration::from_millis(*duration_ms));
+            }
+            EngineEvent::JobQueued { .. } | EngineEvent::JobProgress { .. } => {}
+        }
     }
 
     /// Records the execution duration of a task.
@@ -108,18 +160,12 @@ impl Telemetry {
         ));
 
         // Active workers gauge
-        let workers = self.active_workers.load(Ordering::Relaxed).max(0);
+        let workers = self.active_workers.load(Ordering::Relaxed);
         out.push_str(
             "\n# HELP proteus_active_workers Number of concurrently running worker threads\n",
         );
         out.push_str("# TYPE proteus_active_workers gauge\n");
         out.push_str(&format!("proteus_active_workers {}\n", workers));
-
-        // Task queue depth gauge
-        let queue_depth = self.task_queue_depth.load(Ordering::Relaxed).max(0);
-        out.push_str("\n# HELP proteus_task_queue_depth Pending tasks waiting in queue\n");
-        out.push_str("# TYPE proteus_task_queue_depth gauge\n");
-        out.push_str(&format!("proteus_task_queue_depth {}\n", queue_depth));
 
         // CAS operations counter
         out.push_str(
@@ -138,10 +184,6 @@ impl Telemetry {
             "proteus_cas_operations_total{{op=\"store\"}} {}\n",
             self.cas_stores.load(Ordering::Relaxed)
         ));
-        out.push_str(&format!(
-            "proteus_cas_operations_total{{op=\"read\"}} {}\n",
-            self.cas_reads.load(Ordering::Relaxed)
-        ));
 
         // CAS bytes counter
         out.push_str("\n# HELP proteus_cas_bytes_total Total bytes processed through Content-Addressable Storage\n");
@@ -149,10 +191,6 @@ impl Telemetry {
         out.push_str(&format!(
             "proteus_cas_bytes_total{{op=\"store\"}} {}\n",
             self.cas_bytes_stored.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "proteus_cas_bytes_total{{op=\"read\"}} {}\n",
-            self.cas_bytes_read.load(Ordering::Relaxed)
         ));
 
         // HTTP requests total
@@ -224,6 +262,114 @@ impl Telemetry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proteus_engine::EngineEvent;
+
+    fn started(id: &str) -> EngineEvent {
+        EngineEvent::TesTaskStarted { task_id: id.into() }
+    }
+
+    #[test]
+    fn task_lifecycle_events_drive_the_worker_gauge_and_duration_histogram() {
+        let tel = Telemetry::new();
+        tel.observe(&started("a"));
+        tel.observe(&started("b"));
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 2);
+        tel.observe(&EngineEvent::TesTaskCompleted {
+            task_id: "a".into(),
+        });
+        tel.observe(&EngineEvent::TesTaskFailed {
+            task_id: "b".into(),
+            error: "x".into(),
+        });
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 0);
+        let out = tel.render_prometheus();
+        assert!(
+            out.contains("proteus_task_duration_seconds_count 2"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn cancel_notification_does_not_touch_the_worker_gauge() {
+        let tel = Telemetry::new();
+        // Cancelled before it ever started: no worker was ever busy.
+        tel.observe(&EngineEvent::TesTaskCanceled {
+            task_id: "q".into(),
+        });
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 0);
+        // Cancelled while running: the cancel notice plus the worker's own end report.
+        tel.observe(&started("r"));
+        tel.observe(&EngineEvent::TesTaskCanceled {
+            task_id: "r".into(),
+        });
+        tel.observe(&EngineEvent::TesTaskFailed {
+            task_id: "r".into(),
+            error: "canceled".into(),
+        });
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn cas_and_biophysics_events_feed_their_counters() {
+        let tel = Telemetry::new();
+        tel.observe(&EngineEvent::CasStored {
+            duplicate: false,
+            bytes: 1000,
+        });
+        tel.observe(&EngineEvent::CasStored {
+            duplicate: true,
+            bytes: 1000,
+        });
+        tel.observe(&EngineEvent::BiophysicsAnalyzed {
+            duration_ms: 3,
+            residues: 46,
+        });
+        let out = tel.render_prometheus();
+        assert!(
+            out.contains("proteus_cas_operations_total{op=\"hit\"} 1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("proteus_cas_operations_total{op=\"miss\"} 1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("proteus_cas_operations_total{op=\"store\"} 1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("proteus_cas_bytes_total{op=\"store\"} 1000"),
+            "{out}"
+        );
+        assert!(
+            out.contains("proteus_biophysical_duration_seconds_count 1"),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn collector_keeps_counting_after_the_broadcast_channel_lags() {
+        let tel = std::sync::Arc::new(Telemetry::new());
+        let (tx, rx) = tokio::sync::broadcast::channel(4);
+        crate::server::spawn_collector(tel.clone(), rx);
+        // Ten sends before the collector is ever polled: it wakes to `Lagged(6)`.
+        for i in 0..10 {
+            tx.send(started(&i.to_string())).unwrap();
+        }
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 4);
+        // And it is still alive afterwards.
+        tx.send(EngineEvent::TesTaskCompleted {
+            task_id: "9".into(),
+        })
+        .unwrap();
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(tel.active_workers.load(Ordering::Relaxed), 3);
+    }
 
     #[test]
     fn test_telemetry_rendering() {

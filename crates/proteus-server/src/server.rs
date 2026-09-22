@@ -34,39 +34,33 @@ pub struct ServerOptions {
 impl AppState {
     pub fn new(scheduler: PipelineScheduler) -> Self {
         let telemetry = Arc::new(Telemetry::new());
-        let tel = telemetry.clone();
-        let mut rx = scheduler.subscribe();
-        tokio::spawn(async move {
-            while let Ok(event) = rx.recv().await {
-                match event {
-                    EngineEvent::TesTaskStarted { .. } => {
-                        tel.tasks_running.fetch_add(1, Ordering::Relaxed);
-                        tel.active_workers.fetch_add(1, Ordering::Relaxed);
-                    }
-                    EngineEvent::TesTaskCompleted { .. } => {
-                        tel.tasks_complete.fetch_add(1, Ordering::Relaxed);
-                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
-                    }
-                    EngineEvent::TesTaskFailed { .. } => {
-                        tel.tasks_failed.fetch_add(1, Ordering::Relaxed);
-                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
-                    }
-                    EngineEvent::JobStarted { .. } => {
-                        tel.active_workers.fetch_add(1, Ordering::Relaxed);
-                    }
-                    EngineEvent::JobCompleted { .. } | EngineEvent::JobFailed { .. } => {
-                        tel.active_workers.fetch_sub(1, Ordering::Relaxed);
-                    }
-                    _ => {}
-                }
-            }
-        });
+        spawn_collector(telemetry.clone(), scheduler.subscribe());
 
         Self {
             scheduler,
             telemetry,
         }
     }
+}
+
+/// Feed engine events into the telemetry counters for the life of the process. A slow
+/// consumer sees `RecvError::Lagged` when the broadcast buffer wraps; that drops events but
+/// must not end the collector.
+pub fn spawn_collector(
+    telemetry: Arc<Telemetry>,
+    mut rx: tokio::sync::broadcast::Receiver<EngineEvent>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => telemetry.observe(&event),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("telemetry collector lagged; {n} engine events not counted");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 }
 
 pub async fn prometheus_metrics(State(state): State<AppState>) -> Response {

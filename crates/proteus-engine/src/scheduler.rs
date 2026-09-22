@@ -50,6 +50,20 @@ pub enum EngineEvent {
         task_id: String,
         error: String,
     },
+    /// A cancel request was accepted for a queued or running task.
+    TesTaskCanceled {
+        task_id: String,
+    },
+    /// A harvested artefact was written to (or found in) the content-addressable store.
+    CasStored {
+        duplicate: bool,
+        bytes: u64,
+    },
+    /// One full biophysical profile was computed.
+    BiophysicsAnalyzed {
+        duration_ms: u64,
+        residues: usize,
+    },
 }
 
 /// Result of a TES cancel request.
@@ -238,6 +252,23 @@ impl PipelineScheduler {
         &self.repo
     }
 
+    /// `analyze_pdb_file` plus a `BiophysicsAnalyzed` event carrying the wall-clock time.
+    fn analyze_timed(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<proteus_core::models::BiophysicalMetrics, proteus_core::CoreError> {
+        let started = std::time::Instant::now();
+        let metrics = analyze_pdb_file(path, None)?;
+        let _ = self.events_tx.send(EngineEvent::BiophysicsAnalyzed {
+            duration_ms: started.elapsed().as_millis() as u64,
+            residues: metrics
+                .secondary_structure_summary
+                .as_ref()
+                .map_or(0, |s| s.assignment.len()),
+        });
+        Ok(metrics)
+    }
+
     /// Process a job through the full computational pipeline.
     pub async fn process_job(&self, job_id: Uuid) -> Result<(), EngineError> {
         let job = match self.repo.get_job(job_id).await? {
@@ -304,7 +335,7 @@ impl PipelineScheduler {
         });
 
         // Compute biophysical metrics in Rust via pdbtbx
-        let mut metrics = match analyze_pdb_file(&run_result.pdb_path, None) {
+        let mut metrics = match self.analyze_timed(&run_result.pdb_path) {
             Ok(m) => m,
             Err(e) => {
                 let err_msg = format!("Biophysical analysis failed: {e}");
@@ -554,9 +585,8 @@ impl PipelineScheduler {
             if let Some(token) = self.cancel_tokens.lock().unwrap().get(task_id) {
                 token.cancel();
             }
-            let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
+            let _ = self.events_tx.send(EngineEvent::TesTaskCanceled {
                 task_id: task_id.to_string(),
-                error: "Task canceled by user".into(),
             });
             Ok(CancelOutcome::Canceled)
         } else {
@@ -802,9 +832,13 @@ impl PipelineScheduler {
                             .repo
                             .record_cas_object(&entry.hash, entry.size_bytes as i64)
                             .await;
+                        let _ = self.events_tx.send(EngineEvent::CasStored {
+                            duplicate: entry.is_duplicate,
+                            bytes: entry.size_bytes,
+                        });
                         debug!(hash = %entry.hash, "Harvested PDB structure to CAS");
                     }
-                    if let Ok(biophysics) = analyze_pdb_file(&out_target, None) {
+                    if let Ok(biophysics) = self.analyze_timed(&out_target) {
                         let _ = self.repo.insert_metrics(&biophysics).await;
                         debug!(
                             "Harvested and analyzed biophysical metrics for TES output: {}",
@@ -1182,6 +1216,84 @@ mod tests {
             "output was written outside the allowed dirs"
         );
         assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+    }
+
+    #[tokio::test]
+    async fn harvesting_a_structure_emits_cas_and_biophysics_events() {
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mut rx = scheduler.subscribe();
+        let crambin = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-core/tests/data/1crn.pdb"
+        );
+        // Run the same task twice: the second harvest of identical bytes is a CAS hit.
+        for id in ["t-cas-1", "t-cas-2"] {
+            let mut task = sh_task(id, &format!("cp {crambin} out.pdb"));
+            task.outputs.push(proteus_core::tes::TesOutput {
+                name: None,
+                description: None,
+                url: None,
+                path: "/data/out.pdb".into(),
+                type_: proteus_core::tes::TesFileType::File,
+            });
+            scheduler.submit_tes_task(task).await.unwrap();
+            let done = finished(&repo, id).await;
+            assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        }
+        let mut cas = Vec::new();
+        let mut bio = 0;
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                EngineEvent::CasStored { duplicate, bytes } => cas.push((duplicate, bytes)),
+                EngineEvent::BiophysicsAnalyzed { duration_ms, .. } => {
+                    bio += 1;
+                    assert!(duration_ms < 60_000);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(cas.len(), 2, "{cas:?}");
+        assert!(
+            !cas[0].0 && cas[0].1 > 1000,
+            "first store is a miss: {cas:?}"
+        );
+        assert!(cas[1].0, "second store is a hit: {cas:?}");
+        assert_eq!(bio, 2);
+    }
+
+    #[tokio::test]
+    async fn cancel_emits_a_canceled_event_and_the_worker_reports_the_end_once() {
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mut rx = scheduler.subscribe();
+        scheduler
+            .submit_tes_task(sh_task("t-cancel", "sleep 30"))
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if repo.get_tes_task("t-cancel").await.unwrap().unwrap().state == "RUNNING" {
+                break;
+            }
+        }
+        assert_eq!(
+            scheduler.cancel_tes_task("t-cancel").await.unwrap(),
+            CancelOutcome::Canceled
+        );
+        let done = finished(&repo, "t-cancel").await;
+        assert_eq!(done.state, TesState::Canceled);
+        let (mut started, mut canceled, mut failed) = (0, 0, 0);
+        while let Ok(ev) = rx.try_recv() {
+            match ev {
+                EngineEvent::TesTaskStarted { .. } => started += 1,
+                EngineEvent::TesTaskCanceled { .. } => canceled += 1,
+                EngineEvent::TesTaskFailed { .. } => failed += 1,
+                _ => {}
+            }
+        }
+        // One start, one cancel notification, and exactly one end-of-work report.
+        assert_eq!((started, canceled, failed), (1, 1, 1));
     }
 
     #[tokio::test]
