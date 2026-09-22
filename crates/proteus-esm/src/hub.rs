@@ -36,13 +36,70 @@ pub fn fetch(model_id: &str, file: &str, dir: &Path) -> Result<PathBuf> {
     let resp = req
         .call()
         .map_err(|e| EsmError::Hub(format!("GET {url}: {e}")))?;
-    let tmp = dir.join(format!("{file}.part"));
+    // The staging name must be unique per download. Two processes (or two threads) fetching the
+    // same checkpoint at once otherwise write the same `<file>.part`, and whichever renames
+    // second fails with NotFound because the first already moved it away.
+    let tmp = dir.join(format!(
+        "{file}.{}.{}.part",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
     {
         let mut out = std::fs::File::create(&tmp)?;
         let mut reader = resp.into_body().into_reader();
         std::io::copy(&mut reader, &mut out)?;
         out.flush()?;
     }
-    std::fs::rename(&tmp, &target)?;
+    // A concurrent fetch may have completed while this one was downloading; either copy is
+    // byte-identical, so take whichever landed and drop ours.
+    if let Err(e) = std::fs::rename(&tmp, &target) {
+        let _ = std::fs::remove_file(&tmp);
+        if !target.exists() {
+            return Err(e.into());
+        }
+    }
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for a CI failure: two threads fetching the same file collided on a fixed
+    /// `<file>.part` and the loser's rename failed with NotFound. Exercises the staging and
+    /// rename logic without touching the network by pre-creating the target.
+    #[test]
+    fn concurrent_fetch_of_a_cached_file_is_safe() {
+        let dir = std::env::temp_dir().join(format!("proteus-hub-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), b"{}").unwrap();
+        let results: Vec<_> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| s.spawn(|| fetch("facebook/esm2_t6_8M_UR50D", "config.json", &dir)))
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for r in &results {
+            assert!(r.is_ok(), "concurrent fetch failed: {r:?}");
+        }
+        // No staging files left behind.
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".part"))
+            .collect();
+        assert!(leftovers.is_empty(), "staging files left: {leftovers:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn model_dir_honours_the_cache_override() {
+        let dir = model_dir("facebook/esm2_t6_8M_UR50D").unwrap();
+        assert!(dir.ends_with("facebook--esm2_t6_8M_UR50D"), "{dir:?}");
+        assert!(model_dir("no-slash").is_err());
+    }
 }
