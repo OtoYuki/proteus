@@ -349,7 +349,29 @@ When the model carries no pLDDT (experimental structure), $w_{\text{pLDDT}} = 0$
 
 ## Provenance
 
-The legacy Python/Django/Celery undergraduate thesis prototype is preserved under git tag `v0.1.0-thesis`. The repository root and active codebase are 100% Rust.
+The legacy Python/Django/Celery undergraduate thesis prototype (2025) is preserved under git tag
+`v0.1.0-thesis`. The repository root and active codebase are 100% Rust.
+
+**How this was built.** The Rust rewrite was written over a few days in September 2026 with heavy
+AI assistance, and `git log` shows it: most of the commits land in one week. That is worth
+stating plainly, because velocity like that is a reason to check the work rather than trust it.
+
+So the work is set up to be checked, not trusted:
+
+```bash
+make validate   # 43 structures, every metric against mdtraj / FreeSASA / cctbx, tolerances committed
+```
+
+Every scientific number Proteus prints is compared, structure by structure, against an
+implementation written by someone else, and the comparison runs in CI on every push — that is
+what `.github/workflows/validate.yml` is. Where no reference implementation exists, the README
+says so on the row (heavy-atom overlap, salt bridges, π interactions, the fitness score) rather
+than implying more validation than there is. `scripts/smoke.sh` exercises every command and the
+daemon end to end; the GA4GH TES compliance suite runs against the daemon in CI; the ESM-2
+implementation is checked against `transformers` on every push.
+
+None of that makes the code good by itself. It makes the claims falsifiable by a stranger in one
+command, which is the part that matters when you cannot audit 12 000 lines by eye.
 
 ---
 
