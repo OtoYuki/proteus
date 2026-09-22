@@ -46,3 +46,7 @@ __pycache__/
 *.zip
 *.tar.gz
 *.rar
+
+# Recorded terminal sessions: the GIFs are committed, the casts regenerate
+# with docs/media/record.sh
+docs/media/*.cast
