@@ -27,16 +27,16 @@ cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not as
 | heavy-atom steric overlap, salt bridges, π interactions | Proteus-defined; labelled as such |
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
-SASA 2.5–4.3× faster than mdtraj's C++ kernel at equal point count and ~35× faster than
-Biopython; DSSP 1.2–14× vs mdtraj; φ/ψ + Ramachandran 33–167× vs mdtraj φ/ψ. 6VXX
-(22 812 atoms) full profile: 0.63 s.
+SASA 2.3–4.7× faster than mdtraj's C++ kernel at equal point count and ~33× faster than
+Biopython; DSSP 1.3–12× vs mdtraj; φ/ψ + Ramachandran 33–159× vs mdtraj's φ/ψ API. 6VXX
+(22 812 atoms) full profile: 0.69 s.
 
 ## Install
 
 ```bash
 # release binaries (Linux x86_64/aarch64, macOS x86_64/arm64)
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
-# from source (Rust 1.94+)
+# from source (Rust 1.94+); the binary is not on crates.io — that name is an unrelated project
 cargo install --git https://github.com/OtoYuki/proteus proteus-cli
 # container: the CLI works as is; `serve` needs the host's container socket for TES executors
 podman run --rm -v "$PWD:/w" ghcr.io/otoyuki/proteus analyze --pdb /w/structure.pdb
@@ -48,8 +48,9 @@ podman run --rm -p 8080:8080 -v /run/user/$(id -u)/podman/podman.sock:/var/run/d
 
 ## Architecture
 
-The project is a Cargo workspace of eight crates; `proteus-dssp` and `proteus-esm` have no
-dependency on the rest and are usable on their own:
+The project is a Cargo workspace of eight crates. `proteus-dssp` and `proteus-esm` depend on
+nothing else here and are usable on their own; the other six are the application and ship as
+the `proteus` binary:
 
 ```
 crates/
@@ -62,6 +63,11 @@ crates/
 ├── proteus-server/     Headless Axum daemon (proteusd): GA4GH TES 1.1, native API, SSE, OpenAPI
 └── proteus-cli/        The `proteus` binary: mutate, screen, analyze, view, esm, submit, serve
 ```
+
+`proteus-dssp` and `proteus-esm` are the two crates meant for use outside Proteus. The
+application crates are not published to crates.io — `proteus-engine` and `proteus-cli` are
+taken there by unrelated projects — so the binary installs from the releases, the ghcr image,
+or `cargo install --git`.
 
 ---
 

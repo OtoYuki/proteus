@@ -12,5 +12,12 @@ proteus submit --file wt.fasta && proteus inspect <job>
 proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --allow-dir /srv/tes
 ```
 
-Install with `cargo install proteus-cli`, from the GitHub releases, or as the
-`ghcr.io/otoyuki/proteus` image. The repository README documents every command and flag.
+Install from the [GitHub releases](https://github.com/OtoYuki/proteus/releases) (Linux and
+macOS, x86_64 and arm64), as the `ghcr.io/otoyuki/proteus` image, or from source:
+
+```bash
+cargo install --git https://github.com/OtoYuki/proteus proteus-cli
+```
+
+This crate is not published to crates.io — the name belongs to an unrelated project — so the
+git URL is the source install. The repository README documents every command and flag.

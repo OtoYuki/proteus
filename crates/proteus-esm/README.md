@@ -1,5 +1,10 @@
 # proteus-esm
 
+```toml
+[dependencies]
+proteus-esm = { git = "https://github.com/OtoYuki/proteus" }
+```
+
 ESM-2 protein language model inference in pure Rust on [candle](https://github.com/huggingface/candle):
 masked-LM log-probabilities, zero-shot mutation scores (wild-type and masked marginals, Meier et al.
 2021) and full 20×L deep-mutational-scan matrices. Loads any `facebook/esm2_*` safetensors

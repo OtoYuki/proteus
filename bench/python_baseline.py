@@ -39,7 +39,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=5)
     args = ap.parse_args()
-    out = {"host": platform.node(), "python": platform.python_version(),
+    out = {"host": platform.node(), "python": platform.python_version(), "runs": args.runs,
            "mdtraj": md.__version__, "freesasa": freesasa.__version__ if hasattr(freesasa, "__version__") else "?",
            "cpu": platform.processor() or platform.machine(), "results": {}}
     for label, rel in STRUCTURES:

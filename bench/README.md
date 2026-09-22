@@ -1,54 +1,56 @@
 # Benchmarks
 
-Measured on `archlinux` (x86_64), `rustc 1.94.1 (e408947bf 2026-03-25)`, Python 3.12.13, mdtraj 1.11.1.post2.
-Rust: criterion median (`cargo bench -p proteus-core`). Python: median of 5 calls after a warm-up, metric only
+Measured on `archlinux` (x86_64), `rustc 1.98.1 (48a229cea 2026-09-01)`, Python 3.12.13, mdtraj 1.11.1.post2.
+Rust: criterion median (`cargo bench -p proteus-core`). Python: median of 7 calls after a warm-up, metric only
 (parsing excluded on both sides), on protein heavy atoms. Same structure files, same metric definition.
+Both sides are measured back-to-back in one `bench/run.sh` on a desktop machine, so absolute times move
+a few per cent with machine load; the **ratios** are the stable quantity and are what the README quotes.
 Regenerate with `bench/run.sh`; raw numbers in `bench/results/`.
 
 ### SASA, Shrake–Rupley 960 pts/atom
 
 | structure | atoms | residues | proteus | mdtraj (C++) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 7.18 ms | 18.53 ms | 2.6× |
-| 1ubq | 602 | 76 | 12.82 ms | 31.74 ms | 2.5× |
-| 4hhb | 4384 | 574 | 100.43 ms | 257.96 ms | 2.6× |
-| 6vxx | 22812 | 2916 | 527.21 ms | 2.26 s | 4.3× |
+| 1crn | 327 | 46 | 8.39 ms | 23.52 ms | 2.8× |
+| 1ubq | 602 | 76 | 14.93 ms | 34.46 ms | 2.3× |
+| 4hhb | 4384 | 574 | 117.48 ms | 295.40 ms | 2.5× |
+| 6vxx | 22812 | 2916 | 608.46 ms | 2.85 s | 4.7× |
 
 ### SASA, Shrake–Rupley 96 vs 100 pts/atom
 
 | structure | atoms | residues | proteus | Biopython (pure Python) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 1.06 ms | 38.21 ms | 35.9× |
-| 1ubq | 602 | 76 | 2.00 ms | 68.73 ms | 34.4× |
-| 4hhb | 4384 | 574 | 16.07 ms | 551.88 ms | 34.3× |
-| 6vxx | 22812 | 2916 | 83.26 ms | 2.94 s | 35.3× |
+| 1crn | 327 | 46 | 1.25 ms | 44.80 ms | 35.9× |
+| 1ubq | 602 | 76 | 2.33 ms | 78.09 ms | 33.6× |
+| 4hhb | 4384 | 574 | 18.58 ms | 616.58 ms | 33.2× |
+| 6vxx | 22812 | 2916 | 99.06 ms | 3.30 s | 33.3× |
 
 ### SASA, Shrake–Rupley 96 vs 100 pts/atom
 
 | structure | atoms | residues | proteus | FreeSASA (C) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 1.06 ms | 1.48 ms | 1.4× |
-| 1ubq | 602 | 76 | 2.00 ms | 2.66 ms | 1.3× |
-| 4hhb | 4384 | 574 | 16.07 ms | 20.42 ms | 1.3× |
-| 6vxx | 22812 | 2916 | 83.26 ms | – | – |
+| 1crn | 327 | 46 | 1.25 ms | 1.75 ms | 1.4× |
+| 1ubq | 602 | 76 | 2.33 ms | 3.01 ms | 1.3× |
+| 4hhb | 4384 | 574 | 18.58 ms | 24.12 ms | 1.3× |
+| 6vxx | 22812 | 2916 | 99.06 ms | – | – |
 
 ### SASA, Shrake–Rupley 960 vs Lee–Richards
 
 | structure | atoms | residues | proteus | FreeSASA L&R (C) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 7.18 ms | 7.40 ms | 1.0× |
-| 1ubq | 602 | 76 | 12.82 ms | 14.55 ms | 1.1× |
-| 4hhb | 4384 | 574 | 100.43 ms | 117.43 ms | 1.2× |
-| 6vxx | 22812 | 2916 | 527.21 ms | – | – |
+| 1crn | 327 | 46 | 8.39 ms | 9.92 ms | 1.2× |
+| 1ubq | 602 | 76 | 14.93 ms | 16.70 ms | 1.1× |
+| 4hhb | 4384 | 574 | 117.48 ms | 133.80 ms | 1.1× |
+| 6vxx | 22812 | 2916 | 608.46 ms | – | – |
 
 ### DSSP 8-state
 
 | structure | atoms | residues | proteus | mdtraj (C++) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 11 µs | 153 µs | 13.9× |
-| 1ubq | 602 | 76 | 26 µs | 246 µs | 9.6× |
-| 4hhb | 4384 | 574 | 1.20 ms | 2.94 ms | 2.4× |
-| 6vxx | 22812 | 2916 | 30.15 ms | 35.20 ms | 1.2× |
+| 1crn | 327 | 46 | 12 µs | 154 µs | 12.3× |
+| 1ubq | 602 | 76 | 28 µs | 255 µs | 9.2× |
+| 4hhb | 4384 | 574 | 1.28 ms | 2.62 ms | 2.0× |
+| 6vxx | 22812 | 2916 | 31.94 ms | 40.33 ms | 1.3× |
 
 ### φ/ψ + MolProbity Ramachandran vs φ/ψ only
 
@@ -56,28 +58,28 @@ The mdtraj row measures its public per-call API, most of which is Python-side in
 
 | structure | atoms | residues | proteus | mdtraj `compute_phi`/`compute_psi` (Python API; rebuilds atom indices per call) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 4 µs | 686 µs | 166.9× |
-| 1ubq | 602 | 76 | 7 µs | 605 µs | 87.0× |
-| 4hhb | 4384 | 574 | 59 µs | 2.52 ms | 42.5× |
-| 6vxx | 22812 | 2916 | 322 µs | 10.47 ms | 32.5× |
+| 1crn | 327 | 46 | 5 µs | 734 µs | 159.2× |
+| 1ubq | 602 | 76 | 7 µs | 629 µs | 84.8× |
+| 4hhb | 4384 | 574 | 62 µs | 2.72 ms | 43.9× |
+| 6vxx | 22812 | 2916 | 349 µs | 11.53 ms | 33.1× |
 
 ### φ/ψ + MolProbity Ramachandran vs φ/ψ only
 
 | structure | atoms | residues | proteus | Biopython (pure Python) | ratio |
 |---|---|---|---|---|---|
-| 1crn | 327 | 46 | 4 µs | 4.64 ms | 1128.5× |
-| 1ubq | 602 | 76 | 7 µs | 7.66 ms | 1100.9× |
-| 4hhb | 4384 | 574 | 59 µs | 58.90 ms | 995.1× |
-| 6vxx | 22812 | 2916 | 322 µs | 301.14 ms | 935.9× |
+| 1crn | 327 | 46 | 5 µs | 5.50 ms | 1192.6× |
+| 1ubq | 602 | 76 | 7 µs | 8.76 ms | 1181.4× |
+| 4hhb | 4384 | 574 | 62 µs | 67.90 ms | 1095.8× |
+| 6vxx | 22812 | 2916 | 349 µs | 342.58 ms | 983.0× |
 
 ### Proteus-only kernels (no like-for-like baseline)
 
 | structure | heavy-atom overlap | interaction network | Kabsch RMSD (Cα) | full profile |
 |---|---|---|---|---|
-| 1crn | 517 µs | 119 µs | 1 µs | 7.95 ms |
-| 1ubq | 740 µs | 235 µs | 1 µs | 14.74 ms |
-| 4hhb | 5.56 ms | 1.87 ms | 6 µs | 110.12 ms |
-| 6vxx | 39.75 ms | 9.26 ms | 27 µs | 613.88 ms |
+| 1crn | 450 µs | 138 µs | 1 µs | 9.09 ms |
+| 1ubq | 715 µs | 271 µs | 1 µs | 16.09 ms |
+| 4hhb | 5.45 ms | 2.22 ms | 6 µs | 127.83 ms |
+| 6vxx | 35.78 ms | 11.26 ms | 30 µs | 694.46 ms |
 
 Ratios > 1 mean Proteus is faster. Where the point counts differ (96 vs 100, 960 vs Lee–Richards) or
 Proteus does more work (φ/ψ **plus** Top8000 Ramachandran scoring vs φ/ψ only), the row label says so.
@@ -115,9 +117,9 @@ jobs across a worker pool, so every worker's status update contends for that wri
 
 | scenario | result |
 |---|---|
-| 400 job inserts from 16 concurrent tasks | 33.1 ms → **12 071 writes/s**, zero rows lost |
-| 240 status updates to **one row** from 12 tasks | 20.4 ms → **11 792 updates/s**, converged, no lock errors surfaced |
-| readers during 200 concurrent inserts | **309 reads** completed in 15.6 ms — readers are not starved |
+| 400 job inserts from 16 concurrent tasks | 29.7 ms → **13 493 writes/s**, zero rows lost |
+| 240 status updates to **one row** from 12 tasks | 20.7 ms → **11 594 updates/s**, converged, no lock errors surfaced |
+| readers during 200 concurrent inserts | **703 reads** completed in 22.9 ms — readers are not starved |
 
 This is a single-process, single-file measurement on NVMe; it says the storage layer is not the
 bottleneck at the scale Proteus currently schedules, and it is **not** a claim about tens of

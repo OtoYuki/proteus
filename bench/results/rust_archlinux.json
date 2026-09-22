@@ -1,47 +1,47 @@
 {
  "host": "archlinux",
  "cpu": "x86_64",
- "rustc": "rustc 1.94.1 (e408947bf 2026-03-25)",
+ "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
  "results": {
   "1crn": {
-   "dssp": 1.101178296639629e-05,
-   "full_profile": 0.007953126581168831,
-   "interaction_network": 0.00011948456718106996,
-   "kabsch_rmsd": 8.732735072153383e-07,
-   "phi_psi_ramachandran": 4.107830946722123e-06,
-   "sasa_shrake_rupley_96": 0.001064855908119658,
-   "sasa_shrake_rupley_960": 0.007175973607142857,
-   "steric_overlap": 0.0005174356359022557
+   "dssp": 1.2482849969637164e-05,
+   "full_profile": 0.009085534233333335,
+   "interaction_network": 0.00013771625048449612,
+   "kabsch_rmsd": 1.0484817326243999e-06,
+   "phi_psi_ramachandran": 4.6107715612544805e-06,
+   "sasa_shrake_rupley_96": 0.0012476765172727273,
+   "sasa_shrake_rupley_960": 0.008391794718518518,
+   "steric_overlap": 0.000450380837282135
   },
   "1ubq": {
-   "dssp": 2.5767269934860735e-05,
-   "full_profile": 0.014741094510416669,
-   "interaction_network": 0.00023531992716802167,
-   "kabsch_rmsd": 1.2401864555727958e-06,
-   "phi_psi_ramachandran": 6.956621603747792e-06,
-   "sasa_shrake_rupley_96": 0.0019957741442307693,
-   "sasa_shrake_rupley_960": 0.012819689019480518,
-   "steric_overlap": 0.0007396739576923077
+   "dssp": 2.7670306642941875e-05,
+   "full_profile": 0.016094852479166668,
+   "interaction_network": 0.00027114948674242424,
+   "kabsch_rmsd": 1.4536862328023172e-06,
+   "phi_psi_ramachandran": 7.410972436894365e-06,
+   "sasa_shrake_rupley_96": 0.002325706192424242,
+   "sasa_shrake_rupley_960": 0.014931766308333334,
+   "steric_overlap": 0.0007145109182263816
   },
   "4hhb": {
-   "dssp": 0.0012021137666666667,
-   "full_profile": 0.11011629,
-   "interaction_network": 0.0018703282648148147,
-   "kabsch_rmsd": 5.578198671679198e-06,
-   "phi_psi_ramachandran": 5.9196642842560833e-05,
-   "sasa_shrake_rupley_96": 0.016066909977777776,
-   "sasa_shrake_rupley_960": 0.100426058,
-   "steric_overlap": 0.00555525765625
+   "dssp": 0.0012800293557710066,
+   "full_profile": 0.1278256125,
+   "interaction_network": 0.0022192610327134987,
+   "kabsch_rmsd": 6.189052955788743e-06,
+   "phi_psi_ramachandran": 6.196516257408098e-05,
+   "sasa_shrake_rupley_96": 0.01858148879385965,
+   "sasa_shrake_rupley_960": 0.11748355833333335,
+   "steric_overlap": 0.0054475928470588235
   },
   "6vxx": {
-   "dssp": 0.03015087725,
-   "full_profile": 0.6138779085,
-   "interaction_network": 0.009257900724358975,
-   "kabsch_rmsd": 2.7380498631009233e-05,
-   "phi_psi_ramachandran": 0.0003217578988095238,
-   "sasa_shrake_rupley_96": 0.08325840125,
-   "sasa_shrake_rupley_960": 0.527213253,
-   "steric_overlap": 0.039751862666666665
+   "dssp": 0.03193584293333333,
+   "full_profile": 0.6944640235,
+   "interaction_network": 0.01125676248452381,
+   "kabsch_rmsd": 3.025181965966483e-05,
+   "phi_psi_ramachandran": 0.0003485174539641944,
+   "sasa_shrake_rupley_96": 0.09905660483333334,
+   "sasa_shrake_rupley_960": 0.6084579535,
+   "steric_overlap": 0.035779110579059824
   }
  }
 }

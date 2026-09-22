@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-22
+
+The correctness-and-provenance release. Every structure now says where it came from and whether
+it ran at the tier you asked for; the interaction network, the task listing, the Nextflow path
+and the terminal renderer had real bugs fixed, each with a regression test. MSRV is 1.94 and
+every dependency is at its current major.
+
+**Upgrading:** fitness scores change for non-compact models (the compactness term was ~30 % too
+generous); Parquet exports are `schema_version = 4` and carry an `engine` column; `--executor
+host` is refused off loopback; building from source needs Rust 1.94.
+
 ### Added
 - Exports carry an `engine` column (`esmfold-api`, `oci`, `simulated`); `schema_version = 4`.
   `proteus inspect` shows the engine. Every runner records `metadata.engine`.
@@ -27,6 +38,11 @@ All notable changes to this project are documented here. The format follows
   `--tes IMAGE` a container task). Runs in CI. Replaces the two narrated demo scripts.
 - Every crate has a README (crates.io landing page); `docs/design/README.md` indexes the
   design records and states where the shipped code differs from each.
+- Install instructions corrected: the CLI crate README said `cargo install proteus-cli`, which
+  would install an unrelated package — that name, and `proteus-engine`, are taken on crates.io.
+  The binary installs from the GitHub releases, the ghcr image, or `cargo install --git`;
+  `proteus-dssp` and `proteus-esm` are the crates intended for reuse and package cleanly
+  (`cargo package`) under names that are free.
 
 ### Changed
 - **MSRV 1.88 → 1.94.** Dependencies at their current majors: bollard 0.18 → 0.21
@@ -190,6 +206,7 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/OtoYuki/proteus/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/OtoYuki/proteus/compare/v0.1.0-thesis...v0.3.0

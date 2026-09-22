@@ -34,8 +34,11 @@ def fmt(sec):
 
 lines = ["# Benchmarks", "",
          f"Measured on `{rust['host']}` ({rust['cpu']}), `{rust['rustc']}`, Python {py['python']}, mdtraj {py['mdtraj']}.",
-         "Rust: criterion median (`cargo bench -p proteus-core`). Python: median of 5 calls after a warm-up, metric only",
+         f"Rust: criterion median (`cargo bench -p proteus-core`). Python: median of {py.get('runs', 5)} calls after a"
+         " warm-up, metric only",
          "(parsing excluded on both sides), on protein heavy atoms. Same structure files, same metric definition.",
+         "Both sides are measured back-to-back in one `bench/run.sh` on a desktop machine, so absolute times move",
+         "a few per cent with machine load; the **ratios** are the stable quantity and are what the README quotes.",
          "Regenerate with `bench/run.sh`; raw numbers in `bench/results/`.", ""]
 structures = [s for s in ["1crn", "1ubq", "4hhb", "6vxx"] if s in rust["results"]]
 NOTES = {
