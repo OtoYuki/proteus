@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-22
+
+The TES-hardening release: executors run in their container image, the API takes a bearer
+token, `file://` access is confined to `--allow-dir`, and ESM-2 inference ships in pure Rust.
+
 ### Added
 - **`proteus-esm`: ESM-2 masked-LM inference in pure Rust** (candle) — Hub or local safetensors
   checkpoints, wild-type/masked marginal mutation scores, 20×L deep mutational scans. Parity with
@@ -97,5 +102,6 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/OtoYuki/proteus/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/OtoYuki/proteus/compare/v0.1.0-thesis...v0.3.0
