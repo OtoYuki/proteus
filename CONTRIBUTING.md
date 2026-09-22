@@ -17,6 +17,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all --check
 cargo deny check                       # licences, advisories, duplicates
 make validate                          # reference harness (downloads ~50 MB corpus once)
+cargo build --release && scripts/smoke.sh --tes docker.io/library/alpine:3.20   # end to end
+PROTEUS_TEST_OCI=1 cargo test -p proteus-engine -- --ignored  # container executor, needs a socket
 ```
 
 CI runs the same commands on Linux and macOS, plus the MSRV (`rust-version` in `Cargo.toml`).

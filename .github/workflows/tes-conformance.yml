@@ -95,3 +95,17 @@ jobs:
       - name: Daemon log
         if: always()
         run: tail -n 60 /tmp/proteusd.log
+
+  smoke:
+    name: scripts/smoke.sh (CLI, viewers, daemon, TES task in a container)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p proteus-cli
+      - name: Pre-pull alpine (anonymous Docker Hub pulls are rate-limited on hosted runners)
+        run: docker pull docker.io/library/alpine:3.20
+      - run: scripts/smoke.sh --tes docker.io/library/alpine:3.20
+      - name: Container-executor unit tests (need the Docker socket)
+        run: PROTEUS_TEST_OCI=1 cargo test -p proteus-engine --lib -- --ignored container_executor

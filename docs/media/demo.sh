@@ -21,7 +21,6 @@ sleep 3
 clear
 say "# 4. every number is checked against mdtraj / FreeSASA / cctbx on 43 structures, in CI"
 say "make validate"
-cargo test -p proteus-core --release --test validation -- --ignored --nocapture 2>/dev/null | rg --color never '^\| (id|---|1crn|1ubq|4hhb|1tim|2kod|6vxx|af-p69905|af-p38398)' 
-echo
-echo "test result: ok. 43/43 structures within tolerance"
+cargo test -p proteus-core --release --test validation -- --ignored --nocapture 2>/dev/null \
+  | rg --color never '^\| (id|---|1crn|1ubq|4hhb|1tim|2kod|6vxx|af-p69905|af-p38398)|^test result'
 sleep 4

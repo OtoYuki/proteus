@@ -22,8 +22,19 @@ All notable changes to this project are documented here. The format follows
 - The terminal viewer opens on the model's principal-axis frame (longest axis across the
   screen, viewer looking down the shortest) and fits the oriented extents to the viewport;
   `r` resets to that frame.
+- `scripts/smoke.sh`: an assertion-based end-to-end check of the release binary (analyze,
+  mutate|screen, exports, job lifecycle, every viewer back-end, daemon auth, TES listing; with
+  `--tes IMAGE` a container task). Runs in CI. Replaces the two narrated demo scripts.
+- Every crate has a README (crates.io landing page); `docs/design/README.md` indexes the
+  design records and states where the shipped code differs from each.
 
 ### Changed
+- Dependencies: bollard 0.18 → 0.21 (query-parameter API), pdbtbx 0.11 → 0.12 (`ReadOptions`),
+  reqwest 0.12 → 0.13 (`rustls` + `webpki-roots` features), nalgebra 0.33 → 0.34,
+  comfy-table 7 → 8, crossterm 0.28 → 0.29, criterion 0.5 → 0.8, tower-http 0.6 → 0.7,
+  base64 0.22 → 0.23, toml 0.8 → 1. MSRV stays 1.88 (sqlx 0.9 needs 1.94 and nalgebra 0.35
+  needs 1.89, so both wait). `make validate` and the container executor were re-verified on
+  the new versions.
 - Compactness term of the fitness score recalibrated to the empirical folded-protein law
   `Rg ≈ 2.2·N^0.38 Å` (was `2.82·N^0.392`, ~30 % too wide, which scored every model ≤ 1.4× the
   folded Rg as fully compact). Full credit ≤ 1.10×, none ≥ 2.0×. **Fitness scores change** for
@@ -73,6 +84,9 @@ All notable changes to this project are documented here. The format follows
   empty frame: with no C/N atoms every residue counted as a chain break. Continuity now falls
   back to the CA–CA distance (≤ 4.2 Å). Sub-pixel-thin geometry that straddled a pixel boundary
   was also skipped by the rasteriser; each triangle now lights at least its centroid pixel.
+- The recorded demo printed a hard-coded "43/43 structures within tolerance" line; it now
+  shows the harness's own result line. Doc comments and help text no longer claim "60 FPS",
+  ">10 GB/s" or "SOTA"; they say what the code does.
 - `examples/nextflow`: the config pinned `nf-ga4gh@0.3.0` (never published; current is 1.5.0)
   and an endpoint with `/v1`, which the plugin appends itself, and the pipeline never invoked
   proteus. It now runs `proteus mutate`/`proteus analyze` in the proteus container through TES.
