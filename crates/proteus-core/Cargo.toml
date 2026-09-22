@@ -9,6 +9,7 @@ readme = "README.md"
 description = "Domain models, FASTA parsing, in-silico mutagenesis, and native biophysical calculations for Proteus."
 
 [dependencies]
+base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

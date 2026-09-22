@@ -2629,7 +2629,6 @@ name = "proteus-cli"
 version = "0.5.0"
 dependencies = [
  "anyhow",
- "base64 0.23.1",
  "chrono",
  "clap",
  "comfy-table",
@@ -2652,6 +2651,7 @@ dependencies = [
 name = "proteus-core"
 version = "0.5.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "criterion",
  "flate2",

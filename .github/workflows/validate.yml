@@ -30,3 +30,21 @@ jobs:
         with:
           name: validation-table
           path: validate/last_run.md
+
+  esm2-parity:
+    name: ESM-2 vs transformers (8M checkpoint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # 31 MB of safetensors; cached so the Hub is hit once per checkpoint revision.
+      - name: Cache the ESM-2 8M checkpoint
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/proteus/esm
+          key: esm2-t6-8M-${{ hashFiles('crates/proteus-esm/src/hub.rs') }}
+      - name: Parity and forward-pass-count tests
+        run: |
+          cargo test -p proteus-esm --release -- --ignored --nocapture \
+            esm2_t6_8m_matches_transformers library_scoring_reuses_forward_passes

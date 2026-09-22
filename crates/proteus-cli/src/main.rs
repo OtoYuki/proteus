@@ -1,7 +1,6 @@
 mod esm_cmd;
 
 use anyhow::{Context, Result};
-use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Table};
@@ -769,69 +768,40 @@ async fn main() -> Result<()> {
                     std::env::temp_dir().join(format!("proteus_view_{sanitized}.html"))
                 });
 
-                let b64_pdb =
-                    base64::engine::general_purpose::STANDARD.encode(pdb_content.as_bytes());
-                // Mol* needs to be told the format; mmCIF handed over as 'pdb' loads nothing.
                 let format = proteus_core::io::sniff_format(
                     &pdb_content,
                     target_path.file_name().and_then(|n| n.to_str()),
                 );
-                let molstar_format = match format {
-                    proteus_core::io::StructureFormat::MmCif => "mmcif",
-                    proteus_core::io::StructureFormat::Pdb => "pdb",
-                };
-                let (predicted, scale) = match proteus_render::parse_pdb_structure(&pdb_content) {
-                    Ok(sd) => (sd.is_predicted(), sd.plddt_scale),
-                    Err(_) => (false, 1.0),
-                };
-                let representation_params =
-                    proteus_core::io::molstar_representation_params(predicted, format, scale);
-                let html_content = format!(
-                    r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Proteus 3D Structure Viewer - {title}</title>
-    <link rel="stylesheet" type="text/css" href="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.css" />
-    <script type="text/javascript" src="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.js"></script>
-    <style>
-        body, html {{ width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #fff; }}
-        #app {{ width: 100%; height: 100%; position: absolute; }}
-        #header {{ position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; pointer-events: none; background: rgba(15, 23, 42, 0.85); padding: 12px 20px; border-radius: 12px; backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
-        #header h1 {{ margin: 0; font-size: 16px; font-weight: 700; color: #38bdf8; letter-spacing: -0.025em; }}
-        #header p {{ margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; }}
-    </style>
-</head>
-<body>
-    <div id="header">
-        <h1>Proteus Bio-Compute 3D Viewer</h1>
-        <p>{title}</p>
-    </div>
-    <div id="app"></div>
-    <script>
-        const pdbB64 = `{b64_pdb}`;
-        document.addEventListener('DOMContentLoaded', async () => {{
-            const viewer = await molstar.Viewer.create('app', {{
-                layoutIsExpanded: false,
-                layoutShowControls: true,
-                layoutShowRemoteState: false,
-                layoutShowSequence: true,
-                layoutShowLog: false,
-                viewportShowExpand: false,
-            }});
-            const rawPdb = atob(pdbB64);
-            const blob = new Blob([rawPdb], {{ type: 'text/plain' }});
-            const url = URL.createObjectURL(blob);
-            // Mol* Viewer API: colouring is chosen through representationParams.theme;
-            // `representationStyle` is not a recognised option and was silently ignored.
-            await viewer.loadStructureFromUrl(url, '{molstar_format}', false, {{
-                representationParams: {representation_params}
-            }});
-        }});
-    </script>
-</body>
-</html>"#
-                );
+                let (color, secondary_structure) =
+                    match proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None) {
+                        Ok(pdb) => {
+                            let scale = proteus_render::parse_pdb_structure(&pdb_content)
+                                .map(|sd| sd.plddt_scale)
+                                .unwrap_or(1.0);
+                            let source = proteus_core::metrics::analyze_pdb_detailed(&pdb, None)
+                                .ok()
+                                .map(|a| a.metrics.confidence_source);
+                            (
+                                proteus_core::webview::WebColorScheme::from_provenance(
+                                    source, scale,
+                                ),
+                                proteus_core::webview::dssp_by_residue(&pdb),
+                            )
+                        }
+                        Err(_) => (
+                            proteus_core::webview::WebColorScheme::SecondaryStructure,
+                            Vec::new(),
+                        ),
+                    };
+                let html_content = proteus_core::webview::WebViewPage {
+                    title: "Proteus structure viewer",
+                    caption: &title,
+                    structure: &pdb_content,
+                    format,
+                    color,
+                    secondary_structure: &secondary_structure,
+                }
+                .render();
 
                 tokio::fs::write(&html_path, html_content)
                     .await

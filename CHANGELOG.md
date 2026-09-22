@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **The browser page is self-contained and no longer uses Mol\*.** `proteus view --html/--web`
+  and the daemon's `/view/{job}` embedded a `<script src="https://unpkg.com/molstar@3.30.0">`
+  tag — a 2023 release, two majors behind, fetched from a CDN at open time. That page did not
+  work on an HPC login node, an airgapped cluster or a plane, which is where Proteus is meant
+  to be used, and it tied a scientific artifact to a third party's uptime. The viewer is now
+  3Dmol.js 2.5.5 (BSD-3, 525 KB vs Mol\*'s 4.9 MB) vendored into the binary, so the page is a
+  single file that opens offline. Mol\* remains the better tool for interactive analysis and
+  the structure file is always on disk for it; Proteus's page shows one structure, one
+  representation, one colouring, and none of Mol\*'s machinery was used.
+- The page is rendered by one module (`proteus_core::webview`) instead of two near-identical
+  copies in `proteus-server` and `proteus-cli`, and **carries Proteus's own DSSP** rather than
+  the viewer's built-in guess: on 1CRN the browser now shows the assignment that agrees with
+  `mdtraj.compute_dssp` on 46/46 residues, where 3Dmol.js's heuristic misses the 3₁₀ helix at
+  42–44. The web page can no longer disagree with `analyze`, the terminal viewer or the export.
+
 ## [0.5.0] — 2026-09-22
 
 The correctness-and-provenance release. Every structure now says where it came from and whether

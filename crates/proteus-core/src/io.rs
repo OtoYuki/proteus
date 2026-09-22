@@ -72,37 +72,6 @@ pub fn sniff_format(text: &str, hint: Option<&str>) -> StructureFormat {
     }
 }
 
-/// Mol* `representationParams` (a JSON object literal) that colours a structure the way this
-/// project reports it. Mol*'s own `plddt-confidence` theme only applies to mmCIF files carrying
-/// `ma_qa_metric_local` (AlphaFold-DB); every PDB-format prediction (ESMFold API, container
-/// output) is silently left in chain colours by it. Those get the `uncertainty` theme (per-atom
-/// B-factor) with the AlphaFold palette and cut-points, over the file's own scale
-/// (`plddt_scale` = 1 for 0–100 files, 100 for 0–1 files). Experimental structures are coloured
-/// by secondary structure.
-pub fn molstar_representation_params(
-    predicted: bool,
-    format: StructureFormat,
-    plddt_scale: f64,
-) -> String {
-    match (predicted, format) {
-        (false, _) => "{ theme: { globalName: 'secondary-structure' } }".to_string(),
-        (true, StructureFormat::MmCif) => {
-            "{ theme: { globalName: 'plddt-confidence' } }".to_string()
-        }
-        (true, StructureFormat::Pdb) => {
-            let top = 100.0 / plddt_scale;
-            format!(
-                // Stops in pLDDT order (verified in a headless browser: the theme's internal
-                // `reverse` flag flips the list, so a low-to-high list maps low to orange).
-                "{{ theme: {{ globalName: 'uncertainty', globalColorParams: {{ domain: [0, {top}], \
-                 list: {{ kind: 'interpolate', colors: [[0xFF7D45, 0], [0xFF7D45, 0.5], \
-                 [0xFFDB13, 0.5], [0xFFDB13, 0.7], [0x65CBF3, 0.7], [0x65CBF3, 0.9], \
-                 [0x0053D6, 0.9], [0x0053D6, 1]] }} }} }} }}"
-            )
-        }
-    }
-}
-
 /// PDB record types that coordinate-based analysis needs. Sequence and annotation records
 /// (SEQRES, SEQADV, DBREF, HELIX, SHEET, SITE, LINK, …) are dropped before parsing: they carry
 /// nothing Proteus uses, and pdbtbx's lexer rejects legitimate deposited files on malformed
@@ -358,25 +327,6 @@ ATOM 2 C CA . ALA A 1 2 ? 3.8 0.0 0.0 1.00 10.00 2 A 1\n";
             sniff_format("ATOM", Some("x.cif.gz")),
             StructureFormat::MmCif
         );
-    }
-
-    #[test]
-    fn molstar_params_follow_provenance_and_format() {
-        assert!(
-            molstar_representation_params(false, StructureFormat::Pdb, 1.0)
-                .contains("secondary-structure")
-        );
-        assert!(
-            molstar_representation_params(true, StructureFormat::MmCif, 1.0)
-                .contains("plddt-confidence")
-        );
-        let pdb = molstar_representation_params(true, StructureFormat::Pdb, 1.0);
-        assert!(
-            pdb.contains("'uncertainty'") && pdb.contains("domain: [0, 100]"),
-            "{pdb}"
-        );
-        let esm_api = molstar_representation_params(true, StructureFormat::Pdb, 100.0);
-        assert!(esm_api.contains("domain: [0, 1]"), "{esm_api}");
     }
 
     #[test]

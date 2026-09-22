@@ -402,53 +402,53 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 .into_response()
         }
     };
-    let (format, predicted, scale) =
-        match proteus_core::io::load_structure(std::path::Path::new(&pred.pdb_path)) {
-            Ok(loaded) => {
-                let analysis = proteus_core::metrics::analyze_pdb_detailed_with_header(
-                    &loaded.pdb,
-                    None,
-                    Some(&loaded.header_preview),
-                );
-                let predicted = analysis
-                    .as_ref()
-                    .map(|a| a.metrics.confidence_source.is_predicted())
-                    .unwrap_or(false);
-                // Raw B-factor scale of the file: 0–1 (ESMFold API) or 0–100.
-                let max_b = loaded
-                    .pdb
-                    .atoms()
-                    .map(|a| a.b_factor())
-                    .fold(f64::MIN, f64::max);
-                let scale = if max_b > 0.0 && max_b <= 1.0 {
-                    100.0
-                } else {
-                    1.0
-                };
-                (loaded.format, predicted, scale)
-            }
-            Err(_) => (proteus_core::io::StructureFormat::Pdb, false, 1.0),
-        };
-    let molstar_format = match format {
-        proteus_core::io::StructureFormat::MmCif => "mmcif",
-        proteus_core::io::StructureFormat::Pdb => "pdb",
+    let loaded = match proteus_core::io::load_structure(std::path::Path::new(&pred.pdb_path)) {
+        Ok(l) => l,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to read prediction artifact: {e}"),
+            )
+                .into_response()
+        }
     };
-    let representation_params =
-        proteus_core::io::molstar_representation_params(predicted, format, scale);
+    let analysis = proteus_core::metrics::analyze_pdb_detailed_with_header(
+        &loaded.pdb,
+        None,
+        Some(&loaded.header_preview),
+    );
+    // Raw B-factor scale of the file: 0-1 (ESMFold API) or 0-100.
+    let max_b = loaded
+        .pdb
+        .atoms()
+        .map(|a| a.b_factor())
+        .fold(f64::MIN, f64::max);
+    let plddt_scale = if max_b > 0.0 && max_b <= 1.0 {
+        100.0
+    } else {
+        1.0
+    };
+    let color = proteus_core::webview::WebColorScheme::from_provenance(
+        analysis.as_ref().ok().map(|a| a.metrics.confidence_source),
+        plddt_scale,
+    );
+    let secondary_structure = proteus_core::webview::dssp_by_residue(&loaded.pdb);
+
     let engine = proteus_engine::engine_name(pred.metadata.as_ref());
-    let provenance = if engine == proteus_engine::ENGINE_SIMULATED {
-        "SIMULATED: synthetic helix, not a prediction".to_string()
+    let caption = if engine == proteus_engine::ENGINE_SIMULATED {
+        format!("job {job_id} — SIMULATED: synthetic helix, not a prediction")
     } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
         format!(
-            "Engine: {engine} (tier '{}' not honoured: {})",
+            "job {job_id} — {engine}; tier '{}' not honoured: {}",
             d.requested, d.reason
         )
     } else {
-        format!("Engine: {engine}")
+        format!("job {job_id} — engine: {engine}")
     };
-    let provenance = html_escape(&provenance);
-    // The structure is embedded rather than fetched by the page: Mol*'s own fetch carries no
-    // Authorization header, so behind --auth-token a second request would be refused.
+
+    // The structure is embedded rather than fetched by the page: a second request would carry
+    // no Authorization header and be refused behind --auth-token, and the page must also open
+    // from disk with no server at all.
     let text = match proteus_core::io::read_structure_text(std::path::Path::new(&pred.pdb_path)) {
         Ok(t) => t,
         Err(e) => {
@@ -459,60 +459,14 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 .into_response()
         }
     };
-    let b64 = {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
-    };
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Proteus 3D Structure Viewer</title>
-    <link rel="stylesheet" type="text/css" href="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.css" />
-    <script type="text/javascript" src="https://unpkg.com/molstar@3.30.0/build/viewer/molstar.js"></script>
-    <style>
-        body, html {{ width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #111; color: #fff; }}
-        #app {{ width: 100%; height: 100%; position: absolute; }}
-        #header {{ position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; pointer-events: none; background: rgba(0,0,0,0.75); padding: 8px 16px; border-radius: 8px; backdrop-filter: blur(8px); border: 1px solid #333; }}
-        #header h1 {{ margin: 0; font-size: 14px; font-weight: 600; color: #4ade80; }}
-        #header p {{ margin: 2px 0 0 0; font-size: 11px; color: #aaa; }}
-    </style>
-</head>
-<body>
-    <div id="header">
-        <h1>Proteus Bio-Compute 3D Viewer</h1>
-        <p>Job ID: {job_id}</p>
-        <p>{provenance}</p>
-    </div>
-    <div id="app"></div>
-    <script>
-        document.addEventListener('DOMContentLoaded', async () => {{
-            const viewer = await molstar.Viewer.create('app', {{
-                layoutIsExpanded: false,
-                layoutShowControls: true,
-                layoutShowRemoteState: false,
-                layoutShowSequence: true,
-                layoutShowLog: false,
-                viewportShowExpand: false,
-            }});
-            const blob = new Blob([atob(`{b64}`)], {{ type: 'text/plain' }});
-            await viewer.loadStructureFromUrl(URL.createObjectURL(blob), '{molstar_format}', false, {{
-                representationParams: {representation_params}
-            }});
-        }});
-    </script>
-</body>
-</html>"#
-    );
+    let html = proteus_core::webview::WebViewPage {
+        title: "Proteus structure viewer",
+        caption: &caption,
+        structure: &text,
+        format: loaded.format,
+        color,
+        secondary_structure: &secondary_structure,
+    }
+    .render();
     axum::response::Html(html).into_response()
-}
-
-/// Minimal escaping for text interpolated into the viewer page.
-fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }

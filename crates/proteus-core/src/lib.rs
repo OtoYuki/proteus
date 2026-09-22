@@ -15,6 +15,7 @@ pub mod sasa;
 pub mod sequence;
 pub mod structure;
 pub mod tes;
+pub mod webview;
 
 pub use clash::*;
 pub use confidence::ConfidenceSource;
