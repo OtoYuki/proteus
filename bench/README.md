@@ -52,7 +52,9 @@ Regenerate with `bench/run.sh`; raw numbers in `bench/results/`.
 
 ### φ/ψ + MolProbity Ramachandran vs φ/ψ only
 
-| structure | atoms | residues | proteus | mdtraj (C++) | ratio |
+The mdtraj row measures its public per-call API, most of which is Python-side index building at these sizes; it is not a comparison of dihedral kernels.
+
+| structure | atoms | residues | proteus | mdtraj `compute_phi`/`compute_psi` (Python API; rebuilds atom indices per call) | ratio |
 |---|---|---|---|---|---|
 | 1crn | 327 | 46 | 4 µs | 686 µs | 166.9× |
 | 1ubq | 602 | 76 | 7 µs | 605 µs | 87.0× |

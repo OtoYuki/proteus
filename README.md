@@ -23,7 +23,7 @@ cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not as
 | Kabsch–Sander DSSP (`proteus-dssp`, standalone crate) | mdtraj, ≥ 98 % per-residue |
 | MolProbity Ramachandran (Top8000 contours from cctbx) | cctbx `ramalyze`, 100 % label agreement |
 | Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj ≤ 1 %, FreeSASA ≤ 4 % (L&R, ProtOr radii) |
-| hydrogen-bond network | mdtraj `baker_hubbard` (explicit-H reference), 94.9–100 % recall |
+| hydrogen-bond network | mdtraj `baker_hubbard` (explicit-H reference, six NMR entries): 86–100 % recall, 58–76 % precision — heavy-atom criteria over-detect by 1.3–1.7× |
 | heavy-atom steric overlap, salt bridges, π interactions | Proteus-defined; labelled as such |
 
 **Speed** (same metric, same file, median wall-clock; full table in [`bench/README.md`](bench/README.md)):
@@ -38,8 +38,10 @@ Biopython; DSSP 1.2–14× vs mdtraj; φ/ψ + Ramachandran 33–167× vs mdtraj 
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
 # from source (Rust 1.88+)
 cargo install --git https://github.com/OtoYuki/proteus proteus-cli
-# container
+# container: the CLI works as is; `serve` needs the host's container socket for TES executors
 podman run --rm -v "$PWD:/w" ghcr.io/otoyuki/proteus analyze --pdb /w/structure.pdb
+podman run --rm -p 8080:8080 -v /run/user/$(id -u)/podman/podman.sock:/var/run/docker.sock \
+  -v proteus-data:/data ghcr.io/otoyuki/proteus serve --host 0.0.0.0 --allow-dir /data
 ```
 
 ---
@@ -71,8 +73,8 @@ Generates high-density mutant variant libraries directly from wildtype scaffolds
 
 ### 2. High-Throughput Screening Funnel & Parquet Data Lake
 Evaluates variant libraries across multi-threaded computational workers:
-- **Multi-Tier Inference:** Dispatches structural prediction jobs to a local OCI container image when present, else the Meta ESMFold API. When neither is reachable the offline simulator produces a placeholder helix; those structures are flagged `engine = simulated`, excluded from the ranking unless `--runner simulated` is given, and never presented as predictions.
-- **Weighted Composite Fitness Score:** Ranks candidates by a weighted sum of pLDDT confidence (predicted models only), compactness ($R_g$ vs Flory scaling), MolProbity Ramachandran quality, hydrophobic core burial and non-covalent network density, minus a steric-overlap penalty. For experimental structures the pLDDT weight is redistributed over the other terms.
+- **Multi-Tier Inference:** Dispatches structural prediction jobs to a local OCI container image when present, else the Meta ESMFold API. When neither is reachable the offline simulator produces a placeholder helix; those structures are flagged `engine = simulated`, excluded from the ranking unless `--runner simulated` is given, and never presented as predictions. **No prediction image is published:** to use the container tier, build or pull an ESMFold/Boltz image yourself and point `PROTEUS_IMAGE_FAST` / `PROTEUS_IMAGE_SOTA` at it (the Boltz tier writes Boltz-format FASTA; the relax tier is not implemented).
+- **Weighted Composite Fitness Score:** Ranks candidates by a weighted sum of pLDDT confidence (predicted models only), compactness ($R_g$ vs the empirical folded-protein law $2.2\,N^{0.38}$ Å), MolProbity Ramachandran quality, hydrophobic core burial and non-covalent network density, minus a steric-overlap penalty. For experimental structures the pLDDT weight is redistributed over the other terms.
 - **Columnar Data Lake Export:** Serializes screened variant batches into ZSTD-compressed Apache Parquet files using canonical Apache Arrow schemas for direct query execution in DuckDB, Polars, or PyArrow.
 
 ### 3. Pure-Rust Terminal 3D Rasterizer & Live Telemetry Dashboard

@@ -17,7 +17,7 @@ ROWS = [
     ("SASA, Shrake–Rupley 96 vs 100 pts/atom", "sasa_shrake_rupley_96", "freesasa_sr_100", "FreeSASA (C)"),
     ("SASA, Shrake–Rupley 960 vs Lee–Richards", "sasa_shrake_rupley_960", "freesasa_lr", "FreeSASA L&R (C)"),
     ("DSSP 8-state", "dssp", "mdtraj_dssp", "mdtraj (C++)"),
-    ("φ/ψ + MolProbity Ramachandran vs φ/ψ only", "phi_psi_ramachandran", "mdtraj_phi_psi", "mdtraj (C++)"),
+    ("φ/ψ + MolProbity Ramachandran vs φ/ψ only", "phi_psi_ramachandran", "mdtraj_phi_psi", "mdtraj `compute_phi`/`compute_psi` (Python API; rebuilds atom indices per call)"),
     ("φ/ψ + MolProbity Ramachandran vs φ/ψ only", "phi_psi_ramachandran", "biopython_phi_psi", "Biopython (pure Python)"),
 ]
 
@@ -38,8 +38,14 @@ lines = ["# Benchmarks", "",
          "(parsing excluded on both sides), on protein heavy atoms. Same structure files, same metric definition.",
          "Regenerate with `bench/run.sh`; raw numbers in `bench/results/`.", ""]
 structures = [s for s in ["1crn", "1ubq", "4hhb", "6vxx"] if s in rust["results"]]
+NOTES = {
+    "mdtraj_phi_psi": "The mdtraj row measures its public per-call API, most of which is Python-side index building at these sizes; it is not a comparison of dihedral kernels.",
+}
 for label, group, key, base_label in ROWS:
-    lines += [f"### {label}", "", f"| structure | atoms | residues | proteus | {base_label} | ratio |", "|---|---|---|---|---|---|"]
+    lines += [f"### {label}", ""]
+    if key in NOTES:
+        lines += [NOTES[key], ""]
+    lines += [f"| structure | atoms | residues | proteus | {base_label} | ratio |", "|---|---|---|---|---|---|"]
     for s in structures:
         r = rust["results"][s].get(group)
         p = py["results"].get(s, {})
@@ -56,5 +62,14 @@ lines += ["", "Ratios > 1 mean Proteus is faster. Where the point counts differ 
           "Proteus does more work (φ/ψ **plus** Top8000 Ramachandran scoring vs φ/ψ only), the row label says so.",
           "The interaction network and overlap score have no drop-in equivalent in mdtraj/Biopython (mdtraj's",
           "`baker_hubbard` needs explicit hydrogens), so they are reported without a ratio.", ""]
-(ROOT / "bench" / "README.md").write_text("\n".join(lines))
+# Everything from the first hand-written `## ` section onward (ProteinGym, storage, …) is kept
+# verbatim; only the kernel tables above it are regenerated.
+readme = ROOT / "bench" / "README.md"
+tail = ""
+if readme.exists():
+    old = readme.read_text()
+    idx = old.find("\n## ")
+    if idx != -1:
+        tail = old[idx:]
+readme.write_text("\n".join(lines).rstrip("\n") + "\n" + tail)
 print("wrote bench/README.md")

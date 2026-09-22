@@ -65,6 +65,13 @@ impl EsmConfig {
                 cfg.position_embedding_type
             )));
         }
+        if cfg.emb_layer_norm_before {
+            return Err(EsmError::Config(
+                "emb_layer_norm_before = true (ESM-1b lineage) is not implemented; every ESM-2 \
+                 checkpoint has it false"
+                    .into(),
+            ));
+        }
         if !cfg.hidden_size.is_multiple_of(cfg.num_attention_heads) {
             return Err(EsmError::Config(
                 "hidden_size must be divisible by heads".into(),
@@ -312,5 +319,34 @@ impl Esm2 {
         let logits = self.logits(tokens)?;
         let lp = candle_nn::ops::log_softmax(&logits, D::Minus1)?;
         Ok(lp.to_vec2::<f32>()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with(extra: &str) -> Result<EsmConfig> {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("config.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"hidden_size":320,"num_hidden_layers":6,"num_attention_heads":20,
+                "intermediate_size":1280,"vocab_size":33,"position_embedding_type":"rotary"{extra}}}"#
+            ),
+        )
+        .unwrap();
+        EsmConfig::from_file(&p)
+    }
+
+    #[test]
+    fn esm1b_style_pre_embedding_layer_norm_is_refused() {
+        // The forward pass has no such layer; loading such a checkpoint would silently produce
+        // wrong logits rather than fail.
+        assert!(config_with("").is_ok());
+        assert!(config_with(r#","emb_layer_norm_before":false"#).is_ok());
+        let err = config_with(r#","emb_layer_norm_before":true"#).unwrap_err();
+        assert!(err.to_string().contains("emb_layer_norm_before"), "{err}");
     }
 }

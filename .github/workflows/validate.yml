@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   reference-validation:
     name: corpus vs mdtraj / freesasa / cctbx

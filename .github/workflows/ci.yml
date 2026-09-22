@@ -9,6 +9,9 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test (${{ matrix.os }}, ${{ matrix.toolchain }})

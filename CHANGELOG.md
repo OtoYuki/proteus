@@ -13,6 +13,17 @@ All notable changes to this project are documented here. The format follows
   `read` series, which nothing ever wrote, are gone.
 - `proteus submit --wait=false` enqueues and returns.
 
+### Changed
+- Compactness term of the fitness score recalibrated to the empirical folded-protein law
+  `Rg ≈ 2.2·N^0.38 Å` (was `2.82·N^0.392`, ~30 % too wide, which scored every model ≤ 1.4× the
+  folded Rg as fully compact). Full credit ≤ 1.10×, none ≥ 2.0×. **Fitness scores change** for
+  non-compact models; compact ones are unaffected.
+- Prediction-tier container images are configurable (`PROTEUS_IMAGE_FAST|SOTA|RELAX`) and
+  documented as bring-your-own; the Boltz tier writes Boltz-format FASTA (`>A|protein|empty`);
+  the relax tier is refused up front instead of failing inside the container.
+- H-bond validation covers all six hydrogen-bearing corpus entries (was four) and reports
+  precision (58–76 %) next to recall (86–100 %), with floors on both.
+
 ### Fixed
 - `proteus screen --runner auto` ranked the offline simulator's placeholder helices as if
   they were predictions whenever the ESMFold API was unreachable. Simulated structures are now
@@ -27,6 +38,17 @@ All notable changes to this project are documented here. The format follows
   next state write and the task ran to `COMPLETE`. The cancel token is now registered before
   the first write and non-terminal writes are refused once the row is `CANCELED`.
 - `proteus inspect` labelled secondary structure "P-SEA"; it is DSSP.
+- A `nan`/`inf` coordinate in a PDB or mmCIF atom record panicked inside the parser; it is now a
+  parse error naming the line.
+- The OCI runner derived the rootless-Podman socket path from `$UID`, which shells do not
+  export; it now reads `/proc/self/status` like the TES executor. Containers are removed
+  explicitly after `wait` instead of relying on `AutoRemove`.
+- `proteus-esm` refuses configs with `emb_layer_norm_before = true` instead of loading them
+  and producing wrong logits.
+- `validate/corpus.toml`: 1L2Y is NMR and 1LB5 is X-ray (labels were swapped).
+- `bench/README.md`: the φ/ψ row is labelled as mdtraj's per-call Python API, not a C++ kernel;
+  `bench/render.py` no longer discards the hand-written sections when regenerating.
+- CI workflows run with a read-only `GITHUB_TOKEN`.
 
 ## [0.4.0] — 2026-09-22
 

@@ -25,5 +25,6 @@ hub = ["dep:ureq"]
 # that `--all-features` builds on every platform.
 
 [dev-dependencies]
+tempfile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
