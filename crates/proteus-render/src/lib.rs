@@ -717,6 +717,64 @@ mod tests {
         );
     }
 
+    /// Secondary structure must survive a file that does not declare it.
+    ///
+    /// **Predicted structures carry no `HELIX`/`SHEET` records** — an ESMFold response has
+    /// none, and neither does the offline simulator's output. A viewer that reads secondary
+    /// structure from those records therefore has nothing to read for exactly the files a
+    /// protein-engineering tool exists to look at, and falls back to a guess.
+    ///
+    /// Proteus runs Kabsch–Sander DSSP on the coordinates, so the render is identical whether
+    /// the annotations are present or not. Measured against the deposited 1PGB with its five
+    /// `HELIX`/`SHEET` records stripped, the rendered colour composition does not move at all;
+    /// a viewer that reads the records saw its β-strand coverage nearly halve on the same pair
+    /// of files.
+    #[test]
+    fn secondary_structure_survives_a_file_that_does_not_declare_it() {
+        let with_records = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-core/tests/data/1crn.pdb"
+        ))
+        .unwrap();
+        assert!(
+            with_records
+                .lines()
+                .any(|l| l.starts_with("HELIX") || l.starts_with("SHEET")),
+            "fixture no longer carries the annotations this test strips"
+        );
+        let stripped: String = with_records
+            .lines()
+            .filter(|l| !l.starts_with("HELIX") && !l.starts_with("SHEET"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+
+        let a = parse_pdb_structure(&with_records).unwrap();
+        let b = parse_pdb_structure(&stripped).unwrap();
+
+        // Same count of vertices in each secondary-structure class, not merely "some SS".
+        let tally = |d: &StructureRenderData| {
+            let mut counts = [0usize; 3];
+            for v in &d.ribbon_mesh.vertices {
+                counts[match v.secondary_structure {
+                    proteus_core::structure::SecondaryStructure::Helix => 0,
+                    proteus_core::structure::SecondaryStructure::Strand => 1,
+                    proteus_core::structure::SecondaryStructure::Coil => 2,
+                }] += 1;
+            }
+            counts
+        };
+        let (ta, tb) = (tally(&a), tally(&b));
+        assert_eq!(
+            ta, tb,
+            "the render changed when HELIX/SHEET records were removed: {ta:?} vs {tb:?} — \
+             secondary structure must come from the coordinates, not the annotations"
+        );
+        assert!(
+            ta[0] > 0 && ta[1] > 0,
+            "crambin has both a helix and a sheet; got {ta:?}"
+        );
+    }
+
     /// A picture that cannot separate neighbouring residues must say so — and the advice it
     /// gives has to be true, which is the part that is easy to get wrong.
     #[test]
