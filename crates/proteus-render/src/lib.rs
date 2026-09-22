@@ -223,7 +223,11 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
 
     let ribbon_mesh =
         segmented_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, &trace.breaks);
-    let camera = OrbitCamera::new(center, max_radius);
+    let ca_f32: Vec<Vector3<f32>> = ca_coords
+        .iter()
+        .map(|p| Vector3::new(p.x as f32, p.y as f32, p.z as f32))
+        .collect();
+    let camera = OrbitCamera::oriented(center, max_radius, &ca_f32);
 
     let ds_bonds = extract_disulfide_bonds(&trace.protein);
     let num_disulfides = ds_bonds.len();
@@ -415,7 +419,11 @@ pub fn prepare_superposition_for_rendering(
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let camera = OrbitCamera::new(center, max_radius * 1.15);
+    let ref_f32: Vec<Vector3<f32>> = ref_ca[..common_len]
+        .iter()
+        .map(|p| Vector3::new(p.x as f32, p.y as f32, p.z as f32))
+        .collect();
+    let camera = OrbitCamera::oriented(center, max_radius * 1.15, &ref_f32);
 
     Ok(SuperpositionRenderData {
         target_mesh,
@@ -529,6 +537,44 @@ mod tests {
             crambin.default_color_scheme(),
             ColorScheme::SecondaryStructure
         );
+    }
+
+    /// The simulated runner writes C-alpha-only files; they must still produce a ribbon.
+    #[test]
+    fn ca_only_trace_renders_a_ribbon() {
+        let mut text = String::from("HEADER    SYNTHETIC STRUCTURE\n");
+        for i in 0..20 {
+            // Ideal alpha-helix C-alpha trace: 2.3 Å radius, 100° per residue, 1.5 Å rise.
+            let theta = (i as f64) * 100.0f64.to_radians();
+            text += &format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 80.00           C\n",
+                i + 1,
+                i + 1,
+                2.3 * theta.cos(),
+                2.3 * theta.sin(),
+                1.5 * i as f64
+            );
+        }
+        text += "END\n";
+        let data = parse_pdb_structure(&text).unwrap();
+        assert_eq!(data.num_residues, 20);
+        assert!(
+            !data.ribbon_mesh.vertices.is_empty(),
+            "C-alpha-only structure produced an empty ribbon mesh"
+        );
+        let frame = render_structure_snapshot(
+            &data,
+            80,
+            24,
+            TerminalBackend::HalfBlock,
+            ColorScheme::Plddt,
+        )
+        .unwrap();
+        let drawn = frame
+            .chars()
+            .filter(|c| matches!(c, '▀' | '▄' | '█'))
+            .count();
+        assert!(drawn > 0, "nothing was drawn for a C-alpha-only helix");
     }
 
     #[test]

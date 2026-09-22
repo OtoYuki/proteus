@@ -9,6 +9,13 @@ pub struct OrbitCamera {
     pub zoom: f32,  // Multiplier, default 1.0
     pub bounding_radius: f32,
     pub pan: Vector3<f32>,
+    /// Orientation the interactive rotation is applied on top of (identity, or the
+    /// principal-axis frame from [`OrbitCamera::oriented`]); `reset()` returns to it.
+    pub base: Matrix3<f32>,
+    /// Half-extents of the model along the screen x and y axes of the base frame. When set,
+    /// the initial view fits these to the viewport instead of the bounding sphere, so a rod
+    /// fills the wide side of a terminal rather than being scaled to the short side.
+    pub half_extents: Option<(f32, f32)>,
 }
 
 impl OrbitCamera {
@@ -21,7 +28,58 @@ impl OrbitCamera {
             zoom: 1.0,
             bounding_radius: bounding_radius.max(5.0),
             pan: Vector3::zeros(),
+            base: Matrix3::identity(),
+            half_extents: None,
         }
+    }
+
+    /// A camera whose initial view is the model's principal-axis frame: the longest axis of
+    /// `points` runs along screen x, the second along screen y, and the viewer looks down the
+    /// shortest (PyMOL's `orient`). Without this a long helix or coiled coil whose axis
+    /// happens to lie along z is seen end-on as a dot. Degenerate clouds fall back to identity.
+    pub fn oriented(center: Vector3<f32>, bounding_radius: f32, points: &[Vector3<f32>]) -> Self {
+        let mut cam = Self::new(center, bounding_radius);
+        if points.len() < 2 {
+            return cam;
+        }
+        let n = points.len() as f32;
+        let mean = points.iter().sum::<Vector3<f32>>() / n;
+        let mut cov = Matrix3::zeros();
+        for p in points {
+            let d = p - mean;
+            cov += d * d.transpose();
+        }
+        cov /= n;
+        if cov.iter().any(|v| !v.is_finite()) || cov.norm() < 1e-6 {
+            return cam;
+        }
+        let eig = cov.symmetric_eigen();
+        // Sort axes by decreasing variance.
+        let mut order = [0usize, 1, 2];
+        order.sort_by(|&a, &b| {
+            eig.eigenvalues[b]
+                .partial_cmp(&eig.eigenvalues[a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let e1 = eig.eigenvectors.column(order[0]).into_owned();
+        let e2 = eig.eigenvectors.column(order[1]).into_owned();
+        // Right-handed frame: the view axis is e1 × e2 rather than the raw third eigenvector,
+        // whose sign is arbitrary.
+        let e3 = e1.cross(&e2);
+        let base = Matrix3::from_rows(&[e1.transpose(), e2.transpose(), e3.transpose()]);
+        if base.iter().all(|v| v.is_finite()) && (base.determinant() - 1.0).abs() < 1e-3 {
+            cam.base = base;
+            let (mut hx, mut hy) = (0.0f32, 0.0f32);
+            for p in points {
+                let v = base * (p - center);
+                hx = hx.max(v.x.abs());
+                hy = hy.max(v.y.abs());
+            }
+            // Ribbons and side chains extend a few Å past the C-alpha trace.
+            const MARGIN: f32 = 4.0;
+            cam.half_extents = Some((hx + MARGIN, hy + MARGIN));
+        }
+        cam
     }
 
     pub fn rotate(&mut self, delta_yaw: f32, delta_pitch: f32) {
@@ -54,7 +112,7 @@ impl OrbitCamera {
         let r_pitch = Matrix3::new(1.0, 0.0, 0.0, 0.0, cp, -sp, 0.0, sp, cp);
         let r_roll = Matrix3::new(cr, -sr, 0.0, sr, cr, 0.0, 0.0, 0.0, 1.0);
 
-        r_yaw * r_pitch * r_roll
+        r_yaw * r_pitch * r_roll * self.base
     }
 
     /// Project a world-space point to 2D screen coordinates with depth: `(x, y, depth_z)`.
@@ -76,7 +134,18 @@ impl OrbitCamera {
         let centered = point - self.center;
         let view = rot_mat * centered + self.pan;
 
-        let scale = self.zoom * (width.min(height) as f32) * 0.90 / (self.bounding_radius * 2.0);
+        let sphere_fit = (width.min(height) as f32) * 0.90 / (self.bounding_radius * 2.0);
+        let scale = self.zoom
+            * match self.half_extents {
+                // Fit the oriented extents to the viewport, but never smaller than the sphere
+                // fit (a globular model gains, a rod gains a lot, nothing loses).
+                Some((hx, hy)) if hx > 0.0 && hy > 0.0 => {
+                    let fit =
+                        (width as f32 * 0.90 / (2.0 * hx)).min(height as f32 * 0.90 / (2.0 * hy));
+                    fit.max(sphere_fit)
+                }
+                _ => sphere_fit,
+            };
 
         let screen_x = (width as f32 * 0.5) + view.x * scale;
         let screen_y = (height as f32 * 0.5) - view.y * scale;
@@ -169,6 +238,66 @@ mod tests {
             near < far,
             "depth {near} (near) should be below {far} (far)"
         );
+    }
+
+    /// A rod-shaped model (a long helix, a coiled coil) must not be viewed end-on by default:
+    /// the initial orientation puts the longest principal axis across the screen and looks
+    /// along the shortest.
+    #[test]
+    fn default_orientation_looks_along_the_shortest_principal_axis() {
+        let pts: Vec<Vector3<f32>> = (0..50)
+            .map(|i| Vector3::new(0.3 * (i % 3) as f32, 0.1 * (i % 2) as f32, i as f32 * 1.5))
+            .collect();
+        let c = OrbitCamera::oriented(Vector3::new(0.3, 0.05, 36.75), 40.0, &pts);
+        let r = c.rotation_matrix();
+        let (x0, y0, _) = c.project(pts[0], &r, 100, 100);
+        let (x1, y1, _) = c.project(pts[49], &r, 100, 100);
+        let on_screen = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt();
+        assert!(
+            on_screen > 60.0,
+            "rod spans only {on_screen:.1} cells of a 100-cell viewport"
+        );
+        // In a wide viewport the fit follows the oriented extents, not the bounding sphere:
+        // the rod uses most of the width instead of being scaled to the short side.
+        let (wx0, _, _) = c.project(pts[0], &r, 100, 48);
+        let (wx1, _, _) = c.project(pts[49], &r, 100, 48);
+        assert!(
+            (wx1 - wx0).abs() > 75.0,
+            "rod spans only {:.1} of 100 columns in a 100×48 viewport",
+            (wx1 - wx0).abs()
+        );
+        // …and still stays inside the viewport.
+        for p in &pts {
+            let (x, y, _) = c.project(*p, &r, 100, 48);
+            assert!(
+                (0.0..=100.0).contains(&x) && (0.0..=48.0).contains(&y),
+                "({x}, {y})"
+            );
+        }
+        // The long axis lies along screen x (the wider terminal dimension), not y.
+        assert!((x1 - x0).abs() > (y1 - y0).abs());
+        // The base orientation survives reset() and interactive rotation stays a rotation.
+        let mut c2 = c.clone();
+        c2.rotate(0.4, -0.3);
+        c2.reset();
+        let r2 = c2.rotation_matrix();
+        assert!((r2 - r).norm() < 1e-6);
+        assert!((r.determinant() - 1.0).abs() < 1e-5);
+    }
+
+    /// Fewer than two points, or a degenerate cloud, must not panic or produce NaN.
+    #[test]
+    fn orientation_is_robust_to_degenerate_input() {
+        for pts in [
+            vec![],
+            vec![Vector3::new(1.0, 2.0, 3.0)],
+            vec![Vector3::new(1.0, 2.0, 3.0); 5],
+        ] {
+            let c = OrbitCamera::oriented(Vector3::zeros(), 10.0, &pts);
+            let r = c.rotation_matrix();
+            assert!(r.iter().all(|v| v.is_finite()));
+            assert!((r.determinant() - 1.0).abs() < 1e-5);
+        }
     }
 
     #[test]

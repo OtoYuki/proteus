@@ -150,6 +150,7 @@ impl Rasterizer {
             let c2_g = c2.g as f32;
             let c2_b = c2.b as f32;
 
+            let mut covered = false;
             for y in min_y..=max_y {
                 let py = y as f32 + 0.5;
                 for x in min_x..=max_x {
@@ -169,7 +170,23 @@ impl Rasterizer {
                         let b = (w0 * c0_b + w1 * c1_b + w2 * c2_b).clamp(0.0, 255.0) as u8;
 
                         fb.set_pixel(x, y, ColorRGB::new(r, g, b), depth);
+                        covered = true;
                     }
+                }
+            }
+
+            // A triangle thinner than a pixel can straddle a row or column boundary and miss
+            // every pixel centre; a whole sub-pixel-thick tube would then vanish. Light the
+            // pixel under its centroid so thin geometry stays visible.
+            if !covered {
+                let cx = (p0.x + p1.x + p2.x) / 3.0;
+                let cy = (p0.y + p1.y + p2.y) / 3.0;
+                if cx >= 0.0 && cy >= 0.0 && cx < width_f && cy < height_f {
+                    let depth = (p0.z + p1.z + p2.z) / 3.0;
+                    let r = ((c0_r + c1_r + c2_r) / 3.0).clamp(0.0, 255.0) as u8;
+                    let g = ((c0_g + c1_g + c2_g) / 3.0).clamp(0.0, 255.0) as u8;
+                    let b = ((c0_b + c1_b + c2_b) / 3.0).clamp(0.0, 255.0) as u8;
+                    fb.set_pixel(cx as usize, cy as usize, ColorRGB::new(r, g, b), depth);
                 }
             }
         }
@@ -264,5 +281,52 @@ impl Rasterizer {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::mesh::Vertex3D;
+    use proteus_core::structure::SecondaryStructure;
+
+    fn vert(x: f32, y: f32, z: f32) -> Vertex3D {
+        Vertex3D {
+            position: Vector3::new(x, y, z),
+            normal: Vector3::new(0.0, 0.0, 1.0),
+            plddt: 90.0,
+            secondary_structure: SecondaryStructure::Coil,
+            residue_index: 0,
+        }
+    }
+
+    /// A tube thinner than one pixel that straddles a row boundary covers no pixel centre;
+    /// it must still be drawn rather than vanish (a 157-residue straight helix in a 24-row
+    /// terminal did exactly that).
+    #[test]
+    fn sub_pixel_triangles_still_light_a_pixel() {
+        // Identity camera at the origin, unit scale: fb 100×48, radius chosen so that
+        // scale = 1 px per unit (0.9·48 / (2R) = 1 → R = 21.6).
+        let camera = OrbitCamera::new(Vector3::zeros(), 21.6);
+        // Two triangles forming a 40 × 0.4 strip centred on y = 0 (screen row boundary 24.0).
+        let mut mesh = TriangleMesh::new();
+        mesh.vertices = vec![
+            vert(-20.0, -0.2, 0.0),
+            vert(20.0, -0.2, 0.0),
+            vert(20.0, 0.2, 0.0),
+            vert(-20.0, 0.2, 0.0),
+        ];
+        mesh.indices = vec![[0, 1, 2], [0, 2, 3]];
+        let mut fb = Framebuffer::new(100, 48);
+        let mut r = Rasterizer::new(ColorScheme::Plddt);
+        r.enable_ssao = false;
+        r.enable_outlines = false;
+        r.render(&mesh, &camera, &mut fb);
+        let lit = fb
+            .colors
+            .iter()
+            .filter(|c| c.r > 0 || c.g > 0 || c.b > 0)
+            .count();
+        assert!(lit > 0, "sub-pixel strip vanished");
     }
 }

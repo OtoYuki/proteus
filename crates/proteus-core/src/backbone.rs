@@ -6,6 +6,9 @@ use crate::structure::compute_dihedral;
 
 /// Maximum C(i-1)–N(i) distance for a continuous peptide bond (DSSP convention).
 pub const MAX_PEPTIDE_BOND: f64 = 2.5;
+/// Maximum CA(i-1)–CA(i) distance for consecutive residues when the peptide atoms are absent
+/// (C-alpha-only traces): 3.8 Å trans, 2.9 Å cis, with slack for coarse models.
+pub const MAX_CA_CA: f64 = 4.2;
 
 /// One residue's backbone atoms, in file order, with chain-break bookkeeping.
 #[derive(Debug, Clone)]
@@ -22,8 +25,9 @@ pub struct BackboneResidue {
     pub o: Option<Vector3<f64>>,
     /// B-factor of the C-alpha atom (pLDDT for predicted structures).
     pub b_factor: f64,
-    /// True when no peptide bond connects this residue to the previous entry
-    /// (different chain, missing atoms, or C–N distance above [`MAX_PEPTIDE_BOND`]).
+    /// True when no peptide bond connects this residue to the previous entry: different
+    /// chain, C–N distance above [`MAX_PEPTIDE_BOND`], or — when either residue lacks its C or
+    /// N atom — CA–CA distance above [`MAX_CA_CA`].
     pub chain_break_before: bool,
 }
 
@@ -77,8 +81,10 @@ pub fn extract_backbone(pdb: &pdbtbx::PDB) -> Vec<BackboneResidue> {
                 None => true,
                 Some(prev) => {
                     prev.chain_id != r.chain_id
-                        || match (prev.c, r.n) {
-                            (Some(c), Some(n)) => (c - n).norm() > MAX_PEPTIDE_BOND,
+                        || match (prev.c, r.n, prev.ca, r.ca) {
+                            (Some(c), Some(n), _, _) => (c - n).norm() > MAX_PEPTIDE_BOND,
+                            // C-alpha-only trace: judge continuity by CA spacing instead.
+                            (_, _, Some(a), Some(b)) => (a - b).norm() > MAX_CA_CA,
                             _ => true,
                         }
                 }
@@ -173,6 +179,36 @@ END\n";
         let bb = extract_backbone(&pdb);
         assert_eq!(bb.len(), 2);
         assert!(bb[1].chain_break_before);
+        assert!(phi(&bb[0], &bb[1]).is_none());
+    }
+
+    /// A C-alpha-only trace (coarse-grained model, the simulated runner's output) has no
+    /// peptide atoms to test, so continuity falls back to the CA–CA distance.
+    #[test]
+    fn ca_only_trace_breaks_on_ca_distance() {
+        let mut text = String::new();
+        // Residues 1–3 at 3.8 Å spacing, residue 4 after a 12 Å jump, residue 5 back at 3.8 Å.
+        for (i, x) in [0.0, 3.8, 7.6, 19.6, 23.4].into_iter().enumerate() {
+            text += &format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00  0.00           C\n",
+                i + 1,
+                i + 1,
+                x,
+                0.0,
+                0.0
+            );
+        }
+        text += "END\n";
+        let (pdb, _) = pdbtbx::open_pdb_raw(
+            std::io::BufReader::new(std::io::Cursor::new(text)),
+            pdbtbx::Context::None,
+            pdbtbx::StrictnessLevel::Loose,
+        )
+        .unwrap();
+        let bb = extract_backbone(&pdb);
+        let breaks: Vec<bool> = bb.iter().map(|r| r.chain_break_before).collect();
+        assert_eq!(breaks, vec![true, false, false, true, false]);
+        // Dihedrals still need the peptide atoms.
         assert!(phi(&bb[0], &bb[1]).is_none());
     }
 }
