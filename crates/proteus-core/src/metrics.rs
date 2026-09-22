@@ -1,7 +1,6 @@
 use crate::error::CoreError;
 use crate::models::{BiophysicalMetrics, PlddtDistribution};
 use nalgebra::{Matrix3, Vector3, SVD};
-use pdbtbx::Atom;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -224,13 +223,14 @@ pub fn analyze_pdb_detailed_with_header(
     let rg = compute_radius_of_gyration(&ca_coords)?;
     let contact_density = compute_contact_density(&ca_coords, 8.0);
 
-    // RMSD to reference if provided
+    // RMSD to reference if provided. The reference is normalised exactly like the query
+    // (protein residues, heavy atoms, first altloc, one CA per residue) so that alternate
+    // conformations or a calcium ion named `CA` cannot change the atom count.
     let rmsd = if let Some(ref_pdb) = reference_pdb {
-        let ref_ca: Vec<Vector3<f64>> = ref_pdb
-            .residues()
-            .flat_map(|r| r.atoms())
-            .filter(|a: &&Atom| a.name() == "CA")
-            .map(|a| Vector3::new(a.x(), a.y(), a.z()))
+        let ref_protein = crate::io::protein_heavy_atoms(ref_pdb);
+        let ref_ca: Vec<Vector3<f64>> = crate::backbone::extract_backbone(&ref_protein)
+            .iter()
+            .filter_map(|r| r.ca)
             .collect();
         Some(compute_kabsch_rmsd(&ca_coords, &ref_ca)?)
     } else {
@@ -407,6 +407,38 @@ mod tests {
         let pts: Vec<Vector3<f64>> = (0..6).map(|i| Vector3::new(i as f64, 0.0, 0.0)).collect();
         let density = compute_contact_density(&pts, 8.0);
         assert!(density > 0.0);
+    }
+
+    #[test]
+    fn reference_with_altlocs_and_ions_is_normalised_like_the_query() {
+        let base =
+            "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 10.00           C\n\
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00 10.00           C\n\
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00 10.00           O\n\
+ATOM      5  N   GLY A   2       3.300   1.500   0.000  1.00 10.00           N\n\
+ATOM      6  CA  GLY A   2       4.000   2.700   0.000  1.00 10.00           C\n\
+ATOM      7  C   GLY A   2       5.500   2.600   0.000  1.00 10.00           C\n\
+ATOM      8  O   GLY A   2       6.100   1.500   0.000  1.00 10.00           O\n\
+ATOM      9  N   SER A   3       6.100   3.800   0.000  1.00 10.00           N\n\
+ATOM     10  CA  SER A   3       7.500   4.000   0.000  1.00 10.00           C\n\
+ATOM     11  C   SER A   3       8.000   5.400   0.000  1.00 10.00           C\n\
+ATOM     12  O   SER A   3       7.200   6.300   0.000  1.00 10.00           O\n";
+        // Same protein, but the reference carries an alternate conformation for one CA and a
+        // calcium ion (residue `CA`, atom `CA`): neither may change the CA count.
+        let reference = base.replace(
+            "ATOM     10  CA  SER A   3       7.500   4.000   0.000  1.00 10.00           C\n",
+            "ATOM     10  CA ASER A   3       7.500   4.000   0.000  0.50 10.00           C\n\
+ATOM     11  CA BSER A   3       7.600   4.100   0.000  0.50 10.00           C\n",
+        ) + "HETATM   13 CA    CA A 101      20.000  20.000  20.000  1.00 10.00          CA\nEND\n";
+        let dir = tempfile::tempdir().unwrap();
+        let q = dir.path().join("q.pdb");
+        let r = dir.path().join("r.pdb");
+        std::fs::write(&q, format!("{base}END\n")).unwrap();
+        std::fs::write(&r, reference).unwrap();
+        let m = analyze_pdb_file(&q, Some(&r)).unwrap();
+        let rmsd = m.rmsd_to_reference.expect("RMSD against a valid reference");
+        assert!(rmsd < 1e-6, "identical backbone, got RMSD {rmsd}");
     }
 
     #[test]
