@@ -302,23 +302,35 @@ pub async fn run(
     );
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
-    table.set_header(vec![
+    // Wrap inside the cells rather than letting the terminal hard-wrap mid-border.
+    table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+    if let Ok((cols, _)) = crossterm::terminal::size() {
+        if cols >= 40 {
+            table.set_width(cols);
+        }
+    }
+    // A column of dashes says nothing, so ESM-2 only appears when something scored.
+    let show_esm = candidates.iter().take(top).any(|c| c.esm2_score.is_some());
+    let mut header = vec![
         "Rank",
-        "Candidate Header",
+        "Candidate",
         "Len",
         "pLDDT",
         "Rg (Å)",
-        "Core Burial",
-        "Overlap/1k",
+        "Burial",
+        "Clash/1k",
         "H-Bonds",
         "Salt/π",
-        "Fitness / 100",
-        "ESM-2",
-        "Job ID",
-    ]);
+        "Fitness",
+    ];
+    if show_esm {
+        header.push("ESM-2");
+    }
+    header.push("Job");
+    table.set_header(header);
 
     for (idx, c) in candidates.iter().take(top).enumerate() {
-        table.add_row(vec![
+        let mut row = vec![
             Cell::new(format!("#{}", idx + 1)),
             Cell::new(&c.header),
             Cell::new(c.length),
@@ -333,13 +345,16 @@ pub async fn run(
                 c.pi_stacking_count + c.cation_pi_count
             )),
             Cell::new(format!("{:.1}", c.fitness)),
-            Cell::new(
+        ];
+        if show_esm {
+            row.push(Cell::new(
                 c.esm2_score
                     .map(|e| format!("{e:+.2}"))
                     .unwrap_or_else(|| "–".into()),
-            ),
-            Cell::new(c.job_id.to_string()),
-        ]);
+            ));
+        }
+        row.push(Cell::new(job_ref::short(c.job_id)));
+        table.add_row(row);
     }
 
     println!("{table}");
@@ -355,7 +370,9 @@ pub async fn run(
     if let Some(winner) = candidates.first() {
         println!(
             "\nTop Candidate: '{}' (Fitness: {:.1})\nView structure in terminal: proteus view {}",
-            winner.header, winner.fitness, winner.job_id
+            winner.header,
+            winner.fitness,
+            job_ref::short(winner.job_id)
         );
     }
 

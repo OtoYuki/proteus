@@ -5,7 +5,7 @@ use super::prelude::*;
 /// Arguments of `proteus view`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
-    /// Target PDB file path or job UUID
+    /// Target PDB file path, or a job UUID or unique prefix of one
     target: String,
 
     /// Optional reference PDB file path for 3D structural superposition and RMSD calculation
@@ -70,9 +70,14 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             .unwrap_or("PDB Structure")
             .to_string();
         (content, name)
-    } else if let Ok(job_id) = Uuid::parse_str(&target) {
+    } else {
+        // A path that exists wins; only then is the argument treated as a job reference, so a
+        // file literally named like a UUID is still openable.
         let pool = create_sqlite_pool(&db_path).await?;
         let repo = ProteusRepository::new(pool);
+        let job_id = job_ref::resolve(&repo, &target).await.with_context(|| {
+            format!("'{target}' is neither an existing file path nor a known job")
+        })?;
         let pred = repo
             .get_prediction_by_job(job_id)
             .await?
@@ -93,11 +98,6 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             format!("Job {job_id} ({engine})")
         };
         (content, title)
-    } else {
-        anyhow::bail!(
-            "Target '{}' is neither an existing file path nor a valid job UUID",
-            target
-        );
     };
 
     if web || html.is_some() {

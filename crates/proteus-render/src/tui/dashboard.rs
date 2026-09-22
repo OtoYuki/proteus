@@ -447,7 +447,7 @@ impl DashboardRenderer {
                         "\x1b[1;31m"
                     };
                     lines.push(format!(
-                        " Overlap/1k (no H)      : {score_color}{:.1}\x1b[0m ({} overlaps)",
+                        " Clash/1k (no H)        : {score_color}{:.1}\x1b[0m ({} overlaps)",
                         clash.heavy_atom_overlap_score, clash.clash_count
                     ));
                     row_count += 1;

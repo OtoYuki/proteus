@@ -67,6 +67,13 @@ expect "job completed" 'Completed'
 check "inspect" "$BIN" inspect "$JOB"
 expect "inspect names the engine" 'simulated'
 expect "inspect shows the tier row" 'Tier'
+# Short IDs: the leaderboard prints 8 characters, so every command that takes a job must
+# accept them, and must refuse a prefix that matches nothing rather than picking something.
+check "status by short id" "$BIN" status "${JOB:0:8}"
+expect "short id resolves to the same job" "$JOB"
+check "inspect by short id" "$BIN" inspect "${JOB:0:8}"
+check "unknown short id is refused" bash -c "! '$BIN' status deadbeef 2>/dev/null"
+check "too-short prefix is refused" bash -c "! '$BIN' status ab 2>/dev/null"
 
 # --- viewers: every backend draws something; HTML export is a Mol* page
 for backend in halfblock braille sixel kitty; do
