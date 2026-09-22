@@ -422,14 +422,11 @@ mod tests {
     #[test]
     fn crambin_matches_mdtraj_8_state() {
         let (pdb, _) = pdbtbx::open(
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../proteus-core/tests/data/1crn.pdb"
-            ),
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
             pdbtbx::StrictnessLevel::Loose,
         )
         .unwrap();
-        let expect = include_str!("../../proteus-core/tests/data/1crn_dssp_mdtraj.txt")
+        let expect = include_str!("../tests/data/1crn_dssp_mdtraj.txt")
             .trim()
             .to_string();
         let mut residues: Vec<Residue> = pdb

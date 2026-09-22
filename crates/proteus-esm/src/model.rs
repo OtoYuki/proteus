@@ -182,6 +182,8 @@ pub struct Esm2 {
     decoder: Linear,
     decoder_bias: Tensor,
     inv_freq: Tensor,
+    /// Forward passes run so far (for callers that want to prove they batch/cached).
+    forward_calls: std::sync::atomic::AtomicUsize,
 }
 
 impl Esm2 {
@@ -246,11 +248,18 @@ impl Esm2 {
             decoder,
             decoder_bias,
             inv_freq,
+            forward_calls: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
     pub fn config(&self) -> &EsmConfig {
         &self.cfg
+    }
+
+    /// Number of forward passes this model has run.
+    pub fn forward_calls(&self) -> usize {
+        self.forward_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn device(&self) -> &Device {
@@ -266,6 +275,8 @@ impl Esm2 {
 
     /// Logits `[len, vocab]` for one token sequence (no padding; batch size 1).
     pub fn logits(&self, tokens: &[u32]) -> Result<Tensor> {
+        self.forward_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let len = tokens.len();
         if len > self.cfg.max_position_embeddings {
             return Err(EsmError::Sequence(format!(

@@ -112,6 +112,8 @@ pub struct InteractionNetwork {
 
 #[derive(Clone)]
 struct ExtractedAtom {
+    /// Chain index (file order); neighbour exclusions only apply within a chain.
+    chain: usize,
     res_idx: usize,
     res_seq: isize,
     res_name: String,
@@ -123,6 +125,7 @@ struct ExtractedAtom {
 
 #[derive(Clone)]
 struct ExtractedAromaticRing {
+    chain: usize,
     res_idx: usize,
     res_seq: isize,
     res_name: String,
@@ -153,7 +156,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
     let mut global_res_idx = 0;
     let mut total_residues = 0;
 
-    for chain in pdb.chains() {
+    for (chain_idx, chain) in pdb.chains().enumerate() {
         for residue in chain.residues() {
             total_residues += 1;
             let res_seq = residue.serial_number();
@@ -171,6 +174,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
             // 1. Backbone Donor & Acceptor
             if let (Some(&n_pos), Some(&ca_pos)) = (atom_map.get("N"), atom_map.get("CA")) {
                 donors.push(ExtractedAtom {
+                    chain: chain_idx,
                     res_idx: global_res_idx,
                     res_seq,
                     res_name: res_name.clone(),
@@ -183,6 +187,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
 
             if let (Some(&o_pos), Some(&c_pos)) = (atom_map.get("O"), atom_map.get("C")) {
                 acceptors.push(ExtractedAtom {
+                    chain: chain_idx,
                     res_idx: global_res_idx,
                     res_seq,
                     res_name: res_name.clone(),
@@ -202,6 +207,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     for &(atom, ante) in &[("NE", cd.or(cz)), ("NH1", cz), ("NH2", cz)] {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
+                                chain: chain_idx,
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -219,6 +225,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let ce = atom_map.get("CE").copied();
                     if let Some(&nz) = atom_map.get("NZ") {
                         let item = ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -238,6 +245,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     for &(atom, ante) in &[("ND1", cg), ("NE2", ce1)] {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
+                                chain: chain_idx,
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -264,6 +272,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .cross(&(coords[2] - coords[0]))
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -277,6 +286,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     for &atom in &["OD1", "OD2"] {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
+                                chain: chain_idx,
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -295,6 +305,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     for &atom in &["OE1", "OE2"] {
                         if let Some(&pos) = atom_map.get(atom) {
                             let item = ExtractedAtom {
+                                chain: chain_idx,
                                 res_idx: global_res_idx,
                                 res_seq,
                                 res_name: res_name.clone(),
@@ -312,6 +323,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cg = atom_map.get("CG").copied();
                     if let Some(&nd2) = atom_map.get("ND2") {
                         donors.push(ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -323,6 +335,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     }
                     if let Some(&od1) = atom_map.get("OD1") {
                         acceptors.push(ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -337,6 +350,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cd = atom_map.get("CD").copied();
                     if let Some(&ne2) = atom_map.get("NE2") {
                         donors.push(ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -348,6 +362,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     }
                     if let Some(&oe1) = atom_map.get("OE1") {
                         acceptors.push(ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -362,6 +377,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cb = atom_map.get("CB").copied();
                     if let Some(&og) = atom_map.get("OG") {
                         let item = ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -378,6 +394,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cb = atom_map.get("CB").copied();
                     if let Some(&og1) = atom_map.get("OG1") {
                         let item = ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -394,6 +411,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cz = atom_map.get("CZ").copied();
                     if let Some(&oh) = atom_map.get("OH") {
                         let item = ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -419,6 +437,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .cross(&(coords[2] - coords[0]))
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -440,6 +459,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .cross(&(coords[2] - coords[0]))
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -452,6 +472,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     let cd1 = atom_map.get("CD1").copied();
                     if let Some(&ne1) = atom_map.get("NE1") {
                         donors.push(ExtractedAtom {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -475,6 +496,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                             .cross(&(coords[2] - coords[0]))
                             .normalize();
                         aromatic_rings.push(ExtractedAromaticRing {
+                            chain: chain_idx,
                             res_idx: global_res_idx,
                             res_seq,
                             res_name: res_name.clone(),
@@ -543,11 +565,18 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                         for &acc_idx in acc_indices {
                             let acc = &acceptors[acc_idx];
 
-                            // Exclude intra-residue and adjacent peptide turns (|Δseq| < 2)
-                            let seq_diff = (donor.res_seq - acc.res_seq).abs();
-                            let idx_diff = (donor.res_idx as isize - acc.res_idx as isize).abs();
-                            if seq_diff < 2 || idx_diff < 2 {
+                            // Exclude intra-residue and adjacent peptide turns (|Δseq| < 2) —
+                            // within one chain; residue numbers of different chains are unrelated.
+                            if donor.res_idx == acc.res_idx {
                                 continue;
+                            }
+                            if donor.chain == acc.chain {
+                                let seq_diff = (donor.res_seq - acc.res_seq).abs();
+                                let idx_diff =
+                                    (donor.res_idx as isize - acc.res_idx as isize).abs();
+                                if seq_diff < 2 || idx_diff < 2 {
+                                    continue;
+                                }
                             }
 
                             let dist_sq = (donor.pos - acc.pos).norm_squared();
@@ -609,7 +638,9 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(ani_indices) = anion_grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         for &ani_idx in ani_indices {
                             let ani = &anions[ani_idx];
-                            if cat.res_idx == ani.res_idx || cat.res_seq == ani.res_seq {
+                            if cat.res_idx == ani.res_idx
+                                || (cat.chain == ani.chain && cat.res_seq == ani.res_seq)
+                            {
                                 continue;
                             }
 
@@ -671,7 +702,9 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                                 continue;
                             }
                             let r2 = &aromatic_rings[r2_idx];
-                            if r1.res_idx == r2.res_idx || r1.res_seq == r2.res_seq {
+                            if r1.res_idx == r2.res_idx
+                                || (r1.chain == r2.chain && r1.res_seq == r2.res_seq)
+                            {
                                 continue;
                             }
 
@@ -732,7 +765,9 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                     if let Some(ring_indices) = aromatic_grid.get(&(cx + dx, cy + dy, cz + dz)) {
                         for &ring_idx in ring_indices {
                             let ring = &aromatic_rings[ring_idx];
-                            if cat.res_idx == ring.res_idx || cat.res_seq == ring.res_seq {
+                            if cat.res_idx == ring.res_idx
+                                || (cat.chain == ring.chain && cat.res_seq == ring.res_seq)
+                            {
                                 continue;
                             }
 
@@ -881,6 +916,68 @@ mod tests {
             network.summary.total_pi_pi_stacks + network.summary.total_cation_pi >= 1,
             "Expected aromatic interactions in Crambin"
         );
+    }
+
+    /// Two chains with the same residue numbering: an inter-chain backbone H-bond between
+    /// residue 5 of chain A and residue 5 of chain B must not be mistaken for a bonded
+    /// neighbour (issue #2).
+    #[test]
+    fn inter_chain_contacts_between_equally_numbered_residues_are_kept() {
+        /// One ALA backbone (N, CA, C, O) for chain `ch`, residue `seq`, with atom coordinates
+        /// given explicitly; returns the four PDB lines starting at serial `first`.
+        fn residue(first: usize, ch: char, seq: i32, coords: [[f64; 3]; 4]) -> String {
+            let mut out = String::new();
+            for (k, (name, el)) in [("N", "N"), ("CA", "C"), ("C", "C"), ("O", "O")]
+                .into_iter()
+                .enumerate()
+            {
+                let [x, y, z] = coords[k];
+                let i = first + k;
+                // Columns per the PDB spec: name in 13–16 (left-padded by one for 1–3 letter
+                // names), element in 77–78.
+                out += &format!(
+                    "ATOM  {i:5}  {name:<3} ALA {ch}{seq:4}    {x:8.3}{y:8.3}{z:8.3}  1.00 10.00          {el:>2}\n"
+                );
+            }
+            out
+        }
+        /// An ideal-ish backbone placed along +x at offset `ox`.
+        fn along_x(ox: f64) -> [[f64; 3]; 4] {
+            [
+                [ox, 0.0, 0.0],
+                [ox + 1.458, 0.0, 0.0],
+                [ox + 2.009, 1.42, 0.0],
+                [ox + 1.251, 2.39, 0.0],
+            ]
+        }
+        let mut pdb = String::new();
+        let mut i = 1;
+        for (k, seq) in [5, 6, 7].into_iter().enumerate() {
+            pdb += &residue(i, 'A', seq, along_x(30.0 * k as f64));
+            i += 4;
+        }
+        pdb += "TER\n";
+        for (k, seq) in [3, 4, 5].into_iter().enumerate() {
+            let coords = if seq == 5 {
+                // C=O of B5 sits 2.9 Å below the N–H of A5.
+                [
+                    [0.0, -6.0, 0.0],
+                    [1.458, -6.0, 0.0],
+                    [1.0, -4.6, 0.0],
+                    [0.0, -2.9, 0.0],
+                ]
+            } else {
+                along_x(100.0 + 30.0 * k as f64)
+            };
+            pdb += &residue(i, 'B', seq, coords);
+            i += 4;
+        }
+        pdb += "END\n";
+        let p = crate::io::open_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        let net = compute_interaction_network(&p);
+        assert_eq!(net.summary.total_hbonds, 1, "{:?}", net.hbonds);
+        assert_eq!(net.hbonds[0].donor_res_seq, 5);
+        assert_eq!(net.hbonds[0].acceptor_res_seq, 5);
     }
 
     #[test]

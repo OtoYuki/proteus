@@ -17,7 +17,8 @@ mod tokenizer;
 pub use candle_core::Device;
 pub use model::{Esm2, EsmConfig};
 pub use scoring::{
-    parse_mutation, scan, score_masked_marginal, score_wt_marginal, Mutation, ScanRow,
+    parse_mutation, scan, score_masked_marginal, score_wt_marginal, MarginalScorer, Mutation,
+    ScanRow,
 };
 pub use tokenizer::{Tokenizer, AMINO_ACIDS, MASK_ID, VOCAB};
 

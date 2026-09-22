@@ -8,7 +8,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, Table};
 use proteus_core::models::Sequence;
-use proteus_esm::{parse_mutation, Device, Esm2, Mutation, AMINO_ACIDS};
+use proteus_esm::{parse_mutation, Device, Esm2, MarginalScorer, Mutation, AMINO_ACIDS};
 use uuid::Uuid;
 
 pub const DEFAULT_MODEL: &str = "facebook/esm2_t6_8M_UR50D";
@@ -319,6 +319,9 @@ pub fn score_library(
 ) -> Result<HashMap<Uuid, Option<f32>>> {
     let model = load_model(opts)?;
     let wt_fasta = wild_type_of(sequences)?;
+    // One forward pass for the whole library (wild-type marginals) or one per mutated
+    // position (masked), instead of one per variant.
+    let mut scorer = MarginalScorer::new(&model, &wt_fasta, opts.masked)?;
     let wt_header = sequences
         .iter()
         .find(|s| s.header.contains("[wildtype]"))
@@ -350,9 +353,7 @@ pub fn score_library(
         let score = if muts.is_empty() {
             0.0
         } else {
-            score_mutations(&model, &wt_fasta, &muts, opts.masked)?
-                .iter()
-                .sum()
+            scorer.score(&muts)?.iter().sum()
         };
         out.insert(s.id, Some(score));
     }

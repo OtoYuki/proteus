@@ -4,7 +4,7 @@
 //! log-probabilities within 2.5e-3 (relative 1e-3) — fp32 accumulation-order noise, three
 //! orders of magnitude below any mutation-effect signal. Tolerances: 1e-2 / 5e-3.
 //!
-//! Reference values: `validate/reference/esm/<model>.json`, produced by
+//! Reference values: `tests/data/<model>.json` (copies of `validate/reference/esm/`), produced by
 //! `validate/esm_reference.py`. Needs the checkpoints (downloaded from the Hub into the cache
 //! on first run), so the tests are `#[ignore]`d: `cargo test -p proteus-esm -- --ignored`.
 
@@ -30,7 +30,7 @@ struct SeqRef {
 
 fn reference(name: &str) -> Reference {
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../validate/reference/esm")
+        .join("tests/data")
         .join(format!("{name}.json"));
     serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
 }
@@ -104,4 +104,45 @@ fn esm2_t6_8m_matches_transformers() {
 #[ignore]
 fn esm2_t12_35m_matches_transformers() {
     check_model("esm2_t12_35M_UR50D", 1e-2, 5e-3);
+}
+
+/// Scoring a whole library must not re-run the wild-type forward pass per variant (issue #3).
+#[test]
+#[ignore]
+fn library_scoring_reuses_forward_passes() {
+    use proteus_esm::{parse_mutation, Device, Esm2, MarginalScorer};
+    let model = Esm2::from_hub("facebook/esm2_t6_8M_UR50D", &Device::Cpu).unwrap();
+    let wt = "TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN";
+    let variants: Vec<Vec<_>> = ["T1A", "T2A", "C3A", "C4A", "P5A", "T1A,C3A"]
+        .iter()
+        .map(|m| m.split(',').map(|x| parse_mutation(x).unwrap()).collect())
+        .collect();
+
+    let mut wt_scorer = MarginalScorer::new(&model, wt, false).unwrap();
+    let before = model.forward_calls();
+    let scores: Vec<Vec<f32>> = variants
+        .iter()
+        .map(|v| wt_scorer.score(v).unwrap())
+        .collect();
+    assert_eq!(
+        model.forward_calls() - before,
+        1,
+        "wild-type marginals need one pass"
+    );
+    // Same numbers as the one-shot API.
+    for (v, s) in variants.iter().zip(&scores) {
+        assert_eq!(&proteus_esm::score_wt_marginal(&model, wt, v).unwrap(), s);
+    }
+
+    let mut masked = MarginalScorer::new(&model, wt, true).unwrap();
+    let before = model.forward_calls();
+    for v in &variants {
+        masked.score(v).unwrap();
+    }
+    // Five distinct positions across six variants: five passes, not six.
+    assert_eq!(
+        model.forward_calls() - before,
+        5,
+        "masked marginals: one pass per position"
+    );
 }

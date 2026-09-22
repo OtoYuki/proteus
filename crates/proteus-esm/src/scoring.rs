@@ -107,6 +107,63 @@ pub fn score_masked_marginal(
         .collect())
 }
 
+/// Scores many variants of one wild type without repeating forward passes: wild-type
+/// marginals need a single pass for the whole library, masked marginals one pass per distinct
+/// mutated position. Produces exactly the numbers of [`score_wt_marginal`] /
+/// [`score_masked_marginal`].
+pub struct MarginalScorer<'m> {
+    model: &'m Esm2,
+    seq: Vec<u8>,
+    tokens: Vec<u32>,
+    masked: bool,
+    /// Wild-type marginals: the one log-prob table. Masked: per mutated position.
+    wt_rows: Option<Vec<Vec<f32>>>,
+    masked_rows: std::collections::HashMap<usize, Vec<f32>>,
+}
+
+impl<'m> MarginalScorer<'m> {
+    pub fn new(model: &'m Esm2, wt_seq: &str, masked: bool) -> Result<Self> {
+        let (tokens, _) = Tokenizer::encode(wt_seq)?;
+        Ok(Self {
+            model,
+            seq: wt_seq.trim().as_bytes().to_vec(),
+            tokens,
+            masked,
+            wt_rows: None,
+            masked_rows: std::collections::HashMap::new(),
+        })
+    }
+
+    /// Score one variant's substitutions (same order as `mutations`).
+    pub fn score(&mut self, mutations: &[Mutation]) -> Result<Vec<f32>> {
+        for m in mutations {
+            check(&self.seq, m)?;
+        }
+        let mut out = Vec::with_capacity(mutations.len());
+        for m in mutations {
+            let row: &Vec<f32> = if self.masked {
+                if !self.masked_rows.contains_key(&m.pos) {
+                    let mut t = self.tokens.clone();
+                    t[m.pos] = MASK_ID;
+                    let lp = self.model.log_probs(&t)?;
+                    self.masked_rows.insert(m.pos, lp[m.pos].clone());
+                }
+                &self.masked_rows[&m.pos]
+            } else {
+                if self.wt_rows.is_none() {
+                    self.wt_rows = Some(self.model.log_probs(&self.tokens)?);
+                }
+                &self.wt_rows.as_ref().expect("filled above")[m.pos]
+            };
+            out.push(
+                row[Tokenizer::residue_id(m.mt) as usize]
+                    - row[Tokenizer::residue_id(m.wt) as usize],
+            );
+        }
+        Ok(out)
+    }
+}
+
 /// One row of a deep mutational scan: scores for the twenty amino acids at a position.
 #[derive(Debug, Clone)]
 pub struct ScanRow {

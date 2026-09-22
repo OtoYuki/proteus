@@ -613,6 +613,71 @@ impl ProteusRepository {
     }
 }
 
+/// Escape `%`, `_` and `\` for a `LIKE … ESCAPE '\'` prefix match.
+fn like_prefix(prefix: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + 1);
+    for c in prefix.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+impl ProteusRepository {
+    /// One page of TES tasks, newest first, filtered by state and name prefix in SQL.
+    pub async fn list_tes_tasks_page(
+        &self,
+        state: Option<&str>,
+        name_prefix: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<TesTaskRecord>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks \
+             WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR name LIKE ?2 ESCAPE '\\') \
+             ORDER BY created_at DESC LIMIT ?3 OFFSET ?4",
+        )
+        .bind(state)
+        .bind(name_prefix.map(like_prefix))
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| TesTaskRecord {
+                id: r.get("id"),
+                state: r.get("state"),
+                name: r.get("name"),
+                description: r.get("description"),
+                task_json: r.get("task_json"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            })
+            .collect())
+    }
+
+    /// Number of TES tasks matching the same filters as [`list_tes_tasks_page`](Self::list_tes_tasks_page).
+    pub async fn count_tes_tasks(
+        &self,
+        state: Option<&str>,
+        name_prefix: Option<&str>,
+    ) -> Result<i64, StorageError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM tes_tasks \
+             WHERE (?1 IS NULL OR state = ?1) AND (?2 IS NULL OR name LIKE ?2 ESCAPE '\\')",
+        )
+        .bind(state)
+        .bind(name_prefix.map(like_prefix))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.get("n"))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CasObjectRecord {
     pub hash: String,
@@ -785,6 +850,48 @@ mod tests {
         let listed = repo.list_tes_tasks(Some("COMPLETE"), 10).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, task_id);
+    }
+
+    #[tokio::test]
+    async fn task_listing_filters_and_pages_in_sql() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        for (i, (name, state)) in [
+            ("pg-1", "COMPLETE"),
+            ("pg-2", "COMPLETE"),
+            ("pg-3", "RUNNING"),
+            ("other", "COMPLETE"),
+            ("pg%4", "COMPLETE"), // a literal % in the name must not act as a wildcard
+        ]
+        .iter()
+        .enumerate()
+        {
+            repo.insert_tes_task(&format!("t{i}"), state, Some(name), None, "{}")
+                .await
+                .unwrap();
+        }
+        let page = repo
+            .list_tes_tasks_page(None, Some("pg-"), 2, 0)
+            .await
+            .unwrap();
+        assert_eq!(page.len(), 2);
+        let rest = repo
+            .list_tes_tasks_page(None, Some("pg-"), 2, 2)
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 1);
+        let complete = repo
+            .list_tes_tasks_page(Some("COMPLETE"), Some("pg-"), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(complete.len(), 2);
+        let literal = repo
+            .list_tes_tasks_page(None, Some("pg%"), 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(literal.len(), 1, "prefix with % must match literally");
+        assert_eq!(literal[0].name.as_deref(), Some("pg%4"));
+        assert_eq!(repo.count_tes_tasks(None, Some("pg-")).await.unwrap(), 3);
     }
 
     #[tokio::test]

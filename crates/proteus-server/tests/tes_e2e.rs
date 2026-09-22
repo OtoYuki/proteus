@@ -375,3 +375,110 @@ async fn file_url_allowlist_rejects_with_400_and_is_advertised() {
     let body: serde_json::Value = r.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("allows"));
 }
+
+#[tokio::test]
+async fn list_tasks_pages_and_filters_in_sql() {
+    let base = spawn(proteus_server::ServerOptions::default(), None).await;
+    let client = reqwest::Client::new();
+
+    // Five tasks: alpha-1..3 (tagged run=a) and beta-1..2 (tagged run=b).
+    for (name, run) in [
+        ("alpha-1", "a"),
+        ("alpha-2", "a"),
+        ("alpha-3", "a"),
+        ("beta-1", "b"),
+        ("beta-2", "b"),
+    ] {
+        let mut task = minimal_task("docker.io/library/alpine:3.20");
+        task.name = Some(name.into());
+        task.tags.insert("run".into(), run.into());
+        let resp = client
+            .post(format!("{base}/v1/tasks"))
+            .json(&task)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+    }
+
+    let get = |url: String| {
+        let client = client.clone();
+        async move {
+            let resp = client.get(url).send().await.unwrap();
+            assert_eq!(resp.status(), reqwest::StatusCode::OK);
+            resp.json::<serde_json::Value>().await.unwrap()
+        }
+    };
+
+    // Page through everything two at a time: every task exactly once, no duplicates.
+    let mut seen = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut url = format!("{base}/v1/tasks?page_size=2&view=BASIC");
+        if let Some(t) = &token {
+            url.push_str(&format!("&page_token={t}"));
+        }
+        let page = get(url).await;
+        let tasks = page["tasks"].as_array().unwrap();
+        assert!(tasks.len() <= 2);
+        seen.extend(tasks.iter().map(|t| t["id"].as_str().unwrap().to_string()));
+        match page["next_page_token"].as_str() {
+            Some(t) => token = Some(t.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(
+        seen.len(),
+        5,
+        "paged listing must cover every task: {seen:?}"
+    );
+    let mut dedup = seen.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(dedup.len(), 5, "duplicates across pages: {seen:?}");
+
+    // name_prefix is applied in SQL.
+    let page = get(format!("{base}/v1/tasks?name_prefix=alpha&view=BASIC")).await;
+    let names: Vec<&str> = page["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 3, "{names:?}");
+    assert!(names.iter().all(|n| n.starts_with("alpha")), "{names:?}");
+    assert!(page["next_page_token"].is_null());
+
+    // `%` and `_` in the prefix are literals, not LIKE wildcards.
+    let page = get(format!("{base}/v1/tasks?name_prefix=%25&view=BASIC")).await;
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 0);
+    let page = get(format!("{base}/v1/tasks?name_prefix=alpha_&view=BASIC")).await;
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 0);
+
+    // Tag filters page over the filtered set.
+    let page = get(format!(
+        "{base}/v1/tasks?tag_key=run&tag_value=b&page_size=1&view=BASIC"
+    ))
+    .await;
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+    assert!(page["tasks"][0]["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("beta"));
+    let token = page["next_page_token"].as_str().unwrap().to_string();
+    let page = get(format!(
+        "{base}/v1/tasks?tag_key=run&tag_value=b&page_size=1&page_token={token}&view=BASIC"
+    ))
+    .await;
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 1);
+    assert!(page["tasks"][0]["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("beta"));
+    assert!(page["next_page_token"].is_null());
+
+    // A state filter that matches nothing yields an empty page without a token.
+    let page = get(format!("{base}/v1/tasks?state=CANCELED&view=BASIC")).await;
+    assert_eq!(page["tasks"].as_array().unwrap().len(), 0);
+    assert!(page["next_page_token"].is_null());
+}

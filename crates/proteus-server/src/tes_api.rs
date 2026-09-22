@@ -174,47 +174,66 @@ pub async fn list_tasks(
         None => 0,
     };
 
-    // Filters other than `state` are applied after the DB read; fetch enough rows to page.
-    let fetch_limit = i64::MAX;
-    match state
-        .scheduler
-        .repo()
-        .list_tes_tasks(query.state.as_deref(), fetch_limit)
-        .await
-    {
-        Ok(records) => {
-            let mut matching: Vec<TesTask> = Vec::new();
-            for rec in records {
-                if let Ok(task) = serde_json::from_str::<TesTask>(&rec.task_json) {
-                    if let Some(ref prefix) = query.name_prefix {
-                        if !task.name.as_deref().unwrap_or("").starts_with(prefix) {
-                            continue;
-                        }
-                    }
-                    if !query.tags_match(&task.tags) {
-                        continue;
-                    }
-                    matching.push(task);
-                }
-            }
-            let end = (offset + page_size).min(matching.len());
-            let next_page_token = (end < matching.len()).then(|| encode_page_token(end));
-            let tasks = matching
-                .into_iter()
-                .skip(offset)
-                .take(page_size)
-                .map(|t| t.project_view(view))
-                .collect();
-            Ok(Json(TesListTasksResponse {
-                tasks,
-                next_page_token,
-            }))
-        }
-        Err(e) => Err((
+    let repo = state.scheduler.repo();
+    let db_err = |e: proteus_storage::StorageError| {
+        (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e.to_string() })),
-        )),
-    }
+        )
+    };
+
+    // `state` and `name_prefix` are filtered and paged in SQL. Tags live inside the task JSON,
+    // so a tag filter still has to scan the (state/prefix-filtered) rows.
+    let (tasks, next_page_token) = if query.tag_key.is_empty() {
+        let rows = repo
+            .list_tes_tasks_page(
+                query.state.as_deref(),
+                query.name_prefix.as_deref(),
+                page_size as i64,
+                offset as i64,
+            )
+            .await
+            .map_err(db_err)?;
+        let total = repo
+            .count_tes_tasks(query.state.as_deref(), query.name_prefix.as_deref())
+            .await
+            .map_err(db_err)? as usize;
+        let tasks: Vec<TesTask> = rows
+            .iter()
+            .filter_map(|rec| serde_json::from_str::<TesTask>(&rec.task_json).ok())
+            .map(|t| t.project_view(view))
+            .collect();
+        let end = offset + rows.len();
+        (tasks, (end < total).then(|| encode_page_token(end)))
+    } else {
+        let rows = repo
+            .list_tes_tasks_page(
+                query.state.as_deref(),
+                query.name_prefix.as_deref(),
+                i64::MAX,
+                0,
+            )
+            .await
+            .map_err(db_err)?;
+        let matching: Vec<TesTask> = rows
+            .iter()
+            .filter_map(|rec| serde_json::from_str::<TesTask>(&rec.task_json).ok())
+            .filter(|t| query.tags_match(&t.tags))
+            .collect();
+        let end = (offset + page_size).min(matching.len());
+        let next = (end < matching.len()).then(|| encode_page_token(end));
+        let tasks = matching
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .map(|t| t.project_view(view))
+            .collect();
+        (tasks, next)
+    };
+    Ok(Json(TesListTasksResponse {
+        tasks,
+        next_page_token,
+    }))
 }
 
 /// POST /v1/tasks/{id}:cancel, /v1/tasks/{id}/cancel, and /ga4gh/tes/v1/tasks/{id}:cancel
