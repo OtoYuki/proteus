@@ -213,11 +213,10 @@ mod tests {
 
     #[test]
     fn crambin_is_almost_all_favored() {
-        let (pdb, _) = pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap();
         let d = crate::metrics::analyze_pdb_detailed(&pdb, None).unwrap();
         let s = d.metrics.ramachandran_stats.unwrap();
         // cctbx ramalyze on 1CRN: 44 evaluated, 43 favored, 1 allowed, 0 outliers.

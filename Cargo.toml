@@ -42,10 +42,10 @@ futures-util = "0.3"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.7", features = ["trace", "cors"] }
 subtle = "2"
 form_urlencoded = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "webpki-roots", "http2"] }
 
 # Serialization & Models
 serde = { version = "1.0", features = ["derive"] }
@@ -61,22 +61,22 @@ arrow-array = "60"
 blake3 = "1.8"
 
 # Container Orchestration
-bollard = "0.18"
+bollard = "0.21"
 
 # Scientific & Math
 candle-core = "0.11"
 candle-nn = "0.11"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-pdbtbx = "0.11"
+pdbtbx = "0.12"
 flate2 = "1"
-nalgebra = "0.33"
+nalgebra = "0.34"
 
 # CLI & UX
 clap = { version = "4.5", features = ["derive", "env"] }
 indicatif = "0.18"
-comfy-table = "7.1"
-crossterm = "0.28"
-base64 = "0.22"
+comfy-table = "8"
+crossterm = "0.29"
+base64 = "0.23"
 
 # Diagnostics & Docs
 tracing = "0.1"
@@ -84,7 +84,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "2.0"
 anyhow = "1.0"
 tempfile = "3.17"
-toml = "0.8"
-criterion = { version = "0.5", default-features = false, features = ["html_reports"] }
+toml = "1"
+criterion = { version = "0.8", default-features = false, features = ["html_reports"] }
 utoipa = { version = "5.3", features = ["uuid", "chrono"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

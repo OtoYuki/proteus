@@ -124,12 +124,11 @@ mod tests {
     use super::*;
 
     fn crambin() -> pdbtbx::PDB {
-        pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap()
-        .0
+        pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap()
+            .0
     }
 
     #[test]
@@ -170,12 +169,11 @@ ATOM      6  CA  GLY B   1      21.458   0.000   0.000  1.00  0.00           C\n
 ATOM      7  C   GLY B   1      22.009   1.420   0.000  1.00  0.00           C\n\
 ATOM      8  O   GLY B   1      21.251   2.390   0.000  1.00  0.00           O\n\
 END\n";
-        let (pdb, _) = pdbtbx::open_pdb_raw(
-            std::io::BufReader::new(std::io::Cursor::new(text)),
-            pdbtbx::Context::None,
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Pdb)
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(std::io::Cursor::new(text)))
+            .unwrap();
         let bb = extract_backbone(&pdb);
         assert_eq!(bb.len(), 2);
         assert!(bb[1].chain_break_before);
@@ -199,12 +197,11 @@ END\n";
             );
         }
         text += "END\n";
-        let (pdb, _) = pdbtbx::open_pdb_raw(
-            std::io::BufReader::new(std::io::Cursor::new(text)),
-            pdbtbx::Context::None,
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Pdb)
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(std::io::Cursor::new(text)))
+            .unwrap();
         let bb = extract_backbone(&pdb);
         let breaks: Vec<bool> = bb.iter().map(|r| r.chain_break_before).collect();
         assert_eq!(breaks, vec![true, false, false, true, false]);

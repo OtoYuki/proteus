@@ -9,10 +9,6 @@ yanked = "deny"
 ignore = [
     # paste is unmaintained but still correct; pulled in by nalgebra → simba. No upstream fix yet.
     { id = "RUSTSEC-2024-0436", reason = "paste via nalgebra/simba; no maintained replacement upstream" },
-    # atomic-polyfill is only reachable on no-std embedded targets we never build for.
-    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill only in non-Linux/macOS target graphs" },
-    # rsa via sqlx-mysql, present in Cargo.lock but never compiled (sqlite driver only).
-    { id = "RUSTSEC-2023-0071", reason = "sqlx-mysql in lockfile via feature unification; not built" },
 ]
 
 [licenses]

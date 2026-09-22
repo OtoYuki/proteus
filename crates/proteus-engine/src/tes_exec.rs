@@ -10,12 +10,12 @@ use std::path::{Component, Path};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use bollard::container::{
-    Config, CreateContainerOptions, LogOutput, LogsOptions, RemoveContainerOptions,
-    StartContainerOptions, WaitContainerOptions,
+use bollard::container::LogOutput;
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    AttachContainerOptions, CreateContainerOptions, CreateImageOptions, KillContainerOptions,
+    LogsOptions, RemoveContainerOptions, StartContainerOptions, WaitContainerOptions,
 };
-use bollard::image::CreateImageOptions;
-use bollard::models::HostConfig;
 use bollard::Docker;
 use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
@@ -258,7 +258,7 @@ impl ContainerExecutor {
         logs.push(format!("pulling image {image}"));
         let mut stream = self.docker.create_image(
             Some(CreateImageOptions {
-                from_image: image,
+                from_image: Some(image.to_string()),
                 ..Default::default()
             }),
             None,
@@ -315,7 +315,7 @@ impl TesExecutor for ContainerExecutor {
         let env: Vec<String> = req.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
         // TES `command` is argv: override the image entrypoint so images that ship an
         // ENTRYPOINT (like Proteus's own) do not prepend it.
-        let config = Config {
+        let config = ContainerCreateBody {
             image: Some(req.image.to_string()),
             entrypoint: Some(vec![req.command[0].clone()]),
             cmd: Some(req.command[1..].to_vec()),
@@ -331,8 +331,8 @@ impl TesExecutor for ContainerExecutor {
         self.docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name: name.as_str(),
-                    platform: None,
+                    name: Some(name.clone()),
+                    ..Default::default()
                 }),
                 config,
             )
@@ -372,9 +372,9 @@ impl ContainerExecutor {
                 .docker
                 .attach_container(
                     name,
-                    Some(bollard::container::AttachContainerOptions::<String> {
-                        stdin: Some(true),
-                        stream: Some(true),
+                    Some(AttachContainerOptions {
+                        stdin: true,
+                        stream: true,
                         ..Default::default()
                     }),
                 )
@@ -392,7 +392,7 @@ impl ContainerExecutor {
         // executor's error (exit 127 by shell convention), so ignore_error semantics apply.
         if let Err(e) = self
             .docker
-            .start_container(name, None::<StartContainerOptions<String>>)
+            .start_container(name, None::<StartContainerOptions>)
             .await
         {
             return Ok(ExecutorResult {
@@ -406,11 +406,11 @@ impl ContainerExecutor {
 
         let mut wait = self
             .docker
-            .wait_container(name, None::<WaitContainerOptions<String>>);
+            .wait_container(name, None::<WaitContainerOptions>);
         let outcome = tokio::select! {
             w = tokio::time::timeout(req.timeout, wait.next()) => w,
             _ = req.cancel.cancelled() => {
-                let _ = self.docker.kill_container::<String>(name, None).await;
+                let _ = self.docker.kill_container(name, None::<KillContainerOptions>).await;
                 return Ok(ExecutorResult { exit_code: -1, system_logs: vec!["container killed: task canceled".into()], ..Default::default() });
             }
         };
@@ -425,7 +425,10 @@ impl ContainerExecutor {
             }
             Ok(None) => (-1, vec!["wait stream ended without a status".into()]),
             Err(_) => {
-                let _ = self.docker.kill_container::<String>(name, None).await;
+                let _ = self
+                    .docker
+                    .kill_container(name, None::<KillContainerOptions>)
+                    .await;
                 (
                     -1,
                     vec![format!(
@@ -439,7 +442,7 @@ impl ContainerExecutor {
         let (mut stdout, mut stderr) = (String::new(), String::new());
         let mut logs = self.docker.logs(
             name,
-            Some(LogsOptions::<String> {
+            Some(LogsOptions {
                 stdout: true,
                 stderr: true,
                 ..Default::default()
@@ -598,5 +601,73 @@ mod tests {
             std::fs::read_to_string(dir.path().join("data/out.txt")).unwrap(),
             "hello"
         );
+    }
+
+    /// Same gate. Covers the paths the first test does not: TES `stdin` delivered through the
+    /// attach API, a non-zero exit reported as the exit code (not an error), and the
+    /// wall-clock timeout killing the container.
+    #[tokio::test]
+    #[ignore]
+    async fn container_executor_stdin_exit_code_and_timeout() {
+        if std::env::var("PROTEUS_TEST_OCI").is_err() {
+            eprintln!("PROTEUS_TEST_OCI not set; skipping");
+            return;
+        }
+        let ex = ContainerExecutor::connect(true).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        let env = HashMap::new();
+        let roots: BTreeSet<String> = ["data".to_string()].into_iter().collect();
+        let request = |cmd: &'static str, stdin: Option<&'static str>, timeout: u64| {
+            let command = vec!["sh".to_string(), "-c".to_string(), cmd.to_string()];
+            (command, stdin, Duration::from_secs(timeout))
+        };
+
+        let (cmd, stdin, timeout) = request("cat; echo; exit 3", Some("from stdin"), 120);
+        let r = ex
+            .run(ExecutorRequest {
+                image: "docker.io/library/alpine:3.20",
+                command: &cmd,
+                workdir: Some("/data"),
+                env: &env,
+                stdin,
+                work_dir: dir.path(),
+                mount_roots: &roots,
+                cpu_cores: None,
+                ram_gb: None,
+                network: false,
+                timeout,
+                cancel: CancellationToken::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.exit_code, 3, "{r:?}");
+        assert_eq!(r.stdout.trim(), "from stdin", "{r:?}");
+
+        let (cmd, stdin, timeout) = request("sleep 30", None, 2);
+        let started = std::time::Instant::now();
+        let r = ex
+            .run(ExecutorRequest {
+                image: "docker.io/library/alpine:3.20",
+                command: &cmd,
+                workdir: Some("/data"),
+                env: &env,
+                stdin,
+                work_dir: dir.path(),
+                mount_roots: &roots,
+                cpu_cores: None,
+                ram_gb: None,
+                network: false,
+                timeout,
+                cancel: CancellationToken::new(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.exit_code, -1, "{r:?}");
+        assert!(
+            r.system_logs.iter().any(|l| l.contains("timed out")),
+            "{r:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(15));
     }
 }

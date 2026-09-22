@@ -211,14 +211,16 @@ pub fn load_structure_bytes(
     let is_cif = looks_like_cif(text, hint);
     reject_non_finite_coordinates(text, is_cif)?;
     let result = if is_cif {
-        pdbtbx::open_mmcif_raw(text, StrictnessLevel::Loose)
+        pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Mmcif)
+            .set_level(StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(text.as_bytes()))
     } else {
         let coordinates = coordinate_records_only(text);
-        pdbtbx::open_pdb_raw(
-            std::io::BufReader::new(coordinates.as_bytes()),
-            pdbtbx::Context::None,
-            StrictnessLevel::Loose,
-        )
+        pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Pdb)
+            .set_level(StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
     };
     let (mut pdb, _warnings) =
         result.map_err(|e| parse_err(if is_cif { "mmCIF" } else { "PDB" }, e))?;

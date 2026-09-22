@@ -105,11 +105,10 @@ mod tests {
 
     #[test]
     fn crambin_is_experimental() {
-        let (pdb, _) = pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap();
         let b: Vec<f64> = pdb
             .atoms()
             .filter(|a| a.name() == "CA")

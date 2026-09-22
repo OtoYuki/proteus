@@ -104,7 +104,7 @@ enum Commands {
         #[arg(long)]
         compare: Option<PathBuf>,
 
-        /// Run interactive 60 FPS TUI viewer with orbit camera controls
+        /// Run the interactive TUI viewer with orbit camera controls
         #[arg(short, long)]
         interactive: bool,
 
@@ -487,7 +487,7 @@ async fn main() -> Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("Job {} not found", job_id))?;
 
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["Field", "Value"]);
 
             table.add_row(vec!["Job ID", &job.id.to_string()]);
@@ -541,7 +541,7 @@ async fn main() -> Result<()> {
             }
 
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["Biophysical Metric", "Value"]);
 
             table.add_row(vec![
@@ -1301,7 +1301,7 @@ async fn main() -> Result<()> {
                 }
             );
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec![
                 "Rank",
                 "Candidate Header",
@@ -1471,7 +1471,7 @@ async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<
         .ok_or_else(|| anyhow::anyhow!("Metrics for prediction {} not found", pred.id))?;
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL);
+    table.load_style(UTF8_FULL);
     table.set_header(vec!["Metric", "Value", "Confidence Assessment"]);
 
     table.add_row(vec![

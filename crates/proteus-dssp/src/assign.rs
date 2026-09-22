@@ -421,11 +421,10 @@ mod tests {
 
     #[test]
     fn crambin_matches_mdtraj_8_state() {
-        let (pdb, _) = pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap();
         let expect = include_str!("../tests/data/1crn_dssp_mdtraj.txt")
             .trim()
             .to_string();

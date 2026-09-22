@@ -1,9 +1,10 @@
 use crate::error::EngineError;
 use crate::runner::{ComputeRunner, RunResult};
-use bollard::container::{
-    Config, CreateContainerOptions, LogsOptions, StartContainerOptions, WaitContainerOptions,
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    CreateContainerOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions,
+    WaitContainerOptions,
 };
-use bollard::models::HostConfig;
 use bollard::Docker;
 use futures_util::stream::StreamExt;
 use proteus_core::models::{PipelineJob, PipelineTier, Sequence};
@@ -178,11 +179,11 @@ impl ComputeRunner for OciRunner {
             ..Default::default()
         };
 
-        let config = Config {
-            image: Some(image),
-            cmd: Some(cmd),
+        let config = ContainerCreateBody {
+            image: Some(image.to_string()),
+            cmd: Some(cmd.iter().map(|s| s.to_string()).collect()),
             host_config: Some(host_config),
-            working_dir: Some("/workspace"),
+            working_dir: Some("/workspace".to_string()),
             ..Default::default()
         };
 
@@ -190,8 +191,8 @@ impl ComputeRunner for OciRunner {
         self.docker
             .create_container(
                 Some(CreateContainerOptions {
-                    name: container_name.as_str(),
-                    platform: None,
+                    name: Some(container_name.clone()),
+                    ..Default::default()
                 }),
                 config,
             )
@@ -200,14 +201,14 @@ impl ComputeRunner for OciRunner {
 
         info!("Starting OCI container: {}", container_name);
         self.docker
-            .start_container(&container_name, None::<StartContainerOptions<String>>)
+            .start_container(&container_name, None::<StartContainerOptions>)
             .await
             .map_err(|e| EngineError::Container(format!("Failed to start container: {e}")))?;
 
         // Stream logs in background
         let mut logs = self.docker.logs(
             &container_name,
-            Some(LogsOptions::<String> {
+            Some(LogsOptions {
                 stdout: true,
                 stderr: true,
                 follow: true,
@@ -230,14 +231,14 @@ impl ComputeRunner for OciRunner {
         // Wait for container completion
         let mut wait_stream = self
             .docker
-            .wait_container(&container_name, None::<WaitContainerOptions<String>>);
+            .wait_container(&container_name, None::<WaitContainerOptions>);
 
         let waited = wait_stream.next().await;
         let _ = self
             .docker
             .remove_container(
                 &container_name,
-                Some(bollard::container::RemoveContainerOptions {
+                Some(RemoveContainerOptions {
                     force: true,
                     ..Default::default()
                 }),

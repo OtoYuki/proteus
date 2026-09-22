@@ -270,11 +270,11 @@ mod tests {
     fn test_crambin_steric_clash_detection() {
         const CRAMBIN_PDB: &str = include_str!("../tests/data/1crn.pdb");
         let cursor = std::io::Cursor::new(CRAMBIN_PDB.as_bytes());
-        let (pdb, _) = pdbtbx::open_raw(
-            std::io::BufReader::new(cursor),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .expect("Failed to parse Crambin PDB");
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Pdb)
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(cursor))
+            .expect("Failed to parse Crambin PDB");
 
         let stats = compute_steric_overlap(&pdb);
         assert_eq!(stats.clash_count, 0);

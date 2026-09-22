@@ -185,11 +185,10 @@ mod tests {
 
     #[test]
     fn crambin_three_state_fractions_match_dssp() {
-        let (pdb, _) = pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap();
         let bb = crate::backbone::extract_backbone(&pdb);
         let s = assign_secondary_structure(&bb);
         assert_eq!(s.dssp, "-EE-SSHHHHHHHHHHHTTT--HHHHHHHHS-EE-SSS---GGG--");
@@ -212,11 +211,10 @@ mod tests {
 
     #[test]
     fn dihedral_sign_matches_iupac_on_crambin() {
-        let (pdb, _) = pdbtbx::open(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"),
-            pdbtbx::StrictnessLevel::Loose,
-        )
-        .unwrap();
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/1crn.pdb"))
+            .unwrap();
         let csv = include_str!("../tests/data/1crn_phipsi_mdtraj.csv");
         let mut expect: Vec<(Option<f64>, Option<f64>)> = Vec::new();
         for line in csv.lines().skip(1) {

@@ -127,7 +127,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             let model = load_model(&opts)?;
             let scores = score_mutations(&model, &wt, &muts, opts.masked)?;
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["Mutation", "ESM-2 score (log p_mt − log p_wt)"]);
             for (m, s) in muts.iter().zip(&scores) {
                 table.add_row(vec![
@@ -186,7 +186,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             );
             print_heatmap(&rows);
             let mut table = Table::new();
-            table.load_preset(UTF8_FULL);
+            table.load_style(UTF8_FULL);
             table.set_header(vec!["Most tolerated", "score", "Least tolerated", "score"]);
             for i in 0..top.min(n) {
                 let (best, bs) = &all[i];
