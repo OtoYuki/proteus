@@ -28,4 +28,7 @@ pub enum StorageError {
 
     #[error("CAS error: {0}")]
     CasError(String),
+
+    #[error("unsupported export format '{0}': use .parquet, .csv or .json")]
+    UnsupportedExportFormat(String),
 }

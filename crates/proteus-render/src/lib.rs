@@ -36,6 +36,8 @@ pub struct StructureRenderData {
     pub num_disulfides: usize,
     pub metrics: Option<proteus_core::models::BiophysicalMetrics>,
     pub plddts: Vec<f64>,
+    /// Factor applied to the file's B-factor column to get `plddts` (100 for 0–1 files, else 1).
+    pub plddt_scale: f64,
     pub ramachandran_points: Vec<(
         Option<f64>,
         Option<f64>,
@@ -119,22 +121,81 @@ pub fn generate_disulfide_mesh(bonds: &[DisulfideBond]) -> TriangleMesh {
     mesh
 }
 
+/// One C-alpha per protein residue (first altloc, no ions, no waters), its B-factor/pLDDT, and
+/// whether a peptide bond connects it to the previous entry — the same normalisation
+/// `proteus analyze` applies, so the ribbon shows what the metrics measured.
+struct Trace {
+    ca: Vec<Vector3<f64>>,
+    plddts: Vec<f64>,
+    breaks: Vec<bool>,
+    protein: pdbtbx::PDB,
+    plddt_scale: f64,
+}
+
+fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
+    let protein = proteus_core::io::protein_heavy_atoms(pdb);
+    let backbone = proteus_core::backbone::extract_backbone(&protein);
+    let mut t = Trace {
+        ca: Vec::with_capacity(backbone.len()),
+        plddts: Vec::with_capacity(backbone.len()),
+        breaks: Vec::with_capacity(backbone.len()),
+        protein,
+        plddt_scale: 1.0,
+    };
+    for r in &backbone {
+        if let Some(ca) = r.ca {
+            t.ca.push(ca);
+            t.plddts.push(r.b_factor);
+            t.breaks.push(r.chain_break_before);
+        }
+    }
+    // Normalize pLDDT if in [0.0, 1.0] range (e.g., raw ESMFold outputs)
+    let max_plddt = t.plddts.iter().copied().fold(f64::MIN, f64::max);
+    if max_plddt <= 1.0 && max_plddt > 0.0 {
+        for v in &mut t.plddts {
+            *v *= 100.0;
+        }
+        t.plddt_scale = 100.0;
+    }
+    t
+}
+
+/// Cartoon mesh built segment by segment: the spline never crosses a chain break or a gap in
+/// the model, so no tube is drawn between chains or across missing residues. Vertex residue
+/// indices stay global so rainbow colouring runs over the whole structure.
+fn segmented_cartoon_mesh(
+    ca: &[Vector3<f64>],
+    ss: &[proteus_core::structure::SecondaryStructure],
+    plddts: &[f64],
+    breaks: &[bool],
+) -> TriangleMesh {
+    let mut mesh = TriangleMesh::new();
+    let mut start = 0usize;
+    let n = ca.len();
+    for end in 1..=n {
+        if end == n || breaks[end] {
+            if end - start >= 2 {
+                let mut part =
+                    generate_cartoon_mesh(&ca[start..end], &ss[start..end], &plddts[start..end], 4);
+                for v in &mut part.vertices {
+                    v.residue_index += start;
+                }
+                mesh.merge(part);
+            }
+            start = end;
+        }
+    }
+    mesh
+}
+
 /// Parse PDB string content into a high-fidelity structure bundle with ribbons and disulfides.
 pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, RenderError> {
     let pdb = proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None)
         .map_err(|e| RenderError::PdbParse(e.to_string()))?;
 
-    let mut ca_coords = Vec::new();
-    let mut plddts = Vec::new();
-
-    for residue in pdb.residues() {
-        for atom in residue.atoms() {
-            if atom.name().trim() == "CA" {
-                ca_coords.push(Vector3::new(atom.x(), atom.y(), atom.z()));
-                plddts.push(atom.b_factor());
-            }
-        }
-    }
+    let trace = trace_of(&pdb);
+    let ca_coords = trace.ca;
+    let plddts = trace.plddts;
 
     if ca_coords.len() < 2 {
         return Err(RenderError::PdbParse(
@@ -142,15 +203,8 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         ));
     }
 
-    // Normalize pLDDT if in [0.0, 1.0] range (e.g., raw ESMFold outputs)
-    let max_plddt = plddts.iter().copied().fold(f64::MIN, f64::max);
-    if max_plddt <= 1.0 && max_plddt > 0.0 {
-        for v in &mut plddts {
-            *v *= 100.0;
-        }
-    }
-
-    let ss_summary = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&pdb));
+    let ss_summary =
+        assign_secondary_structure(&proteus_core::backbone::extract_backbone(&trace.protein));
 
     // Compute bounding sphere
     let n = ca_coords.len() as f64;
@@ -167,10 +221,11 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let ribbon_mesh = generate_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, 4);
+    let ribbon_mesh =
+        segmented_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, &trace.breaks);
     let camera = OrbitCamera::new(center, max_radius);
 
-    let ds_bonds = extract_disulfide_bonds(&pdb);
+    let ds_bonds = extract_disulfide_bonds(&trace.protein);
     let num_disulfides = ds_bonds.len();
     let disulfide_mesh = if !ds_bonds.is_empty() {
         Some(generate_disulfide_mesh(&ds_bonds))
@@ -178,7 +233,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         None
     };
 
-    let analysis = proteus_core::metrics::analyze_pdb_detailed(&pdb, None).ok();
+    let analysis = proteus_core::metrics::analyze_pdb_detailed(&trace.protein, None).ok();
     let (metrics, detailed_plddts, rama_points) = if let Some(a) = analysis {
         (Some(a.metrics), a.plddts, a.ramachandran_points)
     } else {
@@ -193,8 +248,35 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         num_disulfides,
         metrics,
         plddts: detailed_plddts,
+        plddt_scale: trace.plddt_scale,
         ramachandran_points: rama_points,
     })
+}
+
+/// Colour scheme to use when the caller did not choose one: pLDDT only when the B-factor
+/// column really is a confidence (predicted model); otherwise secondary structure, so that an
+/// experimental structure is not painted "very low confidence" because its B-factors are small.
+pub fn default_color_scheme(
+    source: Option<proteus_core::confidence::ConfidenceSource>,
+) -> ColorScheme {
+    match source {
+        Some(proteus_core::confidence::ConfidenceSource::Predicted) => ColorScheme::Plddt,
+        _ => ColorScheme::SecondaryStructure,
+    }
+}
+
+impl StructureRenderData {
+    /// See [`default_color_scheme`]; uses this bundle's analysis.
+    pub fn default_color_scheme(&self) -> ColorScheme {
+        default_color_scheme(self.metrics.as_ref().map(|m| m.confidence_source))
+    }
+
+    /// True when the B-factor column is a predictor's confidence.
+    pub fn is_predicted(&self) -> bool {
+        self.metrics
+            .as_ref()
+            .is_some_and(|m| m.confidence_source.is_predicted())
+    }
 }
 
 /// Parse PDB string content and construct the 3D ribbon mesh and initial orbit camera.
@@ -214,7 +296,17 @@ pub fn render_pdb_snapshot(
     scheme: ColorScheme,
 ) -> Result<String, RenderError> {
     let structure = parse_pdb_structure(pdb_content)?;
+    render_structure_snapshot(&structure, width, height, backend, scheme)
+}
 
+/// As [`render_pdb_snapshot`], for an already parsed structure bundle.
+pub fn render_structure_snapshot(
+    structure: &StructureRenderData,
+    width: usize,
+    height: usize,
+    backend: TerminalBackend,
+    scheme: ColorScheme,
+) -> Result<String, RenderError> {
     // Pixel dimensions based on backend
     let (px_width, px_height) = match backend {
         TerminalBackend::HalfBlock => (width, height * 2),
@@ -269,27 +361,10 @@ pub fn prepare_superposition_for_rendering(
     let ref_pdb = proteus_core::io::open_structure_bytes(reference_pdb.as_bytes(), None)
         .map_err(|e| RenderError::PdbParse(format!("Reference structure parse failed: {e}")))?;
 
-    let mut tgt_ca = Vec::new();
-    let mut tgt_plddts = Vec::new();
-    for r in tgt_pdb.residues() {
-        for a in r.atoms() {
-            if a.name().trim() == "CA" {
-                tgt_ca.push(Vector3::new(a.x(), a.y(), a.z()));
-                tgt_plddts.push(a.b_factor());
-            }
-        }
-    }
-
-    let mut ref_ca = Vec::new();
-    let mut ref_plddts = Vec::new();
-    for r in ref_pdb.residues() {
-        for a in r.atoms() {
-            if a.name().trim() == "CA" {
-                ref_ca.push(Vector3::new(a.x(), a.y(), a.z()));
-                ref_plddts.push(a.b_factor());
-            }
-        }
-    }
+    let tgt = trace_of(&tgt_pdb);
+    let refr = trace_of(&ref_pdb);
+    let (tgt_ca, tgt_plddts) = (tgt.ca, tgt.plddts);
+    let (ref_ca, ref_plddts) = (refr.ca, refr.plddts);
 
     let common_len = tgt_ca.len().min(ref_ca.len());
     if common_len < 2 {
@@ -307,20 +382,22 @@ pub fn prepare_superposition_for_rendering(
 
     let aligned_tgt_ca = sup.aligned_coords;
     // Secondary structure is invariant under rigid superposition: assign on the originals.
-    let tgt_ss = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&tgt_pdb));
-    let ref_ss = assign_secondary_structure(&proteus_core::backbone::extract_backbone(&ref_pdb));
+    let tgt_ss =
+        assign_secondary_structure(&proteus_core::backbone::extract_backbone(&tgt.protein));
+    let ref_ss =
+        assign_secondary_structure(&proteus_core::backbone::extract_backbone(&refr.protein));
 
-    let target_mesh = generate_cartoon_mesh(
+    let target_mesh = segmented_cartoon_mesh(
         &aligned_tgt_ca,
         &tgt_ss.assignment[..common_len],
         &tgt_plddts[..common_len],
-        4,
+        &tgt.breaks[..common_len],
     );
-    let ref_mesh = generate_cartoon_mesh(
+    let ref_mesh = segmented_cartoon_mesh(
         &ref_ca[..common_len],
         &ref_ss.assignment[..common_len],
         &ref_plddts[..common_len],
-        4,
+        &refr.breaks[..common_len],
     );
 
     // Compute bounding center and radius over the combined structures
@@ -408,6 +485,107 @@ mod tests {
     use super::*;
 
     const CRAMBIN_PDB: &str = include_str!("../../proteus-core/tests/data/1crn.pdb");
+
+    /// Two copies of crambin, chain A and chain B, 60 Å apart.
+    fn two_chains_far_apart() -> String {
+        let mut out = String::new();
+        for line in CRAMBIN_PDB.lines().filter(|l| l.starts_with("ATOM")) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out.push_str("TER\n");
+        for line in CRAMBIN_PDB.lines().filter(|l| l.starts_with("ATOM")) {
+            let x: f64 = line[30..38].trim().parse().unwrap();
+            let shifted = format!(
+                "{}B{}{:8.3}{}",
+                &line[..21],
+                &line[22..30],
+                x + 60.0,
+                &line[38..]
+            );
+            out.push_str(&shifted);
+            out.push('\n');
+        }
+        out.push_str("END\n");
+        out
+    }
+
+    #[test]
+    fn default_colour_is_plddt_only_for_predicted_models() {
+        use proteus_core::confidence::ConfidenceSource as C;
+        assert_eq!(default_color_scheme(Some(C::Predicted)), ColorScheme::Plddt);
+        assert_eq!(
+            default_color_scheme(Some(C::ExperimentalBFactor)),
+            ColorScheme::SecondaryStructure
+        );
+        assert_eq!(
+            default_color_scheme(Some(C::Unknown)),
+            ColorScheme::SecondaryStructure
+        );
+        assert_eq!(default_color_scheme(None), ColorScheme::SecondaryStructure);
+        // The bundle carries the analysis, so the choice can be made from it directly.
+        let crambin = parse_pdb_structure(CRAMBIN_PDB).unwrap();
+        assert_eq!(
+            crambin.default_color_scheme(),
+            ColorScheme::SecondaryStructure
+        );
+    }
+
+    #[test]
+    fn ribbon_does_not_bridge_chains() {
+        let data = parse_pdb_structure(&two_chains_far_apart()).unwrap();
+        assert_eq!(data.num_residues, 92);
+        let pdb = proteus_core::io::open_structure_bytes(two_chains_far_apart().as_bytes(), None)
+            .unwrap();
+        let ca: Vec<Vector3<f32>> = pdb
+            .atoms()
+            .filter(|a| a.name() == "CA")
+            .map(|a| Vector3::new(a.x() as f32, a.y() as f32, a.z() as f32))
+            .collect();
+        // Every ribbon vertex must sit near some C-alpha; a tube bridging the 60 Å gap has
+        // vertices ~30 Å from everything.
+        let worst = data
+            .ribbon_mesh
+            .vertices
+            .iter()
+            .map(|v| {
+                ca.iter()
+                    .map(|c| (v.position - c).norm())
+                    .fold(f32::INFINITY, f32::min)
+            })
+            .fold(0.0f32, f32::max);
+        assert!(
+            worst < 6.0,
+            "a ribbon vertex is {worst:.1} Å from the nearest C-alpha"
+        );
+    }
+
+    #[test]
+    fn altloc_and_ion_ca_atoms_do_not_enter_the_ribbon() {
+        // Duplicate one CA as an alternate conformation and add a calcium ion named CA.
+        let mut text = String::new();
+        for line in CRAMBIN_PDB.lines().filter(|l| l.starts_with("ATOM")) {
+            if &line[12..16] == " CA " && &line[22..26] == "   3" {
+                text.push_str(&format!("{}A{}\n", &line[..16], &line[17..]));
+                text.push_str(&format!("{}B{}\n", &line[..16], &line[17..]));
+            } else {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        text.push_str(
+            "HETATM 9999 CA    CA A 101      50.000  50.000  50.000  1.00 10.00          CA\nEND\n",
+        );
+        let data = parse_pdb_structure(&text).unwrap();
+        assert_eq!(data.num_residues, 46);
+        let far = data
+            .ribbon_mesh
+            .vertices
+            .iter()
+            .filter(|v| (v.position - Vector3::new(50.0, 50.0, 50.0)).norm() < 8.0)
+            .count();
+        assert_eq!(far, 0, "ribbon reached the calcium ion");
+    }
 
     #[test]
     fn test_parse_and_render_crambin_halfblock() {

@@ -91,7 +91,12 @@ async fn require_bearer(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
+        // RFC 7235: the scheme is case-insensitive.
+        .and_then(|v| {
+            v.get(..7)
+                .filter(|scheme| scheme.eq_ignore_ascii_case("bearer "))
+                .map(|_| &v[7..])
+        })
         .map(str::trim)
         .unwrap_or("");
     let ok = presented.len() == token.len() && presented.as_bytes().ct_eq(token.as_bytes()).into();
@@ -398,5 +403,97 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use proteus_engine::simulated::SimulatedRunner;
+    use proteus_storage::pool::create_in_memory_pool;
+    use proteus_storage::repository::ProteusRepository;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    /// A client that subscribes after the job finished must still learn its state, and the
+    /// stream must end instead of hanging forever.
+    #[tokio::test]
+    async fn job_event_stream_starts_with_the_current_status_and_ends_when_terminal() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let tmp = tempdir().unwrap();
+        let scheduler = PipelineScheduler::new(
+            repo.clone(),
+            Arc::new(SimulatedRunner::new()),
+            tmp.path().to_path_buf(),
+        );
+        let seq = proteus_core::models::Sequence {
+            id: uuid::Uuid::new_v4(),
+            header: "x".into(),
+            fasta: "ACDEFGHIKLMNPQRSTVWY".into(),
+            length: 20,
+            created_at: chrono::Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let job = proteus_core::models::PipelineJob {
+            id: uuid::Uuid::new_v4(),
+            sequence_id: seq.id,
+            tier: proteus_core::models::PipelineTier::FastScreening,
+            status: proteus_core::models::JobStatus::Queued,
+            priority: 1,
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error_log: None,
+        };
+        repo.insert_job(&job).await.unwrap();
+        scheduler.process_job(job.id).await.unwrap();
+
+        let app = build_router(AppState::new(scheduler));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/jobs/{}/events", job.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // Would never resolve if the stream stayed open.
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            axum::body::to_bytes(response.into_body(), 1 << 20),
+        )
+        .await
+        .expect("event stream did not end")
+        .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(text.contains("\"Completed\""), "{text}");
+    }
+
+    #[tokio::test]
+    async fn job_event_stream_for_an_unknown_job_is_404() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let tmp = tempdir().unwrap();
+        let scheduler = PipelineScheduler::new(
+            repo,
+            Arc::new(SimulatedRunner::new()),
+            tmp.path().to_path_buf(),
+        );
+        let app = build_router(AppState::new(scheduler));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/jobs/00000000-0000-0000-0000-000000000000/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

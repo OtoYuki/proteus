@@ -204,11 +204,23 @@ pub fn export_records_to_parquet<W: Write + Send>(
     Ok(())
 }
 
+/// Reject an export path whose extension is not one of the supported formats. `screen` calls
+/// this before folding anything, so a typo does not surface only after the whole run.
+pub fn check_export_path(path: &Path) -> Result<(), StorageError> {
+    match path.extension().and_then(|s| s.to_str()) {
+        Some("json") | Some("parquet") | Some("csv") => Ok(()),
+        other => Err(StorageError::UnsupportedExportFormat(
+            other.unwrap_or("").to_string(),
+        )),
+    }
+}
+
 /// Writes screening records to a target path, inferring format from file extension (.parquet, .json, .csv).
 pub async fn save_screening_dataset(
     records: &[ScreeningRecord],
     path: &Path,
 ) -> Result<(), StorageError> {
+    check_export_path(path)?;
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             tokio::fs::create_dir_all(parent)
@@ -232,11 +244,16 @@ pub async fn save_screening_dataset(
                 .await
                 .map_err(StorageError::IoError)?;
         }
-        _ => {
+        Some("csv") => {
             let content = export_records_to_csv(records);
             tokio::fs::write(path, content)
                 .await
                 .map_err(StorageError::IoError)?;
+        }
+        other => {
+            return Err(StorageError::UnsupportedExportFormat(
+                other.unwrap_or("").to_string(),
+            ));
         }
     }
 
@@ -385,6 +402,27 @@ mod tests {
             .await
             .unwrap();
         assert!(nested_path.exists());
+    }
+
+    #[tokio::test]
+    async fn unknown_export_extension_is_an_error_not_silent_csv() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("results.xyz");
+        let err = save_screening_dataset(&[sample_record(1, "x")], &path)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("xyz") && err.contains("parquet"), "{err}");
+        assert!(
+            !path.exists(),
+            "nothing must be written for an unknown format"
+        );
+        // No extension at all is equally an error.
+        assert!(
+            save_screening_dataset(&[sample_record(1, "x")], &dir.path().join("results"))
+                .await
+                .is_err()
+        );
     }
 
     #[test]

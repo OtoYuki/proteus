@@ -61,6 +61,48 @@ fn looks_like_cif(text: &str, hint: Option<&str>) -> bool {
         .unwrap_or(false)
 }
 
+/// Which format a structure text is in, from the file-name hint when it is conclusive, else
+/// from the content (mmCIF starts with a `data_` block). Used by the Mol* exports, which must
+/// tell the viewer the format.
+pub fn sniff_format(text: &str, hint: Option<&str>) -> StructureFormat {
+    if looks_like_cif(text, hint) {
+        StructureFormat::MmCif
+    } else {
+        StructureFormat::Pdb
+    }
+}
+
+/// Mol* `representationParams` (a JSON object literal) that colours a structure the way this
+/// project reports it. Mol*'s own `plddt-confidence` theme only applies to mmCIF files carrying
+/// `ma_qa_metric_local` (AlphaFold-DB); every PDB-format prediction (ESMFold API, container
+/// output) is silently left in chain colours by it. Those get the `uncertainty` theme (per-atom
+/// B-factor) with the AlphaFold palette and cut-points, over the file's own scale
+/// (`plddt_scale` = 1 for 0–100 files, 100 for 0–1 files). Experimental structures are coloured
+/// by secondary structure.
+pub fn molstar_representation_params(
+    predicted: bool,
+    format: StructureFormat,
+    plddt_scale: f64,
+) -> String {
+    match (predicted, format) {
+        (false, _) => "{ theme: { globalName: 'secondary-structure' } }".to_string(),
+        (true, StructureFormat::MmCif) => {
+            "{ theme: { globalName: 'plddt-confidence' } }".to_string()
+        }
+        (true, StructureFormat::Pdb) => {
+            let top = 100.0 / plddt_scale;
+            format!(
+                // Stops in pLDDT order (verified in a headless browser: the theme's internal
+                // `reverse` flag flips the list, so a low-to-high list maps low to orange).
+                "{{ theme: {{ globalName: 'uncertainty', globalColorParams: {{ domain: [0, {top}], \
+                 list: {{ kind: 'interpolate', colors: [[0xFF7D45, 0], [0xFF7D45, 0.5], \
+                 [0xFFDB13, 0.5], [0xFFDB13, 0.7], [0x65CBF3, 0.7], [0x65CBF3, 0.9], \
+                 [0x0053D6, 0.9], [0x0053D6, 1]] }} }} }} }}"
+            )
+        }
+    }
+}
+
 /// PDB record types that coordinate-based analysis needs. Sequence and annotation records
 /// (SEQRES, SEQADV, DBREF, HELIX, SHEET, SITE, LINK, …) are dropped before parsing: they carry
 /// nothing Proteus uses, and pdbtbx's lexer rejects legitimate deposited files on malformed
@@ -294,6 +336,45 @@ ATOM 2 C CA . ALA A 1 2 ? 3.8 0.0 0.0 1.00 10.00 2 A 1\n";
         let r = std::panic::catch_unwind(|| load_structure_bytes(cif.as_bytes(), Some("x.cif")));
         assert!(r.is_ok(), "mmCIF with nan must not panic");
         assert!(r.unwrap().is_err(), "mmCIF with nan must be rejected");
+    }
+
+    #[test]
+    fn format_is_sniffed_from_content_when_the_name_says_nothing() {
+        assert_eq!(
+            sniff_format("data_1UBQ\n#\nloop_\n", None),
+            StructureFormat::MmCif
+        );
+        assert_eq!(
+            sniff_format("ATOM      1  N   MET A   1", None),
+            StructureFormat::Pdb
+        );
+        assert_eq!(
+            sniff_format("data_x", Some("weird.pdb")),
+            StructureFormat::Pdb
+        );
+        assert_eq!(
+            sniff_format("ATOM", Some("x.cif.gz")),
+            StructureFormat::MmCif
+        );
+    }
+
+    #[test]
+    fn molstar_params_follow_provenance_and_format() {
+        assert!(
+            molstar_representation_params(false, StructureFormat::Pdb, 1.0)
+                .contains("secondary-structure")
+        );
+        assert!(
+            molstar_representation_params(true, StructureFormat::MmCif, 1.0)
+                .contains("plddt-confidence")
+        );
+        let pdb = molstar_representation_params(true, StructureFormat::Pdb, 1.0);
+        assert!(
+            pdb.contains("'uncertainty'") && pdb.contains("domain: [0, 100]"),
+            "{pdb}"
+        );
+        let esm_api = molstar_representation_params(true, StructureFormat::Pdb, 100.0);
+        assert!(esm_api.contains("domain: [0, 1]"), "{esm_api}");
     }
 
     #[test]

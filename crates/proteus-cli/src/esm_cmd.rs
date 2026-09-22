@@ -259,32 +259,79 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
 /// else the first entry. Each variant's substitutions come from `[mutation=P19A]` in its header
 /// or, failing that, from a position-wise diff against the wild type (same length only).
 /// Returns `None` for entries that cannot be related to the wild type.
+/// Substitutions declared in a header's `[mutation=P19A,C4S]` tag, if any.
+fn tagged_mutations(header: &str) -> Result<Option<Vec<Mutation>>> {
+    let Some(m) = header
+        .split("[mutation=")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+    else {
+        return Ok(None);
+    };
+    m.split([',', '/', ';'])
+        .filter(|x| !x.trim().is_empty())
+        .map(|x| parse_mutation(x).map_err(|e| anyhow::anyhow!("{e}")))
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+/// The wild-type sequence a library is scored against: the `[wildtype]` entry when there is
+/// one; otherwise the first entry, with its own `[mutation=…]` tag reverted (a `mutate --no-wt`
+/// library never carries the scaffold itself).
+pub fn wild_type_of(sequences: &[Sequence]) -> Result<String> {
+    if let Some(wt) = sequences.iter().find(|s| s.header.contains("[wildtype]")) {
+        return Ok(wt.fasta.clone());
+    }
+    let first = sequences
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("empty library"))?;
+    let Some(muts) = tagged_mutations(&first.header)? else {
+        return Ok(first.fasta.clone());
+    };
+    let mut chars: Vec<char> = first.fasta.chars().collect();
+    for m in &muts {
+        let slot = chars.get_mut(m.pos - 1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "'{}': position {} is beyond the sequence length {}",
+                first.header,
+                m.pos,
+                first.fasta.len()
+            )
+        })?;
+        if *slot != m.mt {
+            bail!(
+                "'{}': header says {} but residue {} is {}, not {}",
+                first.header,
+                m,
+                m.pos,
+                *slot,
+                m.mt
+            );
+        }
+        *slot = m.wt;
+    }
+    Ok(chars.into_iter().collect())
+}
+
 pub fn score_library(
     sequences: &[Sequence],
     opts: &EsmOptions,
 ) -> Result<HashMap<Uuid, Option<f32>>> {
     let model = load_model(opts)?;
-    let wt = sequences
+    let wt_fasta = wild_type_of(sequences)?;
+    let wt_header = sequences
         .iter()
         .find(|s| s.header.contains("[wildtype]"))
-        .or_else(|| sequences.first())
-        .ok_or_else(|| anyhow::anyhow!("empty library"))?;
-    eprintln!("ESM-2 wild type: {}", wt.header);
+        .map(|s| s.header.as_str())
+        .unwrap_or("(reconstructed from the first entry's mutation tag)");
+    eprintln!("ESM-2 wild type: {wt_header}");
     let mut out = HashMap::with_capacity(sequences.len());
     let mut skipped = 0usize;
     for s in sequences {
-        let muts: Vec<Mutation> = if let Some(m) = s
-            .header
-            .split("[mutation=")
-            .nth(1)
-            .and_then(|rest| rest.split(']').next())
-        {
-            m.split([',', '/', ';'])
-                .filter(|x| !x.trim().is_empty())
-                .map(|x| parse_mutation(x).map_err(|e| anyhow::anyhow!("{e}")))
-                .collect::<Result<_>>()?
-        } else if s.fasta.len() == wt.fasta.len() {
-            wt.fasta
+        let muts: Vec<Mutation> = if let Some(tagged) = tagged_mutations(&s.header)? {
+            tagged
+        } else if s.fasta.len() == wt_fasta.len() {
+            wt_fasta
                 .chars()
                 .zip(s.fasta.chars())
                 .enumerate()
@@ -303,7 +350,7 @@ pub fn score_library(
         let score = if muts.is_empty() {
             0.0
         } else {
-            score_mutations(&model, &wt.fasta, &muts, opts.masked)?
+            score_mutations(&model, &wt_fasta, &muts, opts.masked)?
                 .iter()
                 .sum()
         };
@@ -321,4 +368,50 @@ pub fn score_library(
 pub fn hybrid(fitness: f64, esm: f32) -> f64 {
     let squashed = 100.0 / (1.0 + (-(esm as f64)).exp());
     0.7 * fitness + 0.3 * squashed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seq(header: &str, fasta: &str) -> Sequence {
+        Sequence {
+            id: Uuid::new_v4(),
+            header: header.into(),
+            fasta: fasta.into(),
+            length: fasta.len(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn wild_type_is_the_tagged_entry_when_present() {
+        let lib = vec![
+            seq("x_T1A [mutation=T1A]", "ACDE"),
+            seq("x_WT [wildtype]", "TCDE"),
+        ];
+        assert_eq!(wild_type_of(&lib).unwrap(), "TCDE");
+    }
+
+    #[test]
+    fn wild_type_is_reconstructed_from_mutation_tags_when_no_entry_is_tagged() {
+        // `proteus mutate --no-wt` output: every entry is a single substitution of the same scaffold.
+        let lib = vec![
+            seq("v_T1A [mutation=T1A]", "ACDE"),
+            seq("v_C2A [mutation=C2A]", "TADE"),
+        ];
+        assert_eq!(wild_type_of(&lib).unwrap(), "TCDE");
+    }
+
+    #[test]
+    fn wild_type_falls_back_to_the_first_untagged_entry() {
+        let lib = vec![seq("scaffold", "TCDE"), seq("variant", "TADE")];
+        assert_eq!(wild_type_of(&lib).unwrap(), "TCDE");
+    }
+
+    #[test]
+    fn inconsistent_mutation_tag_is_an_error() {
+        let lib = vec![seq("v_T1A [mutation=T1A]", "GCDE")];
+        assert!(wild_type_of(&lib).is_err());
+    }
 }

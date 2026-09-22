@@ -351,6 +351,30 @@ impl PipelineScheduler {
             }
         };
 
+        // A structure that does not cover the sequence (truncated or wrong output from a
+        // predictor) must not be scored as if it did.
+        let residues = metrics
+            .secondary_structure_summary
+            .as_ref()
+            .map_or(0, |s| s.assignment.len());
+        if residues != seq.length {
+            let err_msg = format!(
+                "predicted structure has {residues} residues but the sequence has {} \
+                 (runner output {})",
+                seq.length,
+                run_result.pdb_path.display()
+            );
+            error!("Job {} rejected: {}", job_id, err_msg);
+            self.repo
+                .update_job_status(job_id, JobStatus::Failed, Some(err_msg.clone()))
+                .await?;
+            let _ = self.events_tx.send(EngineEvent::JobFailed {
+                job_id,
+                error: err_msg.clone(),
+            });
+            return Err(EngineError::Pipeline(err_msg));
+        }
+
         // Persist prediction
         let prediction_id = Uuid::new_v4();
         metrics.prediction_id = prediction_id;
@@ -1403,6 +1427,76 @@ mod tests {
             .system_logs
             .iter()
             .any(|l| l.contains("output upload") && l.contains("failed")));
+    }
+
+    /// A runner that returns a structure with a fixed number of residues, whatever the input.
+    struct TruncatedRunner(usize);
+
+    #[async_trait::async_trait]
+    impl ComputeRunner for TruncatedRunner {
+        async fn execute_job(
+            &self,
+            job: &proteus_core::models::PipelineJob,
+            _sequence: &Sequence,
+            work_dir: &std::path::Path,
+        ) -> Result<crate::runner::RunResult, EngineError> {
+            tokio::fs::create_dir_all(work_dir).await?;
+            let path = work_dir.join(format!("{}.pdb", job.id));
+            let mut pdb = String::new();
+            for i in 0..self.0 {
+                pdb.push_str(&format!(
+                    "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 90.00           C\n",
+                    i + 1,
+                    i + 1,
+                    i as f64 * 3.8,
+                    0.0,
+                    0.0
+                ));
+            }
+            tokio::fs::write(&path, pdb).await?;
+            Ok(crate::runner::RunResult {
+                pdb_path: path,
+                plddt: Some(90.0),
+                metadata: Some(serde_json::json!({"engine": "stub"})),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn structure_with_the_wrong_residue_count_fails_the_job() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let tmp = tempdir().unwrap();
+        let scheduler = PipelineScheduler::new(
+            repo.clone(),
+            Arc::new(TruncatedRunner(3)),
+            tmp.path().to_path_buf(),
+        );
+        let seq = Sequence {
+            id: Uuid::new_v4(),
+            header: "twenty-two".into(),
+            fasta: "MKTAYIAKQRQISFVKSHFSRQ".into(),
+            length: 22,
+            created_at: Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let job = proteus_core::models::PipelineJob {
+            id: Uuid::new_v4(),
+            sequence_id: seq.id,
+            tier: PipelineTier::FastScreening,
+            status: JobStatus::Queued,
+            priority: 1,
+            created_at: Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error_log: None,
+        };
+        repo.insert_job(&job).await.unwrap();
+        let err = scheduler.process_job(job.id).await.unwrap_err().to_string();
+        assert!(err.contains("3") && err.contains("22"), "{err}");
+        let job = repo.get_job(job.id).await.unwrap().unwrap();
+        assert_eq!(job.status, JobStatus::Failed);
+        assert!(repo.get_prediction_by_job(job.id).await.unwrap().is_none());
     }
 
     #[tokio::test]

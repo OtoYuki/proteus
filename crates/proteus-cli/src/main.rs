@@ -116,9 +116,10 @@ enum Commands {
         #[arg(short, long, value_enum, default_value_t = CliBackend::HalfBlock)]
         backend: CliBackend,
 
-        /// Color scheme
-        #[arg(short, long, value_enum, default_value_t = CliColorScheme::Plddt)]
-        color: CliColorScheme,
+        /// Color scheme. Default: pLDDT for predicted models, secondary structure for
+        /// experimental ones (their B-factors are not confidences).
+        #[arg(short, long, value_enum)]
+        color: Option<CliColorScheme>,
 
         /// Terminal viewport width (defaults to terminal width or 80)
         #[arg(long)]
@@ -758,6 +759,21 @@ async fn main() -> Result<()> {
 
                 let b64_pdb =
                     base64::engine::general_purpose::STANDARD.encode(pdb_content.as_bytes());
+                // Mol* needs to be told the format; mmCIF handed over as 'pdb' loads nothing.
+                let format = proteus_core::io::sniff_format(
+                    &pdb_content,
+                    target_path.file_name().and_then(|n| n.to_str()),
+                );
+                let molstar_format = match format {
+                    proteus_core::io::StructureFormat::MmCif => "mmcif",
+                    proteus_core::io::StructureFormat::Pdb => "pdb",
+                };
+                let (predicted, scale) = match proteus_render::parse_pdb_structure(&pdb_content) {
+                    Ok(sd) => (sd.is_predicted(), sd.plddt_scale),
+                    Err(_) => (false, 1.0),
+                };
+                let representation_params =
+                    proteus_core::io::molstar_representation_params(predicted, format, scale);
                 let html_content = format!(
                     r#"<!DOCTYPE html>
 <html lang="en">
@@ -769,7 +785,7 @@ async fn main() -> Result<()> {
     <style>
         body, html {{ width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #fff; }}
         #app {{ width: 100%; height: 100%; position: absolute; }}
-        #header {{ position: absolute; top: 16px; left: 20px; z-index: 1000; background: rgba(15, 23, 42, 0.85); padding: 12px 20px; border-radius: 12px; backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
+        #header {{ position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; pointer-events: none; background: rgba(15, 23, 42, 0.85); padding: 12px 20px; border-radius: 12px; backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5); }}
         #header h1 {{ margin: 0; font-size: 16px; font-weight: 700; color: #38bdf8; letter-spacing: -0.025em; }}
         #header p {{ margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; }}
     </style>
@@ -794,11 +810,10 @@ async fn main() -> Result<()> {
             const rawPdb = atob(pdbB64);
             const blob = new Blob([rawPdb], {{ type: 'text/plain' }});
             const url = URL.createObjectURL(blob);
-            await viewer.loadStructureFromUrl(url, 'pdb', false, {{
-                representationStyle: {{
-                    type: 'cartoon',
-                    color: 'secondary-structure',
-                }}
+            // Mol* Viewer API: colouring is chosen through representationParams.theme;
+            // `representationStyle` is not a recognised option and was silently ignored.
+            await viewer.loadStructureFromUrl(url, '{molstar_format}', false, {{
+                representationParams: {representation_params}
             }});
         }});
     </script>
@@ -825,7 +840,30 @@ async fn main() -> Result<()> {
             }
 
             let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
-            let render_color: proteus_render::rasterizer::ColorScheme = color.into();
+            // Parsed once here; the snapshot/interactive paths reuse it.
+            let structure_data = if compare.is_none() {
+                Some(
+                    proteus_render::parse_pdb_structure(&pdb_content)
+                        .context("Failed to parse structure for 3D rendering")?,
+                )
+            } else {
+                None
+            };
+            let render_color: proteus_render::rasterizer::ColorScheme =
+                match (color, &structure_data) {
+                    (Some(c), _) => c.into(),
+                    (None, Some(sd)) => {
+                        let scheme = sd.default_color_scheme();
+                        if scheme == proteus_render::rasterizer::ColorScheme::SecondaryStructure {
+                            eprintln!(
+                                "note: colouring by secondary structure (B-factor column is not a \
+                             pLDDT confidence); pass --color plddt to force"
+                            );
+                        }
+                        scheme
+                    }
+                    (None, None) => proteus_render::rasterizer::ColorScheme::Plddt,
+                };
 
             let (term_cols, term_rows): (u16, u16) =
                 crossterm::terminal::size().unwrap_or((80, 24));
@@ -888,8 +926,7 @@ async fn main() -> Result<()> {
                     );
                 }
             } else if interactive || dashboard {
-                let structure_data = proteus_render::parse_pdb_structure(&pdb_content)
-                    .context("Failed to parse structure for 3D rendering")?;
+                let structure_data = structure_data.expect("parsed above when --compare is absent");
 
                 let dashboard_data = Some(proteus_render::tui::DashboardData {
                     title: title.clone(),
@@ -917,8 +954,9 @@ async fn main() -> Result<()> {
                 )
                 .context("Interactive 3D viewer error")?;
             } else {
-                let snapshot = proteus_render::render_pdb_snapshot(
-                    &pdb_content,
+                let structure_data = structure_data.expect("parsed above when --compare is absent");
+                let snapshot = proteus_render::render_structure_snapshot(
+                    &structure_data,
                     w,
                     h,
                     render_backend,
@@ -1021,6 +1059,10 @@ async fn main() -> Result<()> {
 
             let sequences = proteus_core::sequence::validate_and_parse_multi_fasta(&content)
                 .context("Multi-FASTA library parsing failed")?;
+            if let Some(p) = &export {
+                proteus_storage::check_export_path(p)
+                    .with_context(|| format!("cannot export to {:?}", p))?;
+            }
 
             let total_seqs = sequences.len();
             eprintln!("Loaded {total_seqs} candidate sequences for screening funnel");
@@ -1189,6 +1231,16 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+            }
+
+            if candidates.is_empty() {
+                let failed = total_seqs - successful_count;
+                anyhow::bail!(
+                    "no candidate reached the leaderboard: {failed} of {total_seqs} jobs failed \
+                     (run with RUST_LOG=info to see why), {simulated_dropped} produced simulated \
+                     placeholders, and the remaining {} fell below --min-plddt {min_plddt:.1}",
+                    successful_count - simulated_dropped
+                );
             }
 
             // Rank by the selected signal, descending
@@ -1510,6 +1562,19 @@ mod tests {
             RunnerMode::Auto
         ));
         assert!(rankable(proteus_engine::ENGINE_OCI, RunnerMode::Auto));
+    }
+
+    #[test]
+    fn view_colour_is_optional() {
+        let color_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Commands::View { color, .. } => color,
+            _ => unreachable!(),
+        };
+        assert_eq!(color_of(&["proteus", "view", "x.pdb"]), None);
+        assert_eq!(
+            color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
+            Some(CliColorScheme::Rainbow)
+        );
     }
 
     #[test]
