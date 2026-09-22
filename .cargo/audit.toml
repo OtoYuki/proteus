@@ -2,4 +2,8 @@
 ignore = [
     # paste (unmaintained) via nalgebra/simba; no maintained replacement upstream
     "RUSTSEC-2024-0436",
+    # rsa 0.9 Marvin timing side-channel, no fixed release: reaches the lockfile through
+    # sqlx-mysql (sqlx feature unification) but is never compiled — only the sqlite driver is
+    # enabled. cargo-deny prunes it from the feature graph; cargo-audit reads the raw lockfile.
+    "RUSTSEC-2023-0071",
 ]

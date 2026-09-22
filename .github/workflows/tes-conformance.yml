@@ -80,8 +80,12 @@ jobs:
             > /tmp/proteusd.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:8080/v1/service-info >/dev/null && break; sleep 1; done
       - name: Install Sprocket
+        # Authenticated lookup: anonymous api.github.com calls share a per-IP rate limit on
+        # hosted runners and intermittently return a 403 body without `tag_name`.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          V=$(curl -s https://api.github.com/repos/stjude-rust-labs/sprocket/releases/latest | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'])")
+          V=$(gh release view --repo stjude-rust-labs/sprocket --json tagName -q .tagName)
           curl -sL "https://github.com/stjude-rust-labs/sprocket/releases/download/$V/sprocket-$V-x86_64-unknown-linux-gnu.tar.gz" | tar xz
           find . -maxdepth 3 -name sprocket -type f -exec mv {} /usr/local/bin/sprocket \;
           sprocket --version
