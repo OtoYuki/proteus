@@ -31,17 +31,20 @@ pub fn evaluate_candidate_fitness(
         .unwrap_or(0.0);
 
     // 2. Compactness Component (weight: 0.20)
-    // Expected globular protein Rg follows Flory scaling: Rg_expected ≈ 2.82 * N^0.392
-    let expected_rg = 2.82 * n_res.powf(0.392);
+    // Empirical folded-protein scaling Rg ≈ 2.2·N^0.38 Å (Skolnick & Kolinski; Hong & Lei
+    // 2009 give the same form). Measured on the validation corpus the single-chain entries sit
+    // at 0.93–1.06 of this line. Full credit up to 1.10×, none from 2.0× (a denatured chain
+    // follows ≈1.93·N^0.598 Å, i.e. 2.5–3× the folded value at typical lengths).
+    let expected_rg = 2.2 * n_res.powf(0.38);
     let actual_rg = metrics.radius_of_gyration;
 
     let rg_ratio = actual_rg / expected_rg.max(1.0);
-    let compactness_component = if rg_ratio <= 1.05 {
+    let compactness_component = if rg_ratio <= 1.10 {
         100.0
     } else if rg_ratio >= 2.0 {
         0.0
     } else {
-        (1.0 - (rg_ratio - 1.05) / 0.95) * 100.0
+        (1.0 - (rg_ratio - 1.10) / 0.90) * 100.0
     };
 
     // 3. Ramachandran Stereochemistry Component (weight: 0.15)
@@ -160,6 +163,53 @@ mod tests {
             fitness.total_score
         );
         assert_eq!(fitness.tier_label, "Lead Candidate (Synthesis Priority)");
+    }
+
+    fn with_rg(rg: f64) -> BiophysicalMetrics {
+        BiophysicalMetrics {
+            id: Uuid::new_v4(),
+            prediction_id: Uuid::new_v4(),
+            radius_of_gyration: rg,
+            rmsd_to_reference: None,
+            contact_density: 0.1,
+            plddt_distribution: PlddtDistribution {
+                mean: 90.0,
+                median: 90.0,
+                high_confidence_fraction: 1.0,
+                very_high_confidence_fraction: 0.5,
+            },
+            confidence_source: Default::default(),
+            secondary_structure_summary: None,
+            ramachandran_stats: None,
+            steric_overlap: None,
+            sasa_metrics: None,
+            interaction_network: None,
+            candidate_fitness_score: None,
+        }
+    }
+
+    /// Folded-protein scaling from the literature (Rg ≈ 2.2·N^0.38 Å): a structure on that
+    /// line is fully compact, one 1.6× wider is clearly penalised, one 2.5× wider (an extended
+    /// chain) scores nothing. The old constant (2.82·N^0.392) put the 1.6× case at 85/100.
+    #[test]
+    fn compactness_is_calibrated_to_folded_protein_scaling() {
+        let n = 150usize;
+        let folded = 2.2 * (n as f64).powf(0.38);
+        assert_eq!(
+            evaluate_candidate_fitness(&with_rg(folded), n).compactness_component,
+            100.0
+        );
+        assert_eq!(
+            evaluate_candidate_fitness(&with_rg(folded * 0.95), n).compactness_component,
+            100.0
+        );
+        let loose = evaluate_candidate_fitness(&with_rg(folded * 1.6), n).compactness_component;
+        assert!(loose < 60.0, "1.6x folded Rg scored {loose}");
+        assert!(loose > 0.0);
+        assert_eq!(
+            evaluate_candidate_fitness(&with_rg(folded * 2.5), n).compactness_component,
+            0.0
+        );
     }
 
     #[test]
