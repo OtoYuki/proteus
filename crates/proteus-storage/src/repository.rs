@@ -253,6 +253,34 @@ impl ProteusRepository {
         Ok(())
     }
 
+    /// Job IDs whose hex form starts with `prefix`, for git-style short IDs.
+    ///
+    /// Returns at most `limit` matches so the caller can tell "one" from "ambiguous"
+    /// without loading the whole table. The prefix is matched case-insensitively against
+    /// the canonical lowercase-hyphenated form the rest of the codebase stores.
+    pub async fn find_job_ids_by_prefix(
+        &self,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<Uuid>, StorageError> {
+        // `%` and `_` are LIKE wildcards; a caller-supplied prefix must not smuggle them in.
+        if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query("SELECT id FROM jobs WHERE id LIKE ? ORDER BY id LIMIT ?")
+            .bind(format!("{}%", prefix.to_ascii_lowercase()))
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| {
+                let id: String = r.get("id");
+                Uuid::from_str(&id).ok()
+            })
+            .collect())
+    }
+
     pub async fn get_prediction_by_job(
         &self,
         job_id: Uuid,
@@ -916,6 +944,84 @@ mod tests {
         assert_eq!(
             repo.get_tes_task("t").await.unwrap().unwrap().state,
             "CANCELED"
+        );
+    }
+
+    /// Two jobs sharing a first byte, so the prefix lookup has something to be ambiguous about.
+    #[tokio::test]
+    async fn job_id_prefix_lookup_distinguishes_unique_from_ambiguous() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+
+        let seq = Sequence {
+            id: Uuid::new_v4(),
+            header: "p".into(),
+            fasta: "ACDEFGHIKL".into(),
+            length: 10,
+            created_at: Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+
+        for id in [
+            "ab12cd34-0000-4000-8000-000000000001",
+            "ab12cd34-0000-4000-8000-000000000002",
+            "ffffffff-0000-4000-8000-000000000003",
+        ] {
+            repo.insert_job(&PipelineJob {
+                id: Uuid::parse_str(id).unwrap(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status: JobStatus::Queued,
+                priority: 0,
+                created_at: Utc::now(),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            })
+            .await
+            .unwrap();
+        }
+
+        // Unique prefix.
+        assert_eq!(
+            repo.find_job_ids_by_prefix("ffffffff", 4)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        // Shared prefix: both come back so the caller can report the ambiguity.
+        assert_eq!(
+            repo.find_job_ids_by_prefix("ab12cd34", 4)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        // No match.
+        assert!(repo
+            .find_job_ids_by_prefix("deadbeef", 4)
+            .await
+            .unwrap()
+            .is_empty());
+        // A LIKE wildcard must not match everything.
+        assert!(repo
+            .find_job_ids_by_prefix("%", 4)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(repo
+            .find_job_ids_by_prefix("________", 4)
+            .await
+            .unwrap()
+            .is_empty());
+        // The limit is honoured.
+        assert_eq!(
+            repo.find_job_ids_by_prefix("ab12cd34", 1)
+                .await
+                .unwrap()
+                .len(),
+            1
         );
     }
 }

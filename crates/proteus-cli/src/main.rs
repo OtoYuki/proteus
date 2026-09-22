@@ -6,6 +6,7 @@
 mod cli;
 mod cmd;
 mod esm_cmd;
+mod job_ref;
 mod report;
 
 use anyhow::Result;

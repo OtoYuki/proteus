@@ -15,6 +15,7 @@ pub mod view;
 pub(crate) mod prelude {
     pub use crate::cli::*;
     pub(crate) use crate::esm_cmd;
+    pub(crate) use crate::job_ref;
     pub use crate::report::print_job_inspection;
     pub use anyhow::{Context, Result};
     pub use comfy_table::presets::UTF8_FULL;
