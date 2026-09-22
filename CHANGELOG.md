@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **Secondary structure in the render is now pinned to the coordinates, not the file's
+  annotations.** Predicted structures carry no `HELIX`/`SHEET` records — an ESMFold response has
+  none — so a viewer that reads them has nothing to read for exactly the files this tool exists
+  to look at. Proteus already ran DSSP, but nothing stopped that regressing; a test now strips
+  the annotations and asserts the per-class vertex counts are unchanged. Measured head-to-head,
+  another terminal viewer's β-strand coverage nearly halves on the same pair of files where ours
+  does not move at all, and on an ESMFold prediction of protein G it renders helix where the
+  four-stranded sheet is.
 - **The cartoon ribbon's flat face now follows the backbone instead of an arbitrary axis.**
   Frames came from pure parallel transport seeded on a fixed reference vector, so the ribbon
   was smooth and twist-free but its wide face bore no relation to the peptide planes — β-strands
