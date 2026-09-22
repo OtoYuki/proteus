@@ -279,9 +279,12 @@ impl Esm2 {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let len = tokens.len();
         if len > self.cfg.max_position_embeddings {
+            // Report the limit the caller can act on: residues, not tokens. The two differ by
+            // the <cls>/<eos> pair, which the caller never wrote.
             return Err(EsmError::Sequence(format!(
-                "{len} tokens exceed max_position_embeddings={}",
-                self.cfg.max_position_embeddings
+                "sequence is too long for this checkpoint: {} residues, limit {}",
+                len.saturating_sub(2),
+                self.cfg.max_residues()
             )));
         }
         let ids = Tensor::from_slice(tokens, (1, len), &self.device)?;

@@ -169,14 +169,6 @@ pub fn analyze_pdb_file(
     Ok(detailed.metrics)
 }
 
-/// Comprehensive biophysical analysis on an open PDB structure.
-pub fn analyze_pdb_structure(
-    pdb: &pdbtbx::PDB,
-    reference_pdb: Option<&pdbtbx::PDB>,
-) -> Result<BiophysicalMetrics, CoreError> {
-    Ok(analyze_pdb_detailed(pdb, reference_pdb)?.metrics)
-}
-
 /// Detailed biophysical analysis on an open PDB structure with per-residue profiles.
 pub fn analyze_pdb_detailed(
     pdb: &pdbtbx::PDB,

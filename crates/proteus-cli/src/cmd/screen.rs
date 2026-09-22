@@ -40,7 +40,11 @@ pub struct Args {
     esm: esm_cmd::EsmOptions,
 }
 
-pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::path::Path) -> Result<()> {
+pub async fn run(
+    args: Args,
+    db_path: &std::path::Path,
+    artifacts_dir: &std::path::Path,
+) -> Result<()> {
     let db_path = db_path.to_path_buf();
     let artifacts_dir = artifacts_dir.to_path_buf();
     let Args {
@@ -115,9 +119,7 @@ pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::pat
     let pb = ProgressBar::new(total_seqs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template(
-                "[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}",
-            )?
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")?
             .progress_chars("█▓▒░"),
     );
     pb.set_message("Screening candidate library in parallel...");
@@ -193,30 +195,26 @@ pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::pat
                                 s.coil_fraction * 100.0,
                             )
                         });
-                    let (favored_rama, rama_outliers) =
-                        metrics.ramachandran_stats.as_ref().map_or((0.0, 0), |r| {
-                            (r.favored_fraction * 100.0, r.outlier_count)
-                        });
+                    let (favored_rama, rama_outliers) = metrics
+                        .ramachandran_stats
+                        .as_ref()
+                        .map_or((0.0, 0), |r| (r.favored_fraction * 100.0, r.outlier_count));
                     let heavy_atom_overlap_score = metrics
                         .steric_overlap
                         .as_ref()
                         .map_or(0.0, |c| c.heavy_atom_overlap_score);
-                    let (
-                        hbond_count,
-                        salt_bridge_count,
-                        pi_stacking_count,
-                        cation_pi_count,
-                    ) = metrics
-                        .interaction_network
-                        .as_ref()
-                        .map_or((0, 0, 0, 0), |net| {
-                            (
-                                net.summary.total_hbonds,
-                                net.summary.total_salt_bridges,
-                                net.summary.total_pi_pi_stacks,
-                                net.summary.total_cation_pi,
-                            )
-                        });
+                    let (hbond_count, salt_bridge_count, pi_stacking_count, cation_pi_count) =
+                        metrics
+                            .interaction_network
+                            .as_ref()
+                            .map_or((0, 0, 0, 0), |net| {
+                                (
+                                    net.summary.total_hbonds,
+                                    net.summary.total_salt_bridges,
+                                    net.summary.total_pi_pi_stacks,
+                                    net.summary.total_cation_pi,
+                                )
+                            });
                     let fitness = metrics.candidate_fitness_score.unwrap_or(0.0);
                     let esm2_score = esm_scores
                         .as_ref()

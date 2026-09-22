@@ -12,10 +12,7 @@ pub struct Args {
 }
 
 pub async fn run(args: Args) -> Result<()> {
-    let Args {
-        command,
-        esm,
-    } = args;
+    let Args { command, esm } = args;
     esm_cmd::run(command, esm).await?;
     Ok(())
 }

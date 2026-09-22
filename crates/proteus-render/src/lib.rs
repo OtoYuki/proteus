@@ -283,14 +283,6 @@ impl StructureRenderData {
     }
 }
 
-/// Parse PDB string content and construct the 3D ribbon mesh and initial orbit camera.
-pub fn parse_pdb_for_rendering(
-    pdb_content: &str,
-) -> Result<(TriangleMesh, OrbitCamera), RenderError> {
-    let data = parse_pdb_structure(pdb_content)?;
-    Ok((data.ribbon_mesh, data.camera))
-}
-
 /// Render a single static snapshot string from PDB content with SSAO and disulfide bridges.
 pub fn render_pdb_snapshot(
     pdb_content: &str,

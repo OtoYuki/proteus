@@ -62,10 +62,8 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     } = args;
     let target_path = PathBuf::from(&target);
     let (pdb_content, title) = if target_path.exists() {
-        let content =
-            proteus_core::io::read_structure_text(&target_path).with_context(|| {
-                format!("Failed to read structure file at {:?}", target_path)
-            })?;
+        let content = proteus_core::io::read_structure_text(&target_path)
+            .with_context(|| format!("Failed to read structure file at {:?}", target_path))?;
         let name = target_path
             .file_name()
             .and_then(|s| s.to_str())
@@ -125,9 +123,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                         .ok()
                         .map(|a| a.metrics.confidence_source);
                     (
-                        proteus_core::webview::WebColorScheme::from_provenance(
-                            source, scale,
-                        ),
+                        proteus_core::webview::WebColorScheme::from_provenance(source, scale),
                         proteus_core::webview::dssp_by_residue(&pdb),
                     )
                 }
@@ -165,6 +161,16 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     }
 
     let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
+    // The kitty protocol writes raw pixel escapes; a terminal that does not speak it prints
+    // the payload as garbage. Say so once rather than letting the user think it is corrupt.
+    if render_backend == proteus_render::terminal::TerminalBackend::Kitty
+        && !proteus_render::terminal::KittyRenderer::is_supported()
+    {
+        eprintln!(
+            "note: $TERM does not look like a kitty-graphics terminal (kitty, ghostty, wezterm); \
+             if the output is garbage, use --backend halfblock or braille"
+        );
+    }
     // Parsed once here; the snapshot/interactive paths reuse it.
     let structure_data = if compare.is_none() {
         Some(
@@ -174,39 +180,33 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     } else {
         None
     };
-    let render_color: proteus_render::rasterizer::ColorScheme =
-        match (color, &structure_data) {
-            (Some(c), _) => c.into(),
-            (None, Some(sd)) => {
-                let scheme = sd.default_color_scheme();
-                if scheme == proteus_render::rasterizer::ColorScheme::SecondaryStructure {
-                    eprintln!(
-                        "note: colouring by secondary structure (B-factor column is not a \
+    let render_color: proteus_render::rasterizer::ColorScheme = match (color, &structure_data) {
+        (Some(c), _) => c.into(),
+        (None, Some(sd)) => {
+            let scheme = sd.default_color_scheme();
+            if scheme == proteus_render::rasterizer::ColorScheme::SecondaryStructure {
+                eprintln!(
+                    "note: colouring by secondary structure (B-factor column is not a \
                      pLDDT confidence); pass --color plddt to force"
-                    );
-                }
-                scheme
+                );
             }
-            (None, None) => proteus_render::rasterizer::ColorScheme::Plddt,
-        };
+            scheme
+        }
+        (None, None) => proteus_render::rasterizer::ColorScheme::Plddt,
+    };
 
-    let (term_cols, term_rows): (u16, u16) =
-        crossterm::terminal::size().unwrap_or((80, 24));
+    let (term_cols, term_rows): (u16, u16) = crossterm::terminal::size().unwrap_or((80, 24));
     let w = width.unwrap_or(term_cols as usize);
     let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
 
     if let Some(ref_path) = compare {
-        let ref_content =
-            proteus_core::io::read_structure_text(&ref_path).with_context(|| {
-                format!("Failed to read reference structure at {:?}", ref_path)
-            })?;
+        let ref_content = proteus_core::io::read_structure_text(&ref_path)
+            .with_context(|| format!("Failed to read reference structure at {:?}", ref_path))?;
 
         if interactive {
-            let sup_data = proteus_render::prepare_superposition_for_rendering(
-                &pdb_content,
-                &ref_content,
-            )
-            .context("Failed to superimpose structures for 3D rendering")?;
+            let sup_data =
+                proteus_render::prepare_superposition_for_rendering(&pdb_content, &ref_content)
+                    .context("Failed to superimpose structures for 3D rendering")?;
 
             let ref_name = ref_path
                 .file_name()

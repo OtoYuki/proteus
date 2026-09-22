@@ -35,10 +35,6 @@ impl BackboneResidue {
     pub fn is_proline(&self) -> bool {
         self.name == "PRO"
     }
-
-    pub fn is_glycine(&self) -> bool {
-        self.name == "GLY"
-    }
 }
 
 /// Extract one entry per residue that has a C-alpha, in file order, with chain breaks marked.

@@ -222,24 +222,6 @@ impl PipelineScheduler {
         &self.tes
     }
 
-    pub fn with_cas(
-        repo: ProteusRepository,
-        runner: Arc<dyn ComputeRunner>,
-        artifacts_dir: PathBuf,
-        cas: Arc<CasStore>,
-    ) -> Self {
-        let (events_tx, _) = broadcast::channel(128);
-        Self {
-            repo,
-            runner,
-            events_tx,
-            artifacts_dir,
-            cas,
-            tes: TesExecutionConfig::default(),
-            cancel_tokens: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
     pub fn cas(&self) -> &CasStore {
         &self.cas
     }

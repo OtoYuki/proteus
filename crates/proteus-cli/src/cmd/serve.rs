@@ -48,7 +48,11 @@ pub struct Args {
     executor_timeout: u64,
 }
 
-pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::path::Path) -> Result<()> {
+pub async fn run(
+    args: Args,
+    db_path: &std::path::Path,
+    artifacts_dir: &std::path::Path,
+) -> Result<()> {
     let db_path = db_path.to_path_buf();
     let artifacts_dir = artifacts_dir.to_path_buf();
     let Args {
@@ -70,8 +74,7 @@ pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::pat
 
     let tes_executor: Arc<dyn TesExecutor> = match executor {
         ExecutorMode::Container => Arc::new(
-            ContainerExecutor::connect(!no_pull)
-                .context("TES container executor unavailable")?,
+            ContainerExecutor::connect(!no_pull).context("TES container executor unavailable")?,
         ),
         ExecutorMode::Host => {
             if !addr.ip().is_loopback() {
@@ -81,9 +84,7 @@ pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::pat
                     addr.ip()
                 );
             }
-            tracing::warn!(
-                "TES executors run as HOST PROCESSES; container images are ignored"
-            );
+            tracing::warn!("TES executors run as HOST PROCESSES; container images are ignored");
             Arc::new(HostExecutor)
         }
     };

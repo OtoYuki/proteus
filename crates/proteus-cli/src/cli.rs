@@ -1,17 +1,15 @@
 //! The command-line surface: the parser, the shared value enums and the small helpers
 //! every subcommand needs. One module per subcommand lives in [`crate::cmd`].
 
+use crate::cmd;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use proteus_core::models::PipelineTier;
 use proteus_engine::oci::OciRunner;
 use proteus_engine::simulated::SimulatedRunner;
-use proteus_engine::{
-    AutoRunner, ComputeRunner, EsmApiRunner,
-};
+use proteus_engine::{AutoRunner, ComputeRunner, EsmApiRunner};
 use std::path::PathBuf;
 use std::sync::Arc;
-use crate::cmd;
 
 #[derive(Parser)]
 #[command(name = "proteus")]
@@ -184,8 +182,14 @@ mod tests {
 
     #[test]
     fn simulated_structures_rank_only_when_the_simulator_was_requested() {
-        assert!(!rankable(proteus_engine::ENGINE_SIMULATED, RunnerMode::Auto));
-        assert!(!rankable(proteus_engine::ENGINE_SIMULATED, RunnerMode::EsmApi));
+        assert!(!rankable(
+            proteus_engine::ENGINE_SIMULATED,
+            RunnerMode::Auto
+        ));
+        assert!(!rankable(
+            proteus_engine::ENGINE_SIMULATED,
+            RunnerMode::EsmApi
+        ));
         assert!(rankable(
             proteus_engine::ENGINE_SIMULATED,
             RunnerMode::Simulated

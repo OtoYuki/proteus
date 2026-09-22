@@ -26,8 +26,8 @@ pub async fn run(args: Args) -> Result<()> {
         confidence_source,
     } = args;
     println!("Analyzing structure file: {:?}", pdb);
-    let mut metrics = analyze_pdb_file(&pdb, reference.as_deref())
-        .context("Biophysical analysis failed")?;
+    let mut metrics =
+        analyze_pdb_file(&pdb, reference.as_deref()).context("Biophysical analysis failed")?;
     let forced = match confidence_source {
         ConfidenceSourceArg::Auto => None,
         ConfidenceSourceArg::Predicted => Some(ConfidenceSource::Predicted),
@@ -78,9 +78,7 @@ pub async fn run(args: Args) -> Result<()> {
         None => {
             table.add_row(vec![
                 Cell::new("pLDDT"),
-                Cell::new(
-                    "n/a (experimental structure; B-factor column is not a confidence)",
-                ),
+                Cell::new("n/a (experimental structure; B-factor column is not a confidence)"),
             ]);
         }
     }

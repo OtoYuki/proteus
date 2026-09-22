@@ -1,37 +1,35 @@
 //! One module per subcommand. Each owns its clap `Args` struct and a `run`, so the
 //! parser surface and the work sit together and `main` stays a dispatch table.
 
-pub mod submit;
-pub mod status;
-pub mod inspect;
 pub mod analyze;
-pub mod view;
+pub mod esm;
+pub mod inspect;
 pub mod mutate;
 pub mod screen;
-pub mod esm;
 pub mod serve;
+pub mod status;
+pub mod submit;
+pub mod view;
 
 /// What every subcommand module imports.
 pub(crate) mod prelude {
-    pub use anyhow::{Context, Result};
     pub use crate::cli::*;
+    pub(crate) use crate::esm_cmd;
+    pub use crate::report::print_job_inspection;
+    pub use anyhow::{Context, Result};
     pub use comfy_table::presets::UTF8_FULL;
     pub use comfy_table::{Cell, Table};
     pub use indicatif::{ProgressBar, ProgressStyle};
-    pub use proteus_storage::create_sqlite_pool;
-    pub use proteus_storage::repository::ProteusRepository;
-    pub(crate) use crate::esm_cmd;
-    pub use crate::report::print_job_inspection;
     pub use proteus_core::confidence::ConfidenceSource;
     pub use proteus_core::metrics::analyze_pdb_file;
     pub use proteus_core::models::PipelineTier;
     pub use proteus_core::ranking::evaluate_candidate_fitness;
     pub use proteus_core::sequence::validate_and_parse_fasta;
-    
-    
+    pub use proteus_storage::create_sqlite_pool;
+    pub use proteus_storage::repository::ProteusRepository;
+
     pub use proteus_engine::{
-        ContainerExecutor, HostExecutor,
-        PipelineScheduler, TesExecutionConfig, TesExecutor,
+        ContainerExecutor, HostExecutor, PipelineScheduler, TesExecutionConfig, TesExecutor,
     };
     pub use proteus_server::{run_server_with_options, ServerOptions};
     pub use std::net::SocketAddr;
@@ -45,7 +43,12 @@ use anyhow::Result;
 use std::path::Path;
 
 /// Run the parsed subcommand.
-pub async fn dispatch(command: Commands, db_path: &Path, artifacts_dir: &Path, data_dir: &Path) -> Result<()> {
+pub async fn dispatch(
+    command: Commands,
+    db_path: &Path,
+    artifacts_dir: &Path,
+    data_dir: &Path,
+) -> Result<()> {
     let _ = (db_path, artifacts_dir, data_dir);
     match command {
         Commands::Submit(args) => submit::run(args, db_path, artifacts_dir).await,

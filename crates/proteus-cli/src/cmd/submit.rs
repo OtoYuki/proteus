@@ -26,7 +26,11 @@ pub struct Args {
     wait: bool,
 }
 
-pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::path::Path) -> Result<()> {
+pub async fn run(
+    args: Args,
+    db_path: &std::path::Path,
+    artifacts_dir: &std::path::Path,
+) -> Result<()> {
     let db_path = db_path.to_path_buf();
     let artifacts_dir = artifacts_dir.to_path_buf();
     let Args {
@@ -46,8 +50,7 @@ pub async fn run(args: Args, db_path: &std::path::Path, artifacts_dir: &std::pat
         anyhow::bail!("Either --file or --fasta must be specified");
     };
 
-    let sequence =
-        validate_and_parse_fasta(&fasta_content).context("FASTA validation failed")?;
+    let sequence = validate_and_parse_fasta(&fasta_content).context("FASTA validation failed")?;
 
     println!(
         "Sequence validated: '{}' ({} residues)",
@@ -115,7 +118,9 @@ mod tests {
             _ => unreachable!(),
         };
         assert!(wait_of(&["proteus", "submit", "--fasta", ">x\nAC"]));
-        assert!(wait_of(&["proteus", "submit", "--fasta", ">x\nAC", "--wait"]));
+        assert!(wait_of(&[
+            "proteus", "submit", "--fasta", ">x\nAC", "--wait"
+        ]));
         assert!(!wait_of(&[
             "proteus",
             "submit",

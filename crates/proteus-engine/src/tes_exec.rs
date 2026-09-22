@@ -225,13 +225,6 @@ impl ContainerExecutor {
         })
     }
 
-    pub fn from_docker(docker: Docker, pull_missing: bool) -> Self {
-        Self {
-            docker,
-            pull_missing,
-        }
-    }
-
     async fn ensure_image(&self, image: &str, logs: &mut Vec<String>) -> Result<(), EngineError> {
         if self.docker.inspect_image(image).await.is_ok() {
             return Ok(());
