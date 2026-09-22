@@ -115,6 +115,31 @@ impl OrbitCamera {
         r_yaw * r_pitch * r_roll * self.base
     }
 
+    /// Ångströms per rendered pixel at the current fit, for a viewport of `width` × `height`
+    /// **pixels** (not cells).
+    ///
+    /// This is the number that says whether a picture can show what the viewer asked for.
+    /// Consecutive C-alphas are 3.8 Å apart and the ribbon is 0.5–2.8 Å wide, so once a pixel
+    /// spans more than a couple of Å the render is an outline of the fold and nothing smaller
+    /// survives. Callers use it to say so rather than letting a reader over-read a picture.
+    pub fn angstroms_per_pixel(&self, width: usize, height: usize) -> f64 {
+        let sphere_fit = (width.min(height) as f32) * 0.90 / (self.bounding_radius * 2.0);
+        let scale = self.zoom
+            * match self.half_extents {
+                Some((hx, hy)) if hx > 0.0 && hy > 0.0 => {
+                    let fit =
+                        (width as f32 * 0.90 / (2.0 * hx)).min(height as f32 * 0.90 / (2.0 * hy));
+                    fit.max(sphere_fit)
+                }
+                _ => sphere_fit,
+            };
+        if scale <= 0.0 {
+            f64::INFINITY
+        } else {
+            1.0 / scale as f64
+        }
+    }
+
     /// Project a world-space point to 2D screen coordinates with depth: `(x, y, depth_z)`.
     ///
     /// The scale is **isotropic** — one world unit is the same number of cells horizontally and

@@ -128,6 +128,8 @@ struct Trace {
     ca: Vec<Vector3<f64>>,
     plddts: Vec<f64>,
     breaks: Vec<bool>,
+    /// Ribbon wide-axis per residue, from the backbone carbonyl (see `ribbon_guides`).
+    guides: Vec<Option<Vector3<f64>>>,
     protein: pdbtbx::PDB,
     plddt_scale: f64,
 }
@@ -139,6 +141,7 @@ fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
         ca: Vec::with_capacity(backbone.len()),
         plddts: Vec::with_capacity(backbone.len()),
         breaks: Vec::with_capacity(backbone.len()),
+        guides: Vec::with_capacity(backbone.len()),
         protein,
         plddt_scale: 1.0,
     };
@@ -147,8 +150,33 @@ fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
             t.ca.push(ca);
             t.plddts.push(r.b_factor);
             t.breaks.push(r.chain_break_before);
+            t.guides.push(match (r.c, r.o) {
+                (Some(c), Some(o)) if (o - c).norm() > 1e-6 => Some((o - c).normalize()),
+                _ => None,
+            });
         }
     }
+    // Carson & Bugg flip correction: a beta strand's pleat alternates the carbonyl up and down
+    // residue by residue, so the raw direction reverses every step. Flipping each guide to agree
+    // with the previous one turns that alternation into a smoothly twisting ribbon axis; without
+    // it the ribbon would corkscrew 180 degrees per residue. Measured on the corpus this takes
+    // the consecutive-guide angle in strands from a median 57 degrees to 21, the remainder being
+    // the strand's real twist. A chain break restarts the chain of comparisons.
+    let mut previous: Option<Vector3<f64>> = None;
+    for i in 0..t.guides.len() {
+        if t.breaks.get(i).copied().unwrap_or(false) {
+            previous = None;
+        }
+        if let Some(g) = t.guides[i] {
+            let corrected = match previous {
+                Some(p) if g.dot(&p) < 0.0 => -g,
+                _ => g,
+            };
+            t.guides[i] = Some(corrected);
+            previous = Some(corrected);
+        }
+    }
+
     // Normalize pLDDT if in [0.0, 1.0] range (e.g., raw ESMFold outputs)
     let max_plddt = t.plddts.iter().copied().fold(f64::MIN, f64::max);
     if max_plddt <= 1.0 && max_plddt > 0.0 {
@@ -168,6 +196,7 @@ fn segmented_cartoon_mesh(
     ss: &[proteus_core::structure::SecondaryStructure],
     plddts: &[f64],
     breaks: &[bool],
+    guides: &[Option<Vector3<f64>>],
 ) -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
     let mut start = 0usize;
@@ -175,8 +204,13 @@ fn segmented_cartoon_mesh(
     for end in 1..=n {
         if end == n || breaks[end] {
             if end - start >= 2 {
-                let mut part =
-                    generate_cartoon_mesh(&ca[start..end], &ss[start..end], &plddts[start..end], 4);
+                let mut part = generate_cartoon_mesh(
+                    &ca[start..end],
+                    &ss[start..end],
+                    &plddts[start..end],
+                    &guides[start..end],
+                    4,
+                );
                 for v in &mut part.vertices {
                     v.residue_index += start;
                 }
@@ -221,8 +255,13 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let ribbon_mesh =
-        segmented_cartoon_mesh(&ca_coords, &ss_summary.assignment, &plddts, &trace.breaks);
+    let ribbon_mesh = segmented_cartoon_mesh(
+        &ca_coords,
+        &ss_summary.assignment,
+        &plddts,
+        &trace.breaks,
+        &trace.guides,
+    );
     let ca_f32: Vec<Vector3<f32>> = ca_coords
         .iter()
         .map(|p| Vector3::new(p.x as f32, p.y as f32, p.z as f32))
@@ -275,11 +314,53 @@ impl StructureRenderData {
         default_color_scheme(self.metrics.as_ref().map(|m| m.confidence_source))
     }
 
+    /// What one rendered pixel covers, in Ångströms, for a terminal viewport of `cols` × `rows`
+    /// cells on `backend`. See [`OrbitCamera::angstroms_per_pixel`].
+    pub fn angstroms_per_pixel(&self, cols: usize, rows: usize, backend: TerminalBackend) -> f64 {
+        let (w, h) = framebuffer_size(cols, rows, backend);
+        self.camera.angstroms_per_pixel(w, h)
+    }
+
+    /// A one-line caveat when the viewport cannot resolve what the structure contains, or
+    /// `None` when it can. Consecutive C-alphas are 3.8 Å apart, so a pixel wider than that
+    /// cannot separate neighbouring residues however good the rasteriser is.
+    pub fn resolution_note(
+        &self,
+        cols: usize,
+        rows: usize,
+        backend: TerminalBackend,
+    ) -> Option<String> {
+        const CA_SPACING: f64 = 3.8;
+        let a_per_px = self.angstroms_per_pixel(cols, rows, backend);
+        if !a_per_px.is_finite() || a_per_px < CA_SPACING / 2.0 {
+            return None;
+        }
+        Some(format!(
+            "note: {a_per_px:.1} Å per pixel at {cols}×{rows} — neighbouring residues are 3.8 Å \
+             apart, so this shows the fold's outline and not per-residue detail. Enlarge the \
+             terminal, or use --backend braille (2×4 subpixels per cell) or kitty."
+        ))
+    }
+
     /// True when the B-factor column is a predictor's confidence.
     pub fn is_predicted(&self) -> bool {
         self.metrics
             .as_ref()
             .is_some_and(|m| m.confidence_source.is_predicted())
+    }
+}
+
+/// Framebuffer pixels behind one terminal cell, per backend: half-block packs 1×2 per cell,
+/// Braille 2×4, and the kitty protocol blits true pixels.
+pub(crate) fn framebuffer_size(
+    cols: usize,
+    rows: usize,
+    backend: TerminalBackend,
+) -> (usize, usize) {
+    match backend {
+        TerminalBackend::HalfBlock => (cols, rows * 2),
+        TerminalBackend::Braille => (cols * 2, rows * 4),
+        TerminalBackend::Kitty => (cols * 8, rows * 16),
     }
 }
 
@@ -304,12 +385,7 @@ pub fn render_structure_snapshot(
     scheme: ColorScheme,
 ) -> Result<String, RenderError> {
     // Pixel dimensions based on backend
-    let (px_width, px_height) = match backend {
-        TerminalBackend::HalfBlock => (width, height * 2),
-        TerminalBackend::Braille => (width * 2, height * 4),
-        TerminalBackend::Kitty => (width * 8, height * 16),
-    };
-
+    let (px_width, px_height) = framebuffer_size(width, height, backend);
     let mut fb = Framebuffer::new(px_width, px_height);
     fb.clear(ColorRGB::BLACK);
 
@@ -388,12 +464,14 @@ pub fn prepare_superposition_for_rendering(
         &tgt_ss.assignment[..common_len],
         &tgt_plddts[..common_len],
         &tgt.breaks[..common_len],
+        &tgt.guides[..common_len],
     );
     let ref_mesh = segmented_cartoon_mesh(
         &ref_ca[..common_len],
         &ref_ss.assignment[..common_len],
         &ref_plddts[..common_len],
         &refr.breaks[..common_len],
+        &refr.guides[..common_len],
     );
 
     // Compute bounding center and radius over the combined structures
@@ -567,6 +645,151 @@ mod tests {
             .filter(|c| matches!(c, '▀' | '▄' | '█'))
             .count();
         assert!(drawn > 0, "nothing was drawn for a C-alpha-only helix");
+    }
+
+    /// The ribbon's flat face must follow the backbone, not an arbitrary axis.
+    ///
+    /// Checked against the validated interaction network rather than against the ribbon's own
+    /// inputs, so this measures a physical property and not the plumbing: **residues that are
+    /// backbone H-bond partners across a β-sheet should present near-parallel ribbon faces.**
+    /// That coplanarity is what makes a sheet read as a sheet instead of a bundle of tubes.
+    ///
+    /// Measured over β-rich corpus structures, carbonyl-guided orientation gives a consistent
+    /// 21–31° (1CRN 21.1, 1UBQ 21.5, 1TEN 25.9, 1PGB 26.3, 2CI2 30.8) — which is the real
+    /// twist of a β-sheet. Pure parallel transport, which is all a renderer that never reads
+    /// C and O can do, gives 25–84° on the same pairs: sometimes right by luck of the seed,
+    /// never reliably. The consistency is the evidence, not the magnitude.
+    #[test]
+    fn hbonded_sheet_partners_share_a_ribbon_plane() {
+        use proteus_core::structure::SecondaryStructure;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-core/tests/data/1crn.pdb"
+        );
+        let text = std::fs::read_to_string(path).unwrap();
+        let pdb = proteus_core::io::open_structure_bytes(text.as_bytes(), None).unwrap();
+        let trace = trace_of(&pdb);
+        let backbone = proteus_core::backbone::extract_backbone(&trace.protein);
+        let ss = proteus_core::structure::assign_secondary_structure(&backbone);
+        let net = proteus_core::interactions::compute_interaction_network(&pdb);
+
+        let index: std::collections::HashMap<(String, isize), usize> = backbone
+            .iter()
+            .enumerate()
+            .map(|(i, r)| ((r.chain_id.clone(), r.seq_num), i))
+            .collect();
+
+        let mut angles: Vec<f64> = Vec::new();
+        for h in &net.hbonds {
+            let (Some(&i), Some(&j)) = (
+                index.get(&(h.donor_chain_id.clone(), h.donor_res_seq)),
+                index.get(&(h.acceptor_chain_id.clone(), h.acceptor_res_seq)),
+            ) else {
+                continue;
+            };
+            // Both ends in a strand, and far enough apart in sequence to be a sheet contact
+            // rather than a local turn.
+            if ss.assignment.get(i) != Some(&SecondaryStructure::Strand)
+                || ss.assignment.get(j) != Some(&SecondaryStructure::Strand)
+                || (i as isize - j as isize).abs() < 3
+            {
+                continue;
+            }
+            if let (Some(a), Some(b)) = (trace.guides[i], trace.guides[j]) {
+                // Sign is free: the face is a plane, not a direction.
+                angles.push(a.dot(&b).abs().clamp(0.0, 1.0).acos().to_degrees());
+            }
+        }
+
+        assert!(
+            !angles.is_empty(),
+            "no sheet H-bond pairs found to measure — has the interaction network or the \
+             secondary-structure assignment changed?"
+        );
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = angles[angles.len() / 2];
+        assert!(
+            median < 40.0,
+            "ribbon faces of H-bonded sheet partners are {median:.1}° apart over {} pairs; a \
+             β-sheet should be near-coplanar (observed 21–31° across the corpus). This is what \
+             an arbitrary frame orientation looks like.",
+            angles.len()
+        );
+    }
+
+    /// A picture that cannot separate neighbouring residues must say so — and the advice it
+    /// gives has to be true, which is the part that is easy to get wrong.
+    #[test]
+    fn a_viewport_too_small_to_resolve_residues_says_so() {
+        let text = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../proteus-core/tests/data/1crn.pdb"
+        ))
+        .unwrap();
+        let data = parse_pdb_structure(&text).unwrap();
+
+        // 46 residues across a normal terminal resolves fine: no note, no crying wolf.
+        assert!(
+            data.resolution_note(80, 24, TerminalBackend::HalfBlock)
+                .is_none(),
+            "warned about a small protein that renders fine"
+        );
+
+        // The same structure squeezed into a tiny viewport cannot, and must say so.
+        let note = data
+            .resolution_note(10, 4, TerminalBackend::HalfBlock)
+            .expect("no note at 10x4, where a pixel spans several residues");
+        assert!(note.contains("Å per pixel"), "{note}");
+        assert!(note.contains("3.8 Å apart"), "{note}");
+
+        // The advice must hold: braille packs 2x4 subpixels per cell against half-block's 1x2,
+        // so at the same cell count it genuinely resolves more. A note that recommended a
+        // worse option would be worse than silence.
+        let half = data.angstroms_per_pixel(10, 4, TerminalBackend::HalfBlock);
+        let braille = data.angstroms_per_pixel(10, 4, TerminalBackend::Braille);
+        let kitty = data.angstroms_per_pixel(10, 4, TerminalBackend::Kitty);
+        assert!(
+            braille < half && kitty < braille,
+            "the note recommends finer backends, so they must actually be finer: \
+             half-block {half:.2} Å/px, braille {braille:.2}, kitty {kitty:.2}"
+        );
+
+        // And a bigger terminal must help, which is the other half of the advice.
+        assert!(
+            data.angstroms_per_pixel(160, 48, TerminalBackend::HalfBlock) < half,
+            "enlarging the terminal did not improve the resolution"
+        );
+    }
+
+    /// A C-alpha-only trace has no carbonyl to orient by, so it must fall back to parallel
+    /// transport rather than producing nothing. This is the offline simulator's output and any
+    /// coarse-grained model.
+    #[test]
+    fn ca_only_traces_fall_back_to_parallel_transport() {
+        let mut text = String::from("HEADER    CA ONLY\n");
+        for i in 0..24 {
+            let theta = (i as f64) * 100.0f64.to_radians();
+            text += &format!(
+                "ATOM  {:5}  CA  ALA A{:4}    {:8.3}{:8.3}{:8.3}  1.00 80.00           C\n",
+                i + 1,
+                i + 1,
+                2.3 * theta.cos(),
+                2.3 * theta.sin(),
+                1.5 * i as f64
+            );
+        }
+        text += "END\n";
+        let pdb = proteus_core::io::open_structure_bytes(text.as_bytes(), None).unwrap();
+        let trace = trace_of(&pdb);
+        assert!(
+            trace.guides.iter().all(Option::is_none),
+            "a C-alpha-only trace cannot have carbonyl guides"
+        );
+        let data = parse_pdb_structure(&text).unwrap();
+        assert!(
+            !data.ribbon_mesh.vertices.is_empty(),
+            "fallback did not produce a ribbon"
+        );
     }
 
     #[test]

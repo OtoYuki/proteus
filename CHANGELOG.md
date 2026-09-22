@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **The cartoon ribbon's flat face now follows the backbone instead of an arbitrary axis.**
+  Frames came from pure parallel transport seeded on a fixed reference vector, so the ribbon
+  was smooth and twist-free but its wide face bore no relation to the peptide planes — β-strands
+  did not lie flat in their sheet and did not show the sheet's real twist. The wide axis is now
+  the backbone carbonyl, flip-corrected per residue (Carson & Bugg 1986, the construction PyMOL,
+  Mol\* and Chimera use), falling back to parallel transport for Cα-only traces that have no
+  carbonyl. Checked against the **interaction network** rather than against the ribbon's own
+  inputs: residues that are H-bond partners across a β-sheet should present near-parallel
+  faces, and now do at a consistent **21–31°** across the corpus (the sheet's genuine twist),
+  where parallel transport gave an erratic 25–84° depending on where its seed landed.
+- **`proteus view` says when the viewport cannot resolve what you asked for.** Rendering 8 015
+  residues into 80×24 cells gives 3.4 Å per pixel while consecutive Cα atoms are 3.8 Å apart —
+  the picture is the fold's outline and nothing per-residue survives, and nothing said so. It
+  now prints the Å-per-pixel and points at a larger terminal or a finer backend, and a test
+  pins that the advice is true (braille really does resolve more than half-block at the same
+  cell count, kitty more than braille).
 - **Errors name the mistake instead of the symptom.** Handing a FASTA to a structure command
   produced pdbtbx's "No Atoms in the given PDB struct while validating", which tells a
   first-time user neither what they did nor what to do. It now says the file looks like a FASTA

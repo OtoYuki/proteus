@@ -199,6 +199,14 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     let w = width.unwrap_or(term_cols as usize);
     let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
 
+    // Say when the viewport cannot resolve what the structure contains. A picture that cannot
+    // separate neighbouring residues should not be read as if it could.
+    if let Some(sd) = structure_data.as_ref() {
+        if let Some(note) = sd.resolution_note(w, h, render_backend) {
+            eprintln!("{note}");
+        }
+    }
+
     if let Some(ref_path) = compare {
         let ref_content = proteus_core::io::read_structure_text(&ref_path)
             .with_context(|| format!("Failed to read reference structure at {:?}", ref_path))?;

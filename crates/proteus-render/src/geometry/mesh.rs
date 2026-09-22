@@ -44,10 +44,19 @@ impl TriangleMesh {
 
 /// Extrude a Richardson cartoon ribbon mesh from protein C-alpha coordinates,
 /// secondary structure assignments, and pLDDT values.
+/// Build the cartoon ribbon.
+///
+/// `guides` is the ribbon's wide axis per residue, taken from the backbone carbonyl and
+/// flip-corrected (Carson & Bugg 1986) — the same construction PyMOL, Mol* and Chimera use. It
+/// is what makes a β-strand's flat face lie in the sheet and show the strand's real twist.
+/// `None` for a residue whose C or O is absent (a C-alpha-only trace, which the offline
+/// simulator and coarse-grained models produce); those fall back to parallel transport, which
+/// is smooth and twist-free but carries no physical meaning.
 pub fn generate_cartoon_mesh(
     ca_coords: &[Vector3<f64>],
     ss_assignments: &[SecondaryStructure],
     plddts: &[f64],
+    guides: &[Option<Vector3<f64>>],
     subdivisions_per_residue: usize,
 ) -> TriangleMesh {
     let n_res = ca_coords.len();
@@ -87,6 +96,21 @@ pub fn generate_cartoon_mesh(
 
     for (k, (s_pt, frame)) in spline_points.iter().zip(frames.iter()).enumerate() {
         let res_idx = s_pt.residue_index.min(n_res - 1);
+        // Prefer the carbonyl-derived axis, made perpendicular to the tangent. Falls back to
+        // the parallel-transported frame when this residue has no backbone O.
+        let (axis_wide, axis_thin) = match guides.get(res_idx).copied().flatten() {
+            Some(g) => {
+                let t = s_pt.tangent.normalize();
+                let perp = g - t * g.dot(&t);
+                if perp.norm() > 1e-6 {
+                    let n1 = perp.normalize();
+                    (n1, t.cross(&n1).normalize())
+                } else {
+                    (frame.normal1, frame.normal2)
+                }
+            }
+            None => (frame.normal1, frame.normal2),
+        };
         let ss = ss_assignments
             .get(res_idx)
             .copied()
@@ -116,8 +140,8 @@ pub fn generate_cartoon_mesh(
         };
 
         for &(cos_a, sin_a) in &ring_offsets {
-            let offset = frame.normal1 * (rx * cos_a) + frame.normal2 * (ry * sin_a);
-            let normal = (frame.normal1 * cos_a + frame.normal2 * sin_a).normalize();
+            let offset = axis_wide * (rx * cos_a) + axis_thin * (ry * sin_a);
+            let normal = (axis_wide * cos_a + axis_thin * sin_a).normalize();
             let pos = s_pt.position + offset;
 
             mesh.vertices.push(Vertex3D {
@@ -326,7 +350,7 @@ mod tests {
         let ss = vec![SecondaryStructure::Helix; 4];
         let plddts = vec![90.0; 4];
 
-        let mesh = generate_cartoon_mesh(&ca_coords, &ss, &plddts, 4);
+        let mesh = generate_cartoon_mesh(&ca_coords, &ss, &plddts, &vec![None; ca_coords.len()], 4);
         assert!(mesh.vertex_count() > 50);
         assert!(mesh.triangle_count() > 50);
     }

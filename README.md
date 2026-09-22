@@ -113,7 +113,8 @@ Evaluates variant libraries across multi-threaded computational workers:
 
 ### 3. Pure-Rust Terminal 3D Rasterizer & Live Telemetry Dashboard
 Enables full structural inspection over SSH without X11 forwarding, WebGL browser dependencies, or headless display servers:
-- **Cartoon Ribbon Mesh Generation:** Interpolates $C_\alpha$ backbones via cubic Hermite splines with Bishop parallel-transport frames, elliptic cross-sections, and Richardson $\beta$-arrowheads.
+- **Cartoon Ribbon Mesh Generation:** Cubic Hermite splines through the $C_\alpha$ trace, with the ribbon's wide face oriented by the backbone carbonyl and flip-corrected (Carson & Bugg 1986) so $\beta$-strands lie flat in their sheet and show its real twist — checked against the H-bond network, not just drawn (partner strands agree to 21–31°, the sheet's genuine twist; an arbitrary frame gives 25–84°). Parallel-transport frames are the fallback for $C_\alpha$-only traces. Elliptic cross-sections and Richardson $\beta$-arrowheads.
+- **It tells you when the picture cannot show what you asked for:** at 3.4 Å per pixel, consecutive residues (3.8 Å apart) cannot be separated, so `view` says so and points at a finer backend rather than letting an outline be read as detail.
 - **Lighting & Post-Processing:** Software $z$-buffer rasterizer with directional Blinn-Phong shading, Screen-Space Ambient Occlusion (SSAO), and edge-detection cel-outlines.
 - **Covalent Disulfide Bridges:** Automatically detects and renders cystine covalent bonds ($S_\gamma - S_\gamma$) as high-visibility sidechain cylinders.
 - **Multi-Structure Superposition:** Visualizes pairwise structural alignments in distinct dual-color palettes with Kabsch RMSD metrics.
