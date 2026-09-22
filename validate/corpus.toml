@@ -301,3 +301,83 @@ url = "https://alphafold.ebi.ac.uk/files/AF-P0A7Y4-F1-model_v6.cif"
 format = "cif"
 kind = "afdb"
 sha256 = "c39af7312ca433369d10219462cc983d48a9402ffc60803577d663dafc6761b8"
+
+# crambin at 0.54 A: the highest-resolution protein in the PDB, with alternate conformations everywhere. Catches altloc handling that a 2 A structure never exercises.
+[[structure]]
+id = "1ejg"
+url = "https://files.rcsb.org/download/1EJG.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "115e25b3c80a72b51cda981575f9917309140c5c4249f81bcc0ad245f17c6f18"
+
+# Top7, the first de novo designed fold. A designed protein is exactly what Proteus screens, and its idealised geometry is where a Ramachandran or compactness bug would hide.
+[[structure]]
+id = "1qys"
+url = "https://files.rcsb.org/download/1QYS.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "ac8fe04512d809dd11815493548ccb28bff3edaa52d1e14385a12cc3dc01d3fc"
+
+# Collagen triple helix: polyproline II, which DSSP assigns to no canonical state. Checks that neither the SS assignment nor the ribbon extruder invents structure.
+[[structure]]
+id = "1cag"
+url = "https://files.rcsb.org/download/1CAG.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "d49c21b5e754b8ed2eb0355aa04d7895201b9358502657d923999b714aa9883f"
+
+# Beta-2 adrenergic receptor: a membrane protein, where hydrophobic burial is inverted relative to a globular fold and the fitness score's burial term could mislead.
+[[structure]]
+id = "2rh1"
+url = "https://files.rcsb.org/download/2RH1.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "4e993acc81ac58b2cd1a18f84060c98a9742c308cd69687323a0417308a14144"
+
+# Fibronectin type III: all-beta. Balances a corpus that leans helical, and beta-bridge assignment is DSSP's fiddliest case.
+[[structure]]
+id = "1ten"
+url = "https://files.rcsb.org/download/1TEN.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "5b2165e4e495d05e230c6438a8585966578fc70006ec228ac0a0d8b65d06c73c"
+
+# Intact IgG antibody: four chains and insertion codes in the CDR loops. Insertion codes are a residue-key edge case nothing else here covers.
+[[structure]]
+id = "1igt"
+url = "https://files.rcsb.org/download/1IGT.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "0a71448e9cb985a3562a4a086f807f86deb235a4f04bdccabf483d5a860b0c95"
+
+# Cytochrome c with a covalently bound heme: a large HETATM group that must be excluded from the protein analysis without taking real residues with it.
+[[structure]]
+id = "1hrc"
+url = "https://files.rcsb.org/download/1HRC.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "7d2156aa30fa67f181f5bd283ed49c1a69941fa231c04a23e7f1c9bb7078fc0c"
+
+# Zinc finger: a tiny NMR domain whose fold is held by a metal, not by a hydrophobic core. The burial and network terms should not claim it is well packed.
+[[structure]]
+id = "1znf"
+url = "https://files.rcsb.org/download/1ZNF.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "5efda0fe08328493647f4434bcd9de97f9656f4bb160a0ddfecdb2ad74647183"
+
+# Amyloid-beta fibril: stacked beta strands across many chains, an inter-chain contact pattern the globular corpus does not produce.
+[[structure]]
+id = "2mxu"
+url = "https://files.rcsb.org/download/2MXU.pdb"
+format = "pdb"
+kind = "nmr"
+sha256 = "8bb7778708f5af39e30c4e938bba6b606930ea9cc782edfaa0abc122ef1f3cf8"
+
+# GroEL/GroES, 21 chains and ~58 000 atoms: the upper bound on the cell-list and chain handling, and the slowest entry in the corpus on purpose.
+[[structure]]
+id = "1aon"
+url = "https://files.rcsb.org/download/1AON.pdb"
+format = "pdb"
+kind = "xray"
+sha256 = "5cddcf0ebe222238073f73f4fcc0f579a090389f9c3d152399b4e41ca4a0ed3e"

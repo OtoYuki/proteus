@@ -4,7 +4,7 @@ Domain models and the biophysics of [Proteus](https://github.com/OtoYuki/proteus
 Rust: structure I/O, backbone geometry, DSSP-based secondary structure, Top8000 Ramachandran
 scoring, Shrake–Rupley SASA, the non-covalent interaction network, heavy-atom steric overlap,
 Kabsch superposition, in-silico mutagenesis and the composite fitness score. Every number here
-is compared with mdtraj, FreeSASA and cctbx on a 43-structure corpus in the repository's
+is compared with mdtraj, FreeSASA and cctbx on a 53-structure corpus in the repository's
 `validate/` harness.
 
 ```rust

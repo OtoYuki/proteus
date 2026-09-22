@@ -78,7 +78,7 @@ re-implementation of Proteus's own rule would only be a regression test.
 
 ## Corpus
 
-`corpus.toml` lists 43 entries (~50 MB): 20 X-ray PDB files, 5 of them also as mmCIF, 5 NMR
+`corpus.toml` lists 53 entries (~65 MB): 20 X-ray PDB files, 5 of them also as mmCIF, 5 NMR
 ensembles (first model), 4 cryo-EM mmCIF, 9 AlphaFold-DB v6 mmCIF models. Files are
 downloaded into `corpus/` (git-ignored) and verified by sha256. Add a structure by appending a
 `[[structure]]` block, running `make fetch`, pasting the printed sha256, and `make reference`.

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Generate validate/reference/<id>_<format>.json from mdtraj, freesasa and cctbx ramalyze.
 
+Keys that collide (mdtraj drops PDB insertion codes, so 52 and 52A are both "52") are listed
+under `ambiguous_keys` and must be excluded from per-residue comparison by the consumer.
+
 Every per-residue value is keyed by "chain:resseq:icode" so that Proteus can align on
 residue identity rather than on index.
 """
@@ -49,6 +52,10 @@ def one(s):
     # the consumer falls back to ordinal keys when id keys do not match.
     chain_ids = list(dict.fromkeys(r.chain.index for r in residues))
     ordinal = {c: i for i, c in enumerate(chain_ids)}
+    # mdtraj's Python API does not expose PDB insertion codes, so two residues numbered 52 and
+    # 52A both come back as resSeq 52 and collide on this key. Rather than let the consumer
+    # align the wrong pair silently (this mis-compared eight phi/psi angles in 1IGT before it
+    # was caught), the colliding keys are listed and excluded from per-residue comparison.
     rkey = [key(r.chain.chain_id if hasattr(r.chain, "chain_id") else str(r.chain.index), r.resSeq, "") for r in residues]
     okey = [key(str(ordinal[r.chain.index]), r.resSeq, "") for r in residues]
     phis = [None] * len(residues)
@@ -80,6 +87,7 @@ def one(s):
         "format": s["format"],
         "kind": s["kind"],
         "n_residues": len(residues),
+        "ambiguous_keys": sorted({k for k in rkey if rkey.count(k) > 1}),
         "residue_keys": rkey,
         "residue_keys_ordinal": okey,
         "rg_ca": rg_ca,

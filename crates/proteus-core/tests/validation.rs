@@ -14,6 +14,11 @@ struct Reference {
     format: String,
     kind: String,
     n_residues: usize,
+    /// Keys that mdtraj cannot disambiguate because its Python API drops PDB insertion codes
+    /// (52 and 52A both become "52"). Comparing these would align the wrong residues, so they
+    /// are skipped and counted.
+    #[serde(default)]
+    ambiguous_keys: Vec<String>,
     residue_keys: Vec<String>,
     residue_keys_ordinal: Vec<String>,
     rg_ca: f64,
@@ -36,7 +41,16 @@ struct Rama {
 }
 
 #[derive(Deserialize)]
+struct KnownDivergence {
+    id: String,
+    checks: Vec<String>,
+    reason: String,
+}
+
+#[derive(Deserialize)]
 struct Tolerances {
+    #[serde(default)]
+    known_divergence: Vec<KnownDivergence>,
     rg_ca_abs: f64,
     sasa_vs_freesasa_lr_rel: f64,
     sasa_vs_mdtraj_sr_rel: f64,
@@ -75,6 +89,8 @@ fn corpus_matches_reference_implementations() {
         toml::from_str(&std::fs::read_to_string(root().join("tolerances.toml")).unwrap()).unwrap();
     let mut rows: Vec<Row> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
+    // Non-failures worth printing: coverage the harness deliberately did not measure.
+    let mut notes: Vec<String> = Vec::new();
     let mut entries: Vec<PathBuf> = std::fs::read_dir(root().join("reference"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -106,6 +122,14 @@ fn corpus_matches_reference_implementations() {
         let ss = m.secondary_structure_summary.as_ref().unwrap();
         let rs = m.ramachandran_stats.as_ref().unwrap();
         let mut bad: Vec<String> = Vec::new();
+        // Checks this structure is exempt from, with the reason recorded in tolerances.toml.
+        // Every exemption applied is printed, so an exemption can never quietly hide a
+        // regression the way a widened global tolerance would.
+        let exempt = |check: &str| -> bool {
+            tol.known_divergence
+                .iter()
+                .any(|d| d.id == r.id && d.checks.iter().any(|c| c == check))
+        };
 
         // Residue identity alignment: "chain:resseq:icode" by chain id, falling back to
         // chain ordinal when the two readers disagree on mmCIF asym ids.
@@ -158,7 +182,7 @@ fn corpus_matches_reference_implementations() {
                 &r.residue_keys[..r.residue_keys.len().min(3)]
             ));
         }
-        if bb.len() != r.n_residues {
+        if !exempt("residue_count") && bb.len() != r.n_residues {
             bad.push(format!("residue count {} vs {}", bb.len(), r.n_residues));
         }
 
@@ -169,7 +193,7 @@ fn corpus_matches_reference_implementations() {
         }
         let sasa = m.sasa_metrics.as_ref().unwrap().total_sasa;
         let sasa_sr_rel = (sasa - r.sasa_mdtraj_sr).abs() / r.sasa_mdtraj_sr;
-        if sasa_sr_rel > tol.sasa_vs_mdtraj_sr_rel {
+        if !exempt("sasa_mdtraj") && sasa_sr_rel > tol.sasa_vs_mdtraj_sr_rel {
             bad.push(format!(
                 "sasa vs mdtraj S&R {:.1} vs {:.1} ({:.2}%)",
                 sasa,
@@ -179,7 +203,7 @@ fn corpus_matches_reference_implementations() {
         }
         let sasa_lr_rel = r.sasa_freesasa_lr.map(|lr| (sasa - lr).abs() / lr);
         if let Some(rel) = sasa_lr_rel {
-            if rel > tol.sasa_vs_freesasa_lr_rel {
+            if !exempt("sasa_freesasa") && rel > tol.sasa_vs_freesasa_lr_rel {
                 bad.push(format!(
                     "sasa vs freesasa L&R {:.1} vs {:.1} ({:.2}%)",
                     sasa,
@@ -207,8 +231,17 @@ fn corpus_matches_reference_implementations() {
                 .map(|(i, k)| (k.as_str(), i))
                 .collect()
         };
+        let ambiguous: std::collections::HashSet<&str> =
+            r.ambiguous_keys.iter().map(String::as_str).collect();
+        let mut skipped_ambiguous = 0usize;
         for (i, key) in keys.iter().enumerate() {
             let (phi, psi, region) = d.ramachandran_points[i];
+            // An insertion-coded residue has no unambiguous partner in the reference; comparing
+            // it would pair Ser52 with Asn52A and report a spurious 26-degree phi error.
+            if ambiguous.contains(key.as_str()) {
+                skipped_ambiguous += 1;
+                continue;
+            }
             let Some(&j) = ref_index.get(key.as_str()) else {
                 continue;
             };
@@ -249,6 +282,21 @@ fn corpus_matches_reference_implementations() {
                 }
             }
         }
+        for d in tol.known_divergence.iter().filter(|d| d.id == r.id) {
+            notes.push(format!(
+                "{}: {} exempt — {}",
+                d.id,
+                d.checks.join(", "),
+                d.reason
+            ));
+        }
+        if skipped_ambiguous > 0 {
+            // Not a failure: reported so the row's coverage is never overstated.
+            notes.push(format!(
+                "{}: {skipped_ambiguous} residues skipped (insertion codes mdtraj cannot key)",
+                r.id
+            ));
+        }
         if angle_n > 0 && angle_ok < angle_n {
             bad.push(format!(
                 "phi/psi {}/{} beyond {}° e.g. {}",
@@ -260,14 +308,14 @@ fn corpus_matches_reference_implementations() {
         }
         let d8 = d8_ok as f64 / d8_n.max(1) as f64;
         let d3 = d3_ok as f64 / d3_n.max(1) as f64;
-        if d8 < tol.dssp8_min_agreement {
+        if !exempt("dssp8") && d8 < tol.dssp8_min_agreement {
             bad.push(format!("dssp8 agreement {:.3} ({d8_ok}/{d8_n})", d8));
         }
-        if d3 < tol.dssp3_min_agreement {
+        if !exempt("dssp3") && d3 < tol.dssp3_min_agreement {
             bad.push(format!("dssp3 agreement {:.3} ({d3_ok}/{d3_n})", d3));
         }
         let rama_agree = lab_ok as f64 / lab_n.max(1) as f64;
-        if rama_agree < tol.rama_label_min_agreement {
+        if !exempt("rama_labels") && rama_agree < tol.rama_label_min_agreement {
             bad.push(format!(
                 "rama labels agreement {:.4} ({lab_ok}/{lab_n})",
                 rama_agree
@@ -329,6 +377,12 @@ fn corpus_matches_reference_implementations() {
         ));
     }
     println!("{table}");
+    if !notes.is_empty() {
+        println!("\nnot compared:");
+        for n in &notes {
+            println!("  {n}");
+        }
+    }
     std::fs::write(root().join("last_run.md"), &table).ok();
     assert!(
         failures.is_empty(),

@@ -15,7 +15,7 @@ Proteus runs the protein-engineering design loop end to end — sequence mutagen
 prediction (ESMFold API, your own ESMFold/Boltz images via Podman/Docker, GA4GH TES v1.1) → all-atom
 biophysical validation → ranking → Apache Parquet — and lets you look at the result in the terminal
 you are already SSH'd into. The biophysics is pure Rust and **checked against mdtraj, FreeSASA and
-cctbx/MolProbity on 43 structures in CI**; the speed claims are measured, not asserted.
+cctbx/MolProbity on 53 structures in CI**; the speed claims are measured, not asserted.
 
 | what | how it is checked |
 |---|---|
@@ -125,7 +125,7 @@ proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --e
   with the structural fitness score. Both add an `esm2_score` column to the Parquet export.
 
 ### 6. Validated Against Reference Implementations
-Every push runs `make validate` (`.github/workflows/validate.yml`) over a 43-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:
+Every push runs `make validate` (`.github/workflows/validate.yml`) over a **53**-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:
 
 | id | fmt | kind | res | Δrg Å | SASA vs mdtraj | SASA vs freesasa | φ/ψ ≤tol | DSSP-8 | DSSP-3 | Rama labels | F/A/O proteus | F/A/O cctbx |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -360,7 +360,7 @@ stating plainly, because velocity like that is a reason to check the work rather
 So the work is set up to be checked, not trusted:
 
 ```bash
-make validate   # 43 structures, every metric against mdtraj / FreeSASA / cctbx, tolerances committed
+make validate   # 53 structures, every metric against mdtraj / FreeSASA / cctbx, tolerances committed
 ```
 
 Every scientific number Proteus prints is compared, structure by structure, against an

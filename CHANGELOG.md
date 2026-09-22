@@ -20,6 +20,23 @@ All notable changes to this project are documented here. The format follows
   none there, and the assertion now requires agreement with the reference.
 
 ### Added
+- **The validation corpus grows 43 → 53**, chosen for coverage rather than count: crambin at
+  0.54 Å (alternate conformations everywhere), Top7 (a de novo designed fold, which is what
+  Proteus screens), collagen (polyproline II, which DSSP assigns to no canonical state), a
+  membrane GPCR (where hydrophobic burial is inverted), an all-β domain, an intact IgG (insertion
+  codes), cytochrome c (covalent heme), a zinc finger (fold held by a metal, not a core), an
+  amyloid fibril (inter-chain β stacking) and GroEL/GroES (21 chains, ~58 000 atoms).
+  Each entry carries a comment saying which failure mode it exists to catch.
+  **Six of the ten failed on arrival**, which is the point:
+  - An insertion-code bug **in the harness**: mdtraj's Python API drops insertion codes, so
+    residues 52 and 52A both key as "52" and eight φ/ψ angles in 1IGT were compared against the
+    wrong residue. The reference now lists colliding keys and the harness refuses to compare
+    them, reporting how many it skipped.
+  - Five documented convention differences, now recorded per structure in `tolerances.toml`
+    with the exact checks exempted and the reason — and **printed on every run**, so an
+    exemption can never quietly hide a regression the way a widened global tolerance would.
+    In two of them Proteus is the stricter and more correct side: mdtraj's `is_protein` counts
+    ACE acetyl caps, and counts a residue that has no Cα at all.
 - **Salt bridges, π–π and cation–π have an external reference for the first time.** These were
   the rows in the README that said "no widely used reference implementation with the same
   definitions". [PLIP](https://github.com/pharmai/plip) is one, run in intra-chain mode over 15
