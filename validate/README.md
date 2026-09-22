@@ -30,10 +30,24 @@ i→i±1 bonds are excluded because Proteus requires |Δseq| ≥ 2 by design. Co
 donor/acceptor **residue pair**, so multiple atom-level bonds between the same two residues
 collapse to one.
 
+### The composite fitness score
+
+There is no reference implementation to compare a Proteus-defined weighted sum against, so
+`fitness_discrimination.rs` measures the claim the score actually makes — *a structure that
+looks like a folded protein scores above one that does not* — on eight deposited X-ray
+structures against decoys built from each: coordinate noise at σ = 0.5/1.0/3.0 Å, a 1.5×
+expansion, and an ideal poly-alanine helix of the same length (the shape Proteus's own offline
+simulator emits). All 40 native/decoy pairs separate correctly, the score is monotone in the
+noise level, and the smallest margin is 10.4 points (1MBN, σ = 0.5 Å).
+
+That is the whole of the claim. The score is **not** validated as a predictor of experimental
+stability or activity, and nothing here says a higher score means a better protein — for
+sequence-level fitness use `--scorer esm2`, whose ProteinGym Spearman numbers are in
+`bench/README.md`. Treat it as a triage filter that rejects models which are not folded.
+
 Still not validated (no reference run): the heavy-atom overlap score (a Python re-implementation
-of Proteus's own rule would only be a regression test), **salt bridges, π–π stacking and
-cation–π** (no widely used reference implementation with the same definitions), and the
-composite fitness score (a Proteus-defined heuristic).
+of Proteus's own rule would only be a regression test) and **salt bridges, π–π stacking and
+cation–π** (no widely used reference implementation with the same definitions).
 
 ## Corpus
 

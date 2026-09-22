@@ -14,3 +14,4 @@ reference: fetch
 validate: fetch
 	cargo test -p proteus-core --release --test validation -- --ignored --nocapture
 	cargo test -p proteus-core --release --test hbond_validation -- --ignored --nocapture
+	cargo test -p proteus-core --release --test fitness_discrimination -- --ignored --nocapture

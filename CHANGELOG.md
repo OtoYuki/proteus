@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **The composite fitness score is now measured, not just labelled.** It ranks everything
+  `proteus screen` outputs and had no external check, because no reference implementation of a
+  Proteus-defined weighted sum exists. `fitness_discrimination.rs` instead measures the claim
+  the score actually makes — a folded structure outranks a broken one — on eight deposited
+  X-ray structures against decoys built from each (coordinate noise at σ = 0.5/1.0/3.0 Å, a
+  1.5× expansion, and an ideal poly-alanine helix, the shape the offline simulator emits).
+  All 40 pairs separate, the score is monotone in the noise level, smallest margin 10.4/100.
+  Runs in `make validate`, so in CI on every push.
+- The README and `validate/README.md` now say what that does **not** mean: the score is a
+  triage filter, not a predictor of experimental stability or activity. For sequence-level
+  fitness the answer is `--scorer esm2`, whose ProteinGym numbers are measured separately.
+- The ESM-2 parity tests run in CI. `esm2_t6_8m_matches_transformers` and
+  `library_scoring_reuses_forward_passes` were `#[ignore]`d for want of checkpoints and nothing
+  ran them; the 8M checkpoint is 31 MB, so the `validate` workflow caches it and checks the
+  headline feature against `transformers` on every push instead of trusting committed JSON.
+
 ### Changed
 - `proteus-cli` is one module per subcommand. `main.rs` was 1 654 lines with a 1 067-line
   `main()` holding every command body in one `match`; it is now 31 lines that parse and
