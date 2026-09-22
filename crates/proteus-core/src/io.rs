@@ -81,6 +81,33 @@ fn coordinate_records_only(text: &str) -> String {
     out
 }
 
+/// pdbtbx panics (rather than erroring) on a coordinate that does not parse as a finite
+/// number, and predictors do emit `nan` for failed atoms. Reject such rows up front with a
+/// proper error. PDB: columns 31–54 of ATOM/HETATM records; mmCIF: every whitespace token of
+/// ATOM/HETATM rows (a column layout is not fixed there, and `nan`/`inf` are never legitimate).
+fn reject_non_finite_coordinates(text: &str, is_cif: bool) -> Result<(), CoreError> {
+    let non_finite = |tok: &str| tok.parse::<f64>().is_ok_and(|v| !v.is_finite());
+    for (n, line) in text.lines().enumerate() {
+        if !(line.starts_with("ATOM") || line.starts_with("HETATM")) {
+            continue;
+        }
+        let bad = if is_cif {
+            line.split_whitespace().any(non_finite)
+        } else {
+            line.get(30..54)
+                .map(|cols| cols.split_whitespace().any(non_finite))
+                .unwrap_or(false)
+        };
+        if bad {
+            return Err(CoreError::StructureParseError(format!(
+                "line {}: non-finite coordinate in atom record",
+                n + 1
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Open a structure file by path. Extension decides the format when recognised
 /// (`.pdb`, `.ent`, `.cif`, `.mmcif`, each optionally `.gz`); otherwise the content is sniffed.
 pub fn open_structure(path: &Path) -> Result<pdbtbx::PDB, CoreError> {
@@ -140,6 +167,7 @@ pub fn load_structure_bytes(
         .map(|(_, c)| c)
         .collect::<String>();
     let is_cif = looks_like_cif(text, hint);
+    reject_non_finite_coordinates(text, is_cif)?;
     let result = if is_cif {
         pdbtbx::open_mmcif_raw(text, StrictnessLevel::Loose)
     } else {
@@ -242,6 +270,30 @@ END\n";
         let loaded = load_structure_bytes(text.as_bytes(), None).unwrap();
         assert_eq!(loaded.format, StructureFormat::Pdb);
         assert_eq!(loaded.pdb.atom_count(), 4);
+    }
+
+    #[test]
+    fn non_finite_coordinates_are_a_parse_error_not_a_panic() {
+        // pdbtbx panics on `nan` in a coordinate field; predictors do emit such files.
+        let pdb =
+            "ATOM      1  CA  ALA A   1         nan     nan     nan  1.00 10.00           C\n\
+ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00 10.00           C\n\
+END\n";
+        let err = match load_structure_bytes(pdb.as_bytes(), Some("x.pdb")) {
+            Err(e) => e,
+            Ok(_) => panic!("nan coordinates were accepted"),
+        };
+        assert!(err.to_string().contains("non-finite"), "{err}");
+        let cif = "data_x\nloop_\n_atom_site.group_PDB\n_atom_site.id\n_atom_site.type_symbol\n\
+_atom_site.label_atom_id\n_atom_site.label_alt_id\n_atom_site.label_comp_id\n_atom_site.label_asym_id\n\
+_atom_site.label_entity_id\n_atom_site.label_seq_id\n_atom_site.pdbx_PDB_ins_code\n_atom_site.Cartn_x\n\
+_atom_site.Cartn_y\n_atom_site.Cartn_z\n_atom_site.occupancy\n_atom_site.B_iso_or_equiv\n\
+_atom_site.auth_seq_id\n_atom_site.auth_asym_id\n_atom_site.pdbx_PDB_model_num\n\
+ATOM 1 C CA . ALA A 1 1 ? nan nan nan 1.00 10.00 1 A 1\n\
+ATOM 2 C CA . ALA A 1 2 ? 3.8 0.0 0.0 1.00 10.00 2 A 1\n";
+        let r = std::panic::catch_unwind(|| load_structure_bytes(cif.as_bytes(), Some("x.cif")));
+        assert!(r.is_ok(), "mmCIF with nan must not panic");
+        assert!(r.unwrap().is_err(), "mmCIF with nan must be rejected");
     }
 
     #[test]

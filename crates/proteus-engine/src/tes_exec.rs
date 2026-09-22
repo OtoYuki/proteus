@@ -190,7 +190,7 @@ pub struct ContainerExecutor {
 impl ContainerExecutor {
     /// Connect to the first reachable socket (rootless Podman, Docker, system Podman).
     pub fn connect(pull_missing: bool) -> Result<Self, EngineError> {
-        let uid = unsafe_uid();
+        let uid = current_uid();
         let podman_user = format!("/run/user/{uid}/podman/podman.sock");
         let candidates = [
             podman_user.as_str(),
@@ -272,7 +272,7 @@ impl ContainerExecutor {
 }
 
 /// Real uid without pulling in `libc`/`nix`: read it from /proc, else 1000.
-fn unsafe_uid() -> u32 {
+pub(crate) fn current_uid() -> u32 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {

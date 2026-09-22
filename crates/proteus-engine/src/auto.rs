@@ -42,15 +42,12 @@ impl ComputeRunner for AutoRunner {
         sequence: &Sequence,
         work_dir: &Path,
     ) -> Result<RunResult, EngineError> {
-        let image = match job.tier {
-            PipelineTier::FastScreening => "ghcr.io/proteus/esmfold:latest",
-            PipelineTier::HighFidelity => "ghcr.io/jwohlwend/boltz:latest",
-            PipelineTier::FullValidation => "ghcr.io/proteus/openmm:latest",
-        };
+        let image = crate::oci::tier_image(&job.tier);
+        let image = image.as_str();
 
         // 1. Try local OCI container if runner connected and image is present
         if let Some(ref oci) = self.oci {
-            if oci.has_image(image).await {
+            if crate::oci::tier_supported(&job.tier).is_ok() && oci.has_image(image).await {
                 info!("AutoRunner: Dispatched to local OCI container image '{image}'");
                 return oci.execute_job(job, sequence, work_dir).await;
             }

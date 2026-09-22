@@ -18,7 +18,10 @@ pub struct OciRunner {
 impl OciRunner {
     /// Detect and connect to Podman rootless socket or Docker UNIX socket.
     pub fn new() -> Result<Self, EngineError> {
-        let podman_user_sock = format!("/run/user/{}/podman/podman.sock", users_uid());
+        let podman_user_sock = format!(
+            "/run/user/{}/podman/podman.sock",
+            crate::tes_exec::current_uid()
+        );
 
         let socket_candidates = vec![
             podman_user_sock.as_str(),
@@ -63,12 +66,41 @@ impl OciRunner {
     }
 }
 
-fn users_uid() -> u32 {
-    // Get current effective UID via standard posix or default to 1000
-    std::env::var("UID")
+/// Container image for a prediction tier. None of the defaults is published: build or pull
+/// an image yourself and either tag it with the default name or point the matching
+/// `PROTEUS_IMAGE_{FAST,SOTA,RELAX}` variable at it.
+pub fn tier_image(tier: &PipelineTier) -> String {
+    let (var, default) = match tier {
+        PipelineTier::FastScreening => ("PROTEUS_IMAGE_FAST", "ghcr.io/proteus/esmfold:latest"),
+        PipelineTier::HighFidelity => ("PROTEUS_IMAGE_SOTA", "ghcr.io/jwohlwend/boltz:latest"),
+        PipelineTier::FullValidation => ("PROTEUS_IMAGE_RELAX", "ghcr.io/proteus/openmm:latest"),
+    };
+    std::env::var(var)
         .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1000)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// The FASTA handed to the tier's container. Boltz requires `>CHAIN|ENTITY|MSA` headers
+/// (`empty` = single-sequence mode); ESMFold-style tools take a plain header.
+pub fn input_fasta_for(tier: &PipelineTier, header: &str, sequence: &str) -> String {
+    match tier {
+        PipelineTier::HighFidelity => format!(">A|protein|empty\n{sequence}\n"),
+        _ => format!(">{header}\n{sequence}\n"),
+    }
+}
+
+/// Tiers the OCI runner can actually execute. Relaxation needs a structure, and a pipeline
+/// job carries only a sequence.
+pub fn tier_supported(tier: &PipelineTier) -> Result<(), EngineError> {
+    match tier {
+        PipelineTier::FullValidation => Err(EngineError::Container(
+            "the relax tier (FullValidation) needs an input structure, which a sequence job \
+             does not carry; it is not implemented in this release"
+                .into(),
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[async_trait::async_trait]
@@ -79,15 +111,15 @@ impl ComputeRunner for OciRunner {
         sequence: &Sequence,
         work_dir: &Path,
     ) -> Result<RunResult, EngineError> {
-        let image = match job.tier {
-            PipelineTier::FastScreening => "ghcr.io/proteus/esmfold:latest",
-            PipelineTier::HighFidelity => "ghcr.io/jwohlwend/boltz:latest",
-            PipelineTier::FullValidation => "ghcr.io/proteus/openmm:latest",
-        };
+        tier_supported(&job.tier)?;
+        let image = tier_image(&job.tier);
+        let image = image.as_str();
 
         if !self.has_image(image).await {
             return Err(EngineError::Container(format!(
-                "Required SOTA container image '{image}' is not available locally. Pull it with 'podman pull {image}', or run with '--runner esm-api' for live ESMFold folding or '--runner simulated'."
+                "container image '{image}' is not available locally. Build or pull one and tag it \
+                 with that name (or set PROTEUS_IMAGE_FAST/SOTA/RELAX), or run with \
+                 '--runner esm-api' for live ESMFold folding or '--runner simulated'."
             )));
         }
 
@@ -95,8 +127,11 @@ impl ComputeRunner for OciRunner {
         tokio::fs::create_dir_all(work_dir).await?;
 
         let fasta_path = work_dir.join("input.fasta");
-        let fasta_content = format!(">{}\n{}\n", sequence.header, sequence.fasta);
-        tokio::fs::write(&fasta_path, fasta_content).await?;
+        tokio::fs::write(
+            &fasta_path,
+            input_fasta_for(&job.tier, &sequence.header, &sequence.fasta),
+        )
+        .await?;
 
         let abs_work_dir = std::fs::canonicalize(work_dir)
             .map_err(|e| EngineError::Container(format!("Failed to canonicalize work_dir: {e}")))?;
@@ -136,9 +171,10 @@ impl ComputeRunner for OciRunner {
             ],
         };
 
+        // No `auto_remove`: an auto-removed container can vanish before `wait_container` is
+        // polled, which surfaces as a 404 on Docker. The container is removed explicitly below.
         let host_config = HostConfig {
             binds: Some(vec![bind_mount]),
-            auto_remove: Some(true),
             ..Default::default()
         };
 
@@ -196,12 +232,27 @@ impl ComputeRunner for OciRunner {
             .docker
             .wait_container(&container_name, None::<WaitContainerOptions<String>>);
 
-        if let Some(wait_res) = wait_stream.next().await {
-            let res = wait_res.map_err(|e| EngineError::Container(format!("Wait failed: {e}")))?;
-            if res.status_code != 0 {
+        let waited = wait_stream.next().await;
+        let _ = self
+            .docker
+            .remove_container(
+                &container_name,
+                Some(bollard::container::RemoveContainerOptions {
+                    force: true,
+                    ..Default::default()
+                }),
+            )
+            .await;
+        if let Some(wait_res) = waited {
+            let status_code = match wait_res {
+                Ok(w) => w.status_code,
+                // bollard reports non-zero exits as an error on some API versions.
+                Err(bollard::errors::Error::DockerContainerWaitError { code, .. }) => code,
+                Err(e) => return Err(EngineError::Container(format!("Wait failed: {e}"))),
+            };
+            if status_code != 0 {
                 return Err(EngineError::Container(format!(
-                    "Container exited with non-zero status code: {}",
-                    res.status_code
+                    "Container exited with non-zero status code: {status_code}"
                 )));
             }
         }
@@ -244,5 +295,49 @@ impl ComputeRunner for OciRunner {
                 "socket": self.socket_path
             })),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proteus_core::models::PipelineTier;
+
+    #[test]
+    fn tier_images_default_to_documented_names_and_honour_env_overrides() {
+        assert_eq!(
+            tier_image(&PipelineTier::FastScreening),
+            "ghcr.io/proteus/esmfold:latest"
+        );
+        std::env::set_var("PROTEUS_IMAGE_SOTA", "localhost/my-boltz:2");
+        assert_eq!(
+            tier_image(&PipelineTier::HighFidelity),
+            "localhost/my-boltz:2"
+        );
+        std::env::remove_var("PROTEUS_IMAGE_SOTA");
+        assert_eq!(
+            tier_image(&PipelineTier::HighFidelity),
+            "ghcr.io/jwohlwend/boltz:latest"
+        );
+    }
+
+    #[test]
+    fn boltz_input_uses_the_chain_entity_header_format() {
+        // Boltz rejects plain `>name` headers; it needs `>CHAIN|protein|<msa>`.
+        assert_eq!(
+            input_fasta_for(&PipelineTier::HighFidelity, "wt", "ACDE"),
+            ">A|protein|empty\nACDE\n"
+        );
+        assert_eq!(
+            input_fasta_for(&PipelineTier::FastScreening, "wt", "ACDE"),
+            ">wt\nACDE\n"
+        );
+    }
+
+    #[test]
+    fn relax_tier_is_refused_up_front() {
+        let err = tier_supported(&PipelineTier::FullValidation).unwrap_err();
+        assert!(err.to_string().contains("structure"), "{err}");
+        assert!(tier_supported(&PipelineTier::FastScreening).is_ok());
     }
 }
