@@ -37,7 +37,8 @@ def donor_acceptor_pairs(path):
 
 
 def main():
-    ids = sys.argv[1:] or ["1d3z", "2kod", "1g6j", "2l3b"]
+    # Every corpus PDB entry that carries explicit hydrogens (all six NMR depositions).
+    ids = sys.argv[1:] or ["1d3z", "2kod", "1g6j", "2l3b", "1gb1", "1l2y"]
     OUT.mkdir(parents=True, exist_ok=True)
     for i in ids:
         path = ROOT / "validate" / "corpus" / f"{i}.pdb"

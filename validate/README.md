@@ -12,18 +12,20 @@ GitHub Actions job runs it on every push and pull request and uploads the table.
 | Ramachandran Favored/Allowed/Outlier | cctbx `mmtbx.validation.ramalyze` (MolProbity Top8000) | per-residue label agreement | ≥ 99.5 % |
 | SASA (Shrake–Rupley, 960 pts, Bondi radii) | `mdtraj.shrake_rupley` (same algorithm and radii) | relative | 1 % |
 | SASA | FreeSASA Lee–Richards, ProtOr radii | relative | 4 % — different algorithm **and** radius set; an independent sanity check, not a tight bound (observed 0.2–3.4 %) |
-| hydrogen-bond network | `mdtraj.baker_hubbard` on structures with explicit H | **recall** of mdtraj's non-local bonds | ≥ 92 % (observed 94.9–100 %) |
+| hydrogen-bond network | `mdtraj.baker_hubbard` on all six structures with explicit H | **recall** of mdtraj's non-local bonds; **precision** of Proteus' bonds | recall ≥ 85 % (observed 85.7–100 %); precision ≥ 50 % (observed 58–76 %) |
 
 ### Hydrogen bonds
 
 Proteus detects H-bonds from **heavy atoms only** — donor/acceptor distance plus antecedent
 angles — because predicted models never ship hydrogens. mdtraj's `baker_hubbard` uses the
 explicit H (D–H···A distance and angle). The criteria are related but not the same, so the test
-measures **recall** (how many of mdtraj's bonds Proteus also finds), not set equality. Proteus
-legitimately reports more bonds; that is the price of working without hydrogens, and the extra
-ones are not counted against it.
+measures **recall** (how many of mdtraj's bonds Proteus also finds) and reports **precision**
+(how many of Proteus' bonds mdtraj confirms), not set equality. Without hydrogens Proteus
+reports 1.3–1.7× as many bonds as Baker–Hubbard — precision 58–76 % on the corpus — so treat
+its H-bond counts as an upper bound with the ranking-relevant bonds inside it, not as a
+Baker–Hubbard equivalent. A precision floor of 50 % is enforced so this cannot silently drift.
 
-Only the four NMR entries in the corpus carry hydrogens (1D3Z, 2KOD, 1G6J, 2L3B); mdtraj's
+All six NMR entries in the corpus carry hydrogens (1D3Z, 2KOD, 1G6J, 2L3B, 1GB1, 1L2Y) and all six are checked; 1L2Y, a 20-residue mini-protein with 14 reference bonds, is the 85.7 % floor; mdtraj's
 i→i±1 bonds are excluded because Proteus requires |Δseq| ≥ 2 by design. Comparison is by
 donor/acceptor **residue pair**, so multiple atom-level bonds between the same two residues
 collapse to one.
