@@ -1,0 +1,317 @@
+//! `proteus view` — Render a structure: terminal back-ends, or a self-contained browser page.
+
+use super::prelude::*;
+
+/// Arguments of `proteus view`.
+#[derive(clap::Args, Debug)]
+pub struct Args {
+    /// Target PDB file path or job UUID
+    target: String,
+
+    /// Optional reference PDB file path for 3D structural superposition and RMSD calculation
+    #[arg(long)]
+    compare: Option<PathBuf>,
+
+    /// Run the interactive TUI viewer with orbit camera controls
+    #[arg(short, long)]
+    interactive: bool,
+
+    /// Enable side-by-side live biophysical telemetry dashboard (Ramachandran, pLDDT, SASA)
+    #[arg(long)]
+    dashboard: bool,
+
+    /// Terminal rendering backend
+    #[arg(short, long, value_enum, default_value_t = CliBackend::HalfBlock)]
+    backend: CliBackend,
+
+    /// Color scheme. Default: pLDDT for predicted models, secondary structure for
+    /// experimental ones (their B-factors are not confidences).
+    #[arg(short, long, value_enum)]
+    color: Option<CliColorScheme>,
+
+    /// Terminal viewport width (defaults to terminal width or 80)
+    #[arg(long)]
+    width: Option<usize>,
+
+    /// Terminal viewport height (defaults to terminal height or 30)
+    #[arg(long)]
+    height: Option<usize>,
+
+    /// Open structure in browser via standalone Mol* WebGL 3D viewer
+    #[arg(long)]
+    web: bool,
+
+    /// Export standalone Mol* WebGL 3D viewer HTML file
+    #[arg(long)]
+    html: Option<PathBuf>,
+}
+
+pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
+    let db_path = db_path.to_path_buf();
+    let Args {
+        target,
+        compare,
+        interactive,
+        dashboard,
+        backend,
+        color,
+        width,
+        height,
+        web,
+        html,
+    } = args;
+    let target_path = PathBuf::from(&target);
+    let (pdb_content, title) = if target_path.exists() {
+        let content =
+            proteus_core::io::read_structure_text(&target_path).with_context(|| {
+                format!("Failed to read structure file at {:?}", target_path)
+            })?;
+        let name = target_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("PDB Structure")
+            .to_string();
+        (content, name)
+    } else if let Ok(job_id) = Uuid::parse_str(&target) {
+        let pool = create_sqlite_pool(&db_path).await?;
+        let repo = ProteusRepository::new(pool);
+        let pred = repo
+            .get_prediction_by_job(job_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Prediction for job {} not found", job_id))?;
+        let content = tokio::fs::read_to_string(&pred.pdb_path)
+            .await
+            .with_context(|| format!("Failed to read PDB at {:?}", pred.pdb_path))?;
+        // The title is the only provenance the viewers show, so say what the file is.
+        let engine = proteus_engine::engine_name(pred.metadata.as_ref());
+        let title = if engine == proteus_engine::ENGINE_SIMULATED {
+            format!("Job {job_id} — SIMULATED: synthetic helix, not a prediction")
+        } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
+            format!(
+                "Job {job_id} ({engine}; tier '{}' not honoured)",
+                d.requested
+            )
+        } else {
+            format!("Job {job_id} ({engine})")
+        };
+        (content, title)
+    } else {
+        anyhow::bail!(
+            "Target '{}' is neither an existing file path nor a valid job UUID",
+            target
+        );
+    };
+
+    if web || html.is_some() {
+        let html_path = html.unwrap_or_else(|| {
+            let sanitized: String = title
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .collect();
+            std::env::temp_dir().join(format!("proteus_view_{sanitized}.html"))
+        });
+
+        let format = proteus_core::io::sniff_format(
+            &pdb_content,
+            target_path.file_name().and_then(|n| n.to_str()),
+        );
+        let (color, secondary_structure) =
+            match proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None) {
+                Ok(pdb) => {
+                    let scale = proteus_render::parse_pdb_structure(&pdb_content)
+                        .map(|sd| sd.plddt_scale)
+                        .unwrap_or(1.0);
+                    let source = proteus_core::metrics::analyze_pdb_detailed(&pdb, None)
+                        .ok()
+                        .map(|a| a.metrics.confidence_source);
+                    (
+                        proteus_core::webview::WebColorScheme::from_provenance(
+                            source, scale,
+                        ),
+                        proteus_core::webview::dssp_by_residue(&pdb),
+                    )
+                }
+                Err(_) => (
+                    proteus_core::webview::WebColorScheme::SecondaryStructure,
+                    Vec::new(),
+                ),
+            };
+        let html_content = proteus_core::webview::WebViewPage {
+            title: "Proteus structure viewer",
+            caption: &title,
+            structure: &pdb_content,
+            format,
+            color,
+            secondary_structure: &secondary_structure,
+        }
+        .render();
+
+        tokio::fs::write(&html_path, html_content)
+            .await
+            .with_context(|| format!("Failed to write HTML file to {:?}", html_path))?;
+
+        println!(
+            "Generated standalone 3D WebGL viewer HTML -> {:?}",
+            html_path
+        );
+
+        if web {
+            println!("Launching default browser via xdg-open...");
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&html_path)
+                .spawn();
+        }
+        return Ok(());
+    }
+
+    let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
+    // Parsed once here; the snapshot/interactive paths reuse it.
+    let structure_data = if compare.is_none() {
+        Some(
+            proteus_render::parse_pdb_structure(&pdb_content)
+                .context("Failed to parse structure for 3D rendering")?,
+        )
+    } else {
+        None
+    };
+    let render_color: proteus_render::rasterizer::ColorScheme =
+        match (color, &structure_data) {
+            (Some(c), _) => c.into(),
+            (None, Some(sd)) => {
+                let scheme = sd.default_color_scheme();
+                if scheme == proteus_render::rasterizer::ColorScheme::SecondaryStructure {
+                    eprintln!(
+                        "note: colouring by secondary structure (B-factor column is not a \
+                     pLDDT confidence); pass --color plddt to force"
+                    );
+                }
+                scheme
+            }
+            (None, None) => proteus_render::rasterizer::ColorScheme::Plddt,
+        };
+
+    let (term_cols, term_rows): (u16, u16) =
+        crossterm::terminal::size().unwrap_or((80, 24));
+    let w = width.unwrap_or(term_cols as usize);
+    let h = height.unwrap_or(term_rows.saturating_sub(4).max(16) as usize);
+
+    if let Some(ref_path) = compare {
+        let ref_content =
+            proteus_core::io::read_structure_text(&ref_path).with_context(|| {
+                format!("Failed to read reference structure at {:?}", ref_path)
+            })?;
+
+        if interactive {
+            let sup_data = proteus_render::prepare_superposition_for_rendering(
+                &pdb_content,
+                &ref_content,
+            )
+            .context("Failed to superimpose structures for 3D rendering")?;
+
+            let ref_name = ref_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Reference");
+            let dual_title = format!("{title} (Cyan) vs {ref_name} (Ruby)");
+            let config = proteus_render::tui::ViewerConfig {
+                title: dual_title,
+                initial_color_scheme: proteus_render::rasterizer::ColorScheme::Solid(
+                    proteus_render::rasterizer::ColorRGB::new(6, 182, 212),
+                ),
+                auto_rotate: true,
+                secondary_mesh: Some((
+                    sup_data.ref_mesh,
+                    proteus_render::rasterizer::ColorRGB::new(244, 63, 94),
+                )),
+                rmsd: Some(sup_data.rmsd),
+                disulfide_mesh: None,
+                dashboard_enabled: false,
+                dashboard_data: None,
+            };
+            proteus_render::tui::run_interactive_viewer(
+                &sup_data.target_mesh,
+                sup_data.camera,
+                config,
+            )
+            .context("Interactive dual-structure 3D viewer error")?;
+        } else {
+            let (snapshot, rmsd) = proteus_render::render_superposition_snapshot(
+                &pdb_content,
+                &ref_content,
+                w,
+                h,
+                render_backend,
+            )
+            .context("Failed to render superposition snapshot")?;
+
+            println!("{snapshot}");
+            println!(
+                "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[32mRMSD: {:.3} Å\x1b[0m",
+                rmsd
+            );
+        }
+    } else if interactive || dashboard {
+        let structure_data = structure_data.expect("parsed above when --compare is absent");
+
+        let dashboard_data = Some(proteus_render::tui::DashboardData {
+            title: title.clone(),
+            num_residues: structure_data.num_residues,
+            num_disulfides: structure_data.num_disulfides,
+            metrics: structure_data.metrics,
+            plddts: structure_data.plddts,
+            ramachandran_points: structure_data.ramachandran_points,
+        });
+
+        let config = proteus_render::tui::ViewerConfig {
+            title,
+            initial_color_scheme: render_color,
+            auto_rotate: true,
+            secondary_mesh: None,
+            rmsd: None,
+            disulfide_mesh: structure_data.disulfide_mesh,
+            dashboard_enabled: dashboard || term_cols >= 100,
+            dashboard_data,
+        };
+        proteus_render::tui::run_interactive_viewer(
+            &structure_data.ribbon_mesh,
+            structure_data.camera,
+            config,
+        )
+        .context("Interactive 3D viewer error")?;
+    } else {
+        let structure_data = structure_data.expect("parsed above when --compare is absent");
+        let snapshot = proteus_render::render_structure_snapshot(
+            &structure_data,
+            w,
+            h,
+            render_backend,
+            render_color,
+        )
+        .context("Failed to render 3D snapshot")?;
+
+        println!("{snapshot}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use crate::cli::{Cli, CliColorScheme, Commands};
+    use clap::Parser;
+
+    /// `--color` is optional: without it the scheme follows the structure's provenance, so a
+    /// crystal structure is not painted "very low confidence" from small B-factors.
+    #[test]
+    fn view_colour_is_optional() {
+        let color_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Commands::View(Args { color, .. }) => color,
+            _ => unreachable!(),
+        };
+        assert_eq!(color_of(&["proteus", "view", "x.pdb"]), None);
+        assert_eq!(
+            color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
+            Some(CliColorScheme::Rainbow)
+        );
+    }
+}

@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- `proteus-cli` is one module per subcommand. `main.rs` was 1 654 lines with a 1 067-line
+  `main()` holding every command body in one `match`; it is now 31 lines that parse and
+  dispatch. Each subcommand owns its clap `Args` struct and its `run` in `src/cmd/<name>.rs`,
+  the parser surface lives in `cli.rs`, the `inspect` table in `report.rs`, and the parser tests
+  sit next to the commands they parse. The CLI surface is unchanged — every subcommand's
+  `--help` output is byte-identical to before the split.
 - **The browser page is self-contained and no longer uses Mol\*.** `proteus view --html/--web`
   and the daemon's `/view/{job}` embedded a `<script src="https://unpkg.com/molstar@3.30.0">`
   tag — a 2023 release, two majors behind, fetched from a CDN at open time. That page did not
