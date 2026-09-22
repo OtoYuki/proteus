@@ -33,6 +33,27 @@ fn parse_err(what: &str, e: impl std::fmt::Debug) -> CoreError {
     CoreError::StructureParseError(format!("{what}: {e:?}"))
 }
 
+/// A parse failure the caller can act on, for the commonest mistake of all: handing a
+/// structure command something that is not a structure. pdbtbx's own message for this is
+/// "No Atoms in the given PDB struct while validating", which tells a first-time user nothing
+/// about what they did or what to do instead.
+fn no_coordinates_err(text: &str, what: &str) -> Option<CoreError> {
+    let looks_like_fasta = text
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .is_some_and(|l| l.starts_with('>'));
+    let hint = if looks_like_fasta {
+        " — this looks like a FASTA file. Structure commands take a PDB or mmCIF file; to go \
+         from a sequence to a structure use `proteus submit` or `proteus screen`."
+    } else {
+        " — no ATOM or HETATM records were found. Structure commands take a PDB or mmCIF file \
+         (optionally gzipped)."
+    };
+    Some(CoreError::StructureParseError(format!(
+        "{what} contains no atomic coordinates{hint}"
+    )))
+}
+
 fn is_gzip(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b
 }
@@ -191,8 +212,19 @@ pub fn load_structure_bytes(
             .set_level(StrictnessLevel::Loose)
             .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
     };
-    let (mut pdb, _warnings) =
-        result.map_err(|e| parse_err(if is_cif { "mmCIF" } else { "PDB" }, e))?;
+    let kind = if is_cif { "mmCIF" } else { "PDB" };
+    let (mut pdb, _warnings) = result.map_err(|e| {
+        // A file with no coordinates at all is a user mistake, not a malformed structure, and
+        // deserves a message that names the mistake.
+        let has_coordinates = text
+            .lines()
+            .any(|l| l.starts_with("ATOM") || l.starts_with("HETATM") || l.contains("_atom_site."));
+        if has_coordinates {
+            parse_err(kind, e)
+        } else {
+            no_coordinates_err(text, kind).unwrap_or_else(|| parse_err(kind, e))
+        }
+    })?;
     // NMR ensembles and multi-model files: analyse the first model only, as DSSP/MolProbity do.
     if pdb.model_count() > 1 {
         pdb.remove_models_except(&[0]);
@@ -244,6 +276,29 @@ pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
 
 #[cfg(test)]
 mod tests {
+
+    /// The commonest first-use mistake in both directions. The message has to name what was
+    /// handed over and what to run instead; "No Atoms in the given PDB struct while validating"
+    /// (pdbtbx's own) tells a new user neither.
+    #[test]
+    fn a_fasta_passed_to_a_structure_command_says_so() {
+        let err = open_structure_bytes(b">1crn\nTTCCPSIVARSNFNVCRLPG\n", Some("x.pdb"))
+            .expect_err("a FASTA is not a structure");
+        let msg = err.to_string();
+        assert!(msg.contains("looks like a FASTA"), "{msg}");
+        assert!(msg.contains("proteus submit"), "{msg}");
+        assert!(
+            !msg.contains("while validating"),
+            "internal parser text leaked: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_coordinates_says_what_is_missing() {
+        let err = open_structure_bytes(b"hello world\n", Some("x.pdb")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no ATOM or HETATM records"), "{msg}");
+    }
     use super::*;
 
     fn data(name: &str) -> std::path::PathBuf {

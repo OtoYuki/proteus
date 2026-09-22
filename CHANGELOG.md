@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Fixed
+- **Errors name the mistake instead of the symptom.** Handing a FASTA to a structure command
+  produced pdbtbx's "No Atoms in the given PDB struct while validating", which tells a
+  first-time user neither what they did nor what to do. It now says the file looks like a FASTA
+  and points at `proteus submit`/`screen`; a file with no coordinates at all says so; and the
+  mirror mistake — a PDB handed to a sequence command — points at `proteus analyze --pdb`.
+  Both directions are tested.
+- `proteus esm` prints, once, where zero-shot ESM-2 scores are known to be weak (long
+  multi-domain sequences), because the published benchmarks say so and a reader should not have
+  to find that in a paper after acting on a ranking. The README and the crate README carry the
+  viral-protein caveat and state why ESM-2 rather than ESM-3 (ESM-3's weights are
+  non-commercial; ESM C 300M is MIT and is the natural next checkpoint).
 - **π–π stacking and cation–π were over-reported, and the counts change.** Neither test included
   a lateral-offset term, so two aromatic rings that were parallel and within the distance cutoff
   but slid sideways past each other counted as stacked, and a cation beyond the ring edge counted

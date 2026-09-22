@@ -18,6 +18,11 @@ let muts = [parse_mutation("P19A")?, parse_mutation("C4S")?];
 let scores = score_masked_marginal(&model, wt, &muts)?;   // log p(mt) − log p(wt) at the masked position
 ```
 
+Zero-shot scores from any protein language model are a triage signal, not a measurement. ESM-2's
+published weak spots are **viral proteins** and **long multi-domain sequences**; it is a
+reasonable signal for human and microbial ones. ESM-2 rather than ESM-3 because ESM-3's weights
+are licensed for non-commercial use only.
+
 Numerical parity with `transformers.EsmForMaskedLM` (fp32) is pinned by `tests/parity.rs`
 against reference logits committed under `tests/data/*.json` (from `validate/esm_reference.py`): logits within 1e-2,
 amino-acid log-probabilities within 5e-3 (observed ≤ 2.5e-3) on three proteins for the 8M and 35M

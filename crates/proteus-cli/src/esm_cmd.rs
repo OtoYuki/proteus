@@ -109,6 +109,23 @@ fn score_mutations(model: &Esm2, wt: &str, muts: &[Mutation], masked: bool) -> R
     })
 }
 
+/// Say where a zero-shot ESM-2 score is known to be weak, once, at the point of use.
+///
+/// These are the published limits (ProteinGym-scale benchmarks), not measurements of ours: the
+/// score is a reasonable triage signal for human and microbial proteins and a poor one for
+/// viral proteins and long multi-domain sequences. Printing it beats a reader discovering it
+/// in a paper after they have acted on a ranking.
+pub fn warn_if_outside_known_good(wt: &str) {
+    const LONG_MULTI_DOMAIN: usize = 400;
+    if wt.len() > LONG_MULTI_DOMAIN {
+        eprintln!(
+            "note: {} residues — zero-shot ESM-2 scores degrade on long, multi-domain sequences. \
+             Treat the ranking as triage, and prefer per-domain scoring where the domains are known.",
+            wt.len()
+        );
+    }
+}
+
 pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
     match cmd {
         EsmCommand::Score {
@@ -125,6 +142,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
                 bail!("--mutations is required, e.g. --mutations P19A,C4S");
             }
             let model = load_model(&opts)?;
+            warn_if_outside_known_good(&wt);
             let scores = score_mutations(&model, &wt, &muts, opts.masked)?;
             let mut table = Table::new();
             table.load_style(UTF8_FULL);
@@ -144,6 +162,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
         } => {
             let (header, wt) = read_wildtype(&wildtype).await?;
             let model = load_model(&opts)?;
+            warn_if_outside_known_good(&wt);
             let rows = proteus_esm::scan(&model, &wt, opts.masked)?;
             if let Some(path) = &export {
                 let mut out = String::from("position,wt");
@@ -321,6 +340,7 @@ pub fn score_library(
     let wt_fasta = wild_type_of(sequences)?;
     // One forward pass for the whole library (wild-type marginals) or one per mutated
     // position (masked), instead of one per variant.
+    warn_if_outside_known_good(&wt_fasta);
     let mut scorer = MarginalScorer::new(&model, &wt_fasta, opts.masked)?;
     let wt_header = sequences
         .iter()

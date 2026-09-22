@@ -123,6 +123,11 @@ proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --e
   mean |ρ| 0.42 with `esm2_t12_35M`, 0.24 with `esm2_t6_8M` ([`bench/README.md`](bench/README.md)).
 - `--scorer esm2` ranks a screening library by sequence likelihood; `--scorer hybrid` combines it
   with the structural fitness score. Both add an `esm2_score` column to the Parquet export.
+- **Where it is known to be unreliable**, from the published benchmarks rather than our own:
+  zero-shot ESM-2 is a reasonable triage signal for human and microbial proteins, and a poor one
+  for **viral proteins** and **long multi-domain sequences**. `proteus esm` says so when it runs
+  past 400 residues. ESM-2 is used here rather than ESM-3 because ESM-3's weights are
+  non-commercial; ESM C 300M is MIT-licensed and is the natural next checkpoint to support.
 
 ### 6. Validated Against Reference Implementations
 Every push runs `make validate` (`.github/workflows/validate.yml`) over a **53**-structure corpus (X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF) and compares each metric to an independent implementation: **mdtraj** (φ/ψ, DSSP, $R_g$, Shrake–Rupley SASA), **FreeSASA** (Lee–Richards SASA) and **cctbx/MolProbity `ramalyze`** (Top8000 Ramachandran). Tolerances are the contract in `validate/tolerances.toml`; the full table for the last run is written to `validate/last_run.md`. Excerpt:

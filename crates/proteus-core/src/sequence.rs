@@ -21,9 +21,18 @@ pub fn validate_and_parse_fasta(content: &str) -> Result<Sequence, CoreError> {
         .ok_or_else(|| CoreError::InvalidFasta("Missing header line".into()))?;
 
     if !header_line.starts_with('>') {
-        return Err(CoreError::InvalidFasta(
-            "FASTA header must begin with '>'".into(),
-        ));
+        // The mirror of the FASTA-to-`analyze` mistake: name what was handed over rather than
+        // restating the format rule the caller already knows.
+        let looks_like_structure = trimmed
+            .lines()
+            .any(|l| l.starts_with("ATOM") || l.starts_with("HETATM") || l.starts_with("HEADER"))
+            || trimmed.contains("_atom_site.");
+        return Err(CoreError::InvalidFasta(if looks_like_structure {
+            "this looks like a PDB or mmCIF file, not a FASTA. Sequence commands take a FASTA;              to analyse a structure use `proteus analyze --pdb <file>`"
+                .into()
+        } else {
+            "FASTA header must begin with '>'".into()
+        }));
     }
 
     let header = header_line[1..].trim().to_string();
@@ -171,6 +180,16 @@ pub fn format_multi_fasta(sequences: &[Sequence]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// Mirror of `a_fasta_passed_to_a_structure_command_says_so`.
+    #[test]
+    fn a_structure_passed_to_a_sequence_command_says_so() {
+        let pdb = "HEADER    X\nATOM      1  CA  ALA A   1       0.000   0.000   0.000\n";
+        let err = validate_and_parse_fasta(pdb).expect_err("a PDB is not a FASTA");
+        let msg = err.to_string();
+        assert!(msg.contains("looks like a PDB"), "{msg}");
+        assert!(msg.contains("proteus analyze"), "{msg}");
+    }
     use super::*;
 
     #[test]
