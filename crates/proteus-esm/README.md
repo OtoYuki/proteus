@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-proteus-esm = "0.7"
+proteus-esm = "0.8"
 ```
 
 ESM-2 protein language model inference in pure Rust on [candle](https://github.com/huggingface/candle):
