@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `proteus esm scan`'s heat map was one shade of red with wild-type marginals (almost every score
+  is below 0, and the colour scale was fixed around 0). The scale is now centred on the scan's own
+  median and spread, printed in the legend, so blue marks the substitutions this protein
+  tolerates best.
+- The offline 3Dmol.js page rendered some twisted β-strands black: 3Dmol's Lambert shader has
+  one light and no ambient term. The embedded copy keeps a 30 % light floor (patched at page-build
+  time; the vendored file is unchanged, and a test fails if a new 3Dmol changes the shader).
+- `inspect`, `status`, `analyze` and `esm` tables were not fitted to the terminal and hard-wrapped
+  in narrow windows; every table now uses the same fitting as `screen` (wrap inside cells on a
+  terminal, never wrap into a pipe).
+- The Prometheus HELP text says that `proteus_tasks_total` counts transitions into each state,
+  not tasks currently in it.
+- `tower-http`'s unused `cors` feature is no longer enabled.
+
 ## [0.7.0] — 2026-09-23
 
 The bug-hunt release, and a security release for anyone running `proteus serve`. Five

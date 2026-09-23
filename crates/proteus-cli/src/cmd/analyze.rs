@@ -197,6 +197,7 @@ fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
     order.sort_by(|a, b| b.fitness.total_cmp(&a.fitness));
     let mut table = Table::new();
     table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
+    crate::cli::fit_table(&mut table);
     table.set_header(vec![
         "file",
         "res",
@@ -353,6 +354,8 @@ fn print_report(
 
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
+
+    crate::cli::fit_table(&mut table);
     table.set_header(vec!["Biophysical Metric", "Value"]);
 
     table.add_row(vec![

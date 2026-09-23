@@ -329,20 +329,8 @@ pub async fn run(
     );
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
-    // On a terminal, wrap inside the cells rather than letting the terminal hard-wrap
-    // mid-border. Into a pipe or a file, never wrap: a short job id split over two lines
-    // breaks grep and copy-paste, and there is no width to fit.
-    use std::io::IsTerminal;
-    if std::io::stdout().is_terminal() {
-        table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-        if let Ok((cols, _)) = crossterm::terminal::size() {
-            if cols >= 40 {
-                table.set_width(cols);
-            }
-        }
-    } else {
-        table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
-    }
+    // A short job id split over two lines breaks grep and copy-paste.
+    fit_table(&mut table);
     // A column of dashes says nothing, so ESM-2 only appears when something scored.
     let show_esm = candidates.iter().take(top).any(|c| c.esm2_score.is_some());
     let mut header = vec![

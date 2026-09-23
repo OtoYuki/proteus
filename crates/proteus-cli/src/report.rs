@@ -26,6 +26,8 @@ pub async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Res
 
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
+
+    crate::cli::fit_table(&mut table);
     table.set_header(vec!["Metric", "Value", "Confidence Assessment"]);
 
     table.add_row(vec![

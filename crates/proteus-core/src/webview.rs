@@ -17,6 +17,33 @@ use crate::structure::SecondaryStructure;
 /// 3Dmol.js, vendored (BSD-3-Clause; see `assets/3Dmol-LICENSE.txt`).
 const VIEWER_JS: &str = include_str!("../assets/3Dmol-min.js");
 
+/// 3Dmol.js's Lambert shaders light the scene with one directional light and no ambient term.
+/// On a twisted strand, a face can be visible while both its front and back light weights are
+/// 0, and it renders pure black: on 1PGB a whole β-strand looked missing. Extra lights,
+/// emissive colour or a thicker ribbon do not help (the shader takes one light and ignores
+/// the material's ambient and emissive terms). Keeping a 30 % floor under the light weight
+/// does. Applied to the embedded copy only; the vendored file stays byte-identical to upstream.
+const LIGHT_FLOOR: [(&str, &str); 2] = [
+    (
+        "gl_FragColor.xyz *= vLightFront;",
+        "gl_FragColor.xyz *= max( vLightFront, vec3( 0.3 ) );",
+    ),
+    (
+        "gl_FragColor.xyz *= vLightBack;",
+        "gl_FragColor.xyz *= max( vLightBack, vec3( 0.3 ) );",
+    ),
+];
+
+/// The viewer library as embedded in the page, with [`LIGHT_FLOOR`] applied.
+fn viewer_js() -> &'static str {
+    static LIT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LIT.get_or_init(|| {
+        LIGHT_FLOOR
+            .iter()
+            .fold(VIEWER_JS.to_string(), |js, (from, to)| js.replace(from, to))
+    })
+}
+
 /// How to colour the cartoon.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WebColorScheme {
@@ -161,7 +188,7 @@ impl WebViewPage<'_> {
             title = escape_html(self.title),
             caption = escape_html(self.caption),
             legend = self.color.legend(),
-            viewer_js = VIEWER_JS,
+            viewer_js = viewer_js(),
             b64 = b64,
             fmt = fmt,
             ss_map = ss_map,
@@ -256,7 +283,7 @@ mod tests {
             secondary_structure: &ss,
         }
         .render();
-        let ours = html.replace(VIEWER_JS, "");
+        let ours = html.replace(viewer_js(), "");
         let lower = ours.to_ascii_lowercase();
         // The template has exactly two script elements; the payload must not add a closer.
         assert_eq!(lower.matches("</script").count(), 2, "{ours}");
@@ -283,7 +310,7 @@ mod tests {
         // Our own markup and script must reference nothing external. The vendored library is
         // excluded from the scan: it carries code paths for fetching remote structures that
         // this page never reaches, and matching on those would only test 3Dmol.js's source.
-        let ours = html.replace(VIEWER_JS, "/* vendored viewer */");
+        let ours = html.replace(viewer_js(), "/* vendored viewer */");
         for forbidden in [
             "http://",
             "https://",
@@ -395,5 +422,25 @@ mod tests {
         assert!(!html.contains("<script>alert(1)</script>"));
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(html.contains("a &amp; b &quot;quoted&quot;"));
+    }
+    #[test]
+    fn no_face_of_the_cartoon_renders_pure_black() {
+        // Found making the product report: on 1PGB one β-strand rendered black, a twisted face
+        // with zero light from 3Dmol's single light and no ambient term.
+        for (from, _) in LIGHT_FLOOR {
+            assert!(
+                VIEWER_JS.contains(from),
+                "the vendored 3Dmol.js changed; re-check the shader patch for `{from}`"
+            );
+        }
+        let html = page(
+            WebColorScheme::SecondaryStructure,
+            "ATOM\n",
+            StructureFormat::Pdb,
+        );
+        for (from, to) in LIGHT_FLOOR {
+            assert!(html.contains(to), "light floor missing");
+            assert!(!html.contains(from), "an unpatched Lambert line remains");
+        }
     }
 }

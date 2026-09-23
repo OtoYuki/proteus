@@ -168,6 +168,23 @@ pub fn rankable(engine: &str, runner: RunnerMode) -> bool {
     engine != proteus_engine::ENGINE_SIMULATED || runner == RunnerMode::Simulated
 }
 
+/// Fit a table to where it is going. On a terminal, cells wrap inside the table so it is never
+/// wider than the window (a table wider than the terminal is hard-wrapped by the terminal and
+/// its borders fall apart). Into a pipe or a file nothing wraps, so rows stay whole for grep.
+pub fn fit_table(table: &mut comfy_table::Table) {
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        if let Ok((cols, _)) = crossterm::terminal::size() {
+            if cols >= 40 {
+                table.set_width(cols);
+            }
+        }
+    } else {
+        table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
+    }
+}
+
 /// `$PROTEUS_DATA_DIR` if set (containers, CI), else `~/.local/share/proteus`.
 pub fn get_default_data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("PROTEUS_DATA_DIR") {
