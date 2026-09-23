@@ -483,6 +483,10 @@ pub struct SuperpositionStats {
     pub reference_residues: usize,
     /// Paired residues whose amino acid differs between the two structures.
     pub mismatched_names: usize,
+    /// How residues were paired: `"residue id"` (chain, number, insertion code), `"residue
+    /// number"` (single-chain files with different chain ids), or `"sequence alignment"`
+    /// (renumbered or differently numbered files).
+    pub pairing: &'static str,
 }
 
 impl SuperpositionStats {
@@ -519,6 +523,78 @@ fn pair_residues(target: &[ResidueId], reference: &[ResidueId]) -> Vec<(usize, u
     pairs
 }
 
+/// Global alignment (Needleman–Wunsch) of two residue-name sequences; returns the aligned
+/// index pairs. Match +2, mismatch −1, gap −1: identical stretches dominate, a point mutation
+/// stays aligned rather than opening two gaps.
+fn align_by_sequence(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    let mut score = vec![vec![0i32; m + 1]; n + 1];
+    for (i, row) in score.iter_mut().enumerate() {
+        row[0] = -(i as i32);
+    }
+    for (j, cell) in score[0].iter_mut().enumerate() {
+        *cell = -(j as i32);
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
+            score[i][j] = (score[i - 1][j - 1] + s)
+                .max(score[i - 1][j] - 1)
+                .max(score[i][j - 1] - 1);
+        }
+    }
+    let (mut i, mut j, mut pairs) = (n, m, Vec::new());
+    while i > 0 && j > 0 {
+        let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
+        if score[i][j] == score[i - 1][j - 1] + s {
+            pairs.push((i - 1, j - 1));
+            i -= 1;
+            j -= 1;
+        } else if score[i][j] == score[i - 1][j] - 1 {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    pairs.reverse();
+    pairs
+}
+
+/// Pair residues of two traces the way a reader would: by identity when the files share a
+/// numbering, by residue number when each is a single chain with a different chain id (a
+/// predicted model against a deposited entry), and by sequence alignment when the numbering
+/// differs altogether. The pairing that matches the most identical amino acids wins; ties go
+/// to the more literal method.
+fn pair_best(tgt: &Trace, refr: &Trace) -> (Vec<(usize, usize)>, &'static str) {
+    let matching = |pairs: &[(usize, usize)]| {
+        pairs
+            .iter()
+            .filter(|&&(i, j)| tgt.names[i] == refr.names[j])
+            .count()
+    };
+    let mut best = (pair_residues(&tgt.ids, &refr.ids), "residue id");
+    let single_chain = |ids: &[ResidueId]| ids.windows(2).all(|w| w[0].0 == w[1].0);
+    if single_chain(&tgt.ids) && single_chain(&refr.ids) {
+        let strip = |ids: &[ResidueId]| -> Vec<ResidueId> {
+            ids.iter()
+                .map(|(_, n, ic)| (String::new(), *n, ic.clone()))
+                .collect()
+        };
+        let by_number = pair_residues(&strip(&tgt.ids), &strip(&refr.ids));
+        if matching(&by_number) > matching(&best.0) {
+            best = (by_number, "residue number");
+        }
+    }
+    // The alignment table is n×m; beyond ~4000×4000 residues it is not worth the memory.
+    if tgt.names.len() * refr.names.len() <= 16_000_000 {
+        let aligned = align_by_sequence(&tgt.names, &refr.names);
+        if matching(&aligned) > matching(&best.0) {
+            best = (aligned, "sequence alignment");
+        }
+    }
+    best
+}
+
 /// Parse and superimpose two structures using Kabsch optimal alignment.
 ///
 /// Residues are paired by chain ID, residue number and insertion code, and only residues
@@ -539,12 +615,12 @@ pub fn prepare_superposition_for_rendering(
     let tgt = trace_of(&tgt_pdb);
     let refr = trace_of(&ref_pdb);
 
-    let pairs = pair_residues(&tgt.ids, &refr.ids);
+    let (pairs, pairing) = pair_best(&tgt, &refr);
     if pairs.len() < MIN_SUPERPOSITION_PAIRS {
         return Err(RenderError::Geometry(format!(
-            "only {} residue(s) are present in both structures (target {}, reference {} \
-             residues); residues are paired by chain ID, residue number and insertion code, \
-             and at least {MIN_SUPERPOSITION_PAIRS} are needed to superpose",
+            "only {} residue(s) could be paired between the structures (target {}, reference \
+             {} residues; tried residue ids, residue numbers and a sequence alignment), and \
+             at least {MIN_SUPERPOSITION_PAIRS} are needed to superpose",
             pairs.len(),
             tgt.ca.len(),
             refr.ca.len()
@@ -625,6 +701,7 @@ pub fn prepare_superposition_for_rendering(
             target_residues: tgt.ca.len(),
             reference_residues: refr.ca.len(),
             mismatched_names,
+            pairing,
         },
     })
 }
@@ -1235,6 +1312,32 @@ mod tests {
     /// superposed at 3.77 Å (1UBQ). A longer reference was silently truncated, and nothing
     /// said how many residues the RMSD covered or that the sequences differed.
     #[test]
+    fn superposition_falls_back_when_chain_ids_or_numbering_differ() {
+        // Reported: a predicted model (chain A, 1..N) against a deposited entry with another
+        // chain id or numbering found 0 shared residues and refused to superpose.
+        let chain_b = crambin_where(|_| true, |l| format!("{}B{}", &l[..21], &l[22..]));
+        let s = prepare_superposition_for_rendering(&chain_b, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert!(s.rmsd < 1e-6 && s.paired == 46, "{s:?}");
+        assert_eq!(s.pairing, "residue number");
+        assert!(s.same_sequence());
+
+        let renumbered = crambin_where(
+            |_| true,
+            |l| {
+                let n: isize = l[22..26].trim().parse().unwrap();
+                format!("{}{:>4}{}", &l[..22], n + 100, &l[26..])
+            },
+        );
+        let s = prepare_superposition_for_rendering(&renumbered, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert!(s.rmsd < 1e-6 && s.paired == 46, "{s:?}");
+        assert_eq!(s.pairing, "sequence alignment");
+    }
+
+    #[test]
     fn superposition_pairs_residues_by_identity() {
         let same = |l: &str| l.to_string();
         // One residue fewer at the N-terminus: 45 pairs, the same coordinates, RMSD 0.
@@ -1285,8 +1388,10 @@ mod tests {
         assert!(s.same_sequence(), "{s:?}");
         assert!(s.rmsd < 1e-6);
 
-        // Nothing in common (different chain): refused, not superposed on nothing.
-        let other_chain = crambin_where(|_| true, |l| format!("{}B{}", &l[..21], &l[22..]));
+        // Nothing in common — another chain and no residue name in common — is refused, not
+        // superposed on nothing. (Another chain with the same sequence pairs by number; see
+        // `superposition_falls_back_when_chain_ids_or_numbering_differ`.)
+        let other_chain = crambin_where(|_| true, |l| format!("{}UNK B{}", &l[..17], &l[22..]));
         let err = prepare_superposition_for_rendering(&other_chain, CRAMBIN_PDB)
             .err()
             .expect("structures with no residue in common were superposed");

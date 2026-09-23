@@ -36,7 +36,6 @@ const EXPERIMENTAL_MARKERS: &[&str] = &[
     "REFINEMENT",
     "R VALUE",
     "_REFINE.",
-    "_EXPTL.METHOD",
 ];
 
 /// Header substrings (upper-cased) that identify a predicted model.

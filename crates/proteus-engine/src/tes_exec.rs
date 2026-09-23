@@ -179,6 +179,10 @@ impl TesExecutor for HostExecutor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         cmd.kill_on_drop(true);
+        // Its own process group, so a timeout or cancel can stop everything the command
+        // started, including background children that would otherwise keep the pipes open.
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -204,24 +208,46 @@ impl TesExecutor for HostExecutor {
         }
         let out = tokio::spawn(read_capped(child.stdout.take().expect("piped stdout")));
         let err = tokio::spawn(read_capped(child.stderr.take().expect("piped stderr")));
-        let waited = tokio::select! {
-            r = tokio::time::timeout(req.timeout, child.wait()) => r,
-            _ = req.cancel.cancelled() => {
-                return Ok(ExecutorResult {
-                    exit_code: -1,
-                    system_logs: vec!["host executor: canceled".into()],
-                    ..Default::default()
-                });
+        let (out_abort, err_abort) = (out.abort_handle(), err.abort_handle());
+        let pid = child.id();
+        let stop = |why: String| {
+            if let Some(pid) = pid {
+                kill_process_group(pid);
             }
+            out_abort.abort();
+            err_abort.abort();
+            Ok(ExecutorResult {
+                exit_code: -1,
+                system_logs: vec![why],
+                ..Default::default()
+            })
         };
-        match waited {
-            Ok(Ok(status)) => {
+        // The deadline covers the output as well as the exit: a background process that
+        // inherited stdout keeps the pipe open after the command itself has exited.
+        let finished = async {
+            let status = child.wait().await;
+            let out = out.await.unwrap_or_default();
+            let err = err.await.unwrap_or_default();
+            (status, out, err)
+        };
+        let waited = tokio::select! {
+            r = tokio::time::timeout(req.timeout, finished) => r,
+            _ = req.cancel.cancelled() => return stop("host executor: canceled".into()),
+        };
+        let Ok((status, out, err)) = waited else {
+            return stop(format!(
+                "host executor: timed out after {}s",
+                req.timeout.as_secs()
+            ));
+        };
+        match status {
+            Ok(status) => {
                 let mut system_logs = vec![format!(
                     "host executor: ran '{prog}' on the daemon host; image '{}' ignored",
                     req.image
                 )];
-                let (stdout, n1) = out.await.unwrap_or_default().finish("stdout");
-                let (stderr, n2) = err.await.unwrap_or_default().finish("stderr");
+                let (stdout, n1) = out.finish("stdout");
+                let (stderr, n2) = err.finish("stderr");
                 system_logs.extend(n1.into_iter().chain(n2));
                 Ok(ExecutorResult {
                     stdout,
@@ -230,17 +256,9 @@ impl TesExecutor for HostExecutor {
                     system_logs,
                 })
             }
-            Ok(Err(e)) => Ok(ExecutorResult {
+            Err(e) => Ok(ExecutorResult {
                 stderr: e.to_string(),
                 exit_code: -1,
-                ..Default::default()
-            }),
-            Err(_) => Ok(ExecutorResult {
-                exit_code: -1,
-                system_logs: vec![format!(
-                    "host executor: timed out after {}s",
-                    req.timeout.as_secs()
-                )],
                 ..Default::default()
             }),
         }
@@ -249,6 +267,19 @@ impl TesExecutor for HostExecutor {
     fn kind(&self) -> &'static str {
         "host"
     }
+}
+
+/// SIGKILL a whole process group. Uses the `kill` utility rather than a libc binding; the
+/// host executor is a loopback development aid, not a hot path.
+fn kill_process_group(pgid: u32) {
+    #[cfg(unix)]
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    #[cfg(not(unix))]
+    let _ = pgid;
 }
 
 /// Runs executors inside their declared image via bollard.
@@ -587,6 +618,49 @@ mod tests {
         assert!(mount_root("/data/../etc/passwd").is_err());
         assert!(mount_root("/data/sub/../../../home/x").is_err());
         assert!(mount_root("/data/./in.pdb").is_ok());
+    }
+
+    #[tokio::test]
+    async fn host_executor_timeout_covers_background_children() {
+        // Reported: `sleep 60 & echo hi` held stdout open past the command's exit, and the
+        // timeout, which covered only the exit, never fired.
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 60 & echo hi".to_string(),
+        ];
+        let env = HashMap::new();
+        let roots = BTreeSet::new();
+        let started = std::time::Instant::now();
+        let r = HostExecutor
+            .run(ExecutorRequest {
+                image: "ignored",
+                command: &cmd,
+                workdir: None,
+                env: &env,
+                stdin: None,
+                task_id: "t",
+                work_dir: dir.path(),
+                mount_roots: &roots,
+                cpu_cores: None,
+                ram_gb: None,
+                network: false,
+                timeout: Duration::from_secs(2),
+                cancel: CancellationToken::new(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timeout did not fire"
+        );
+        assert_eq!(r.exit_code, -1);
+        assert!(
+            r.system_logs[0].contains("timed out"),
+            "{:?}",
+            r.system_logs
+        );
     }
 
     #[tokio::test]

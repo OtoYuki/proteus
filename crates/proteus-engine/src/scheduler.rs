@@ -1082,10 +1082,11 @@ async fn read_inside(work_dir: &std::path::Path, rel: &str) -> Result<Vec<u8>, s
 
 /// Copy `src` (file or directory) to `dst`, creating parents.
 ///
-/// `src` itself may be a symlink (callers resolve and check it first), but nothing *inside* a
-/// copied directory may be: an executor or another task can plant `d/x -> /etc/shadow`, and
-/// following it would carry a host file across the allowed-dir boundary. A symlink found
-/// below the top level, on either side, fails the copy.
+/// `src` itself may be a symlink (callers resolve and check it first). Inside a copied
+/// directory, a symlink to a file is followed only when its target stays inside that
+/// directory (`genome.fasta -> genome.fa`, common in reference bundles); one that leads out of
+/// it — an executor or another task can plant `d/x -> /etc/shadow` — fails the copy, as does a
+/// symlinked subdirectory (a loop risk) and any symlink already on the destination side.
 async fn copy_recursive(
     src: &std::path::Path,
     dst: &std::path::Path,
@@ -1107,17 +1108,24 @@ async fn copy_recursive(
             return Err(refuse(dst));
         }
         tokio::fs::create_dir_all(dst).await?;
+        let root = tokio::fs::canonicalize(src).await?;
         let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
         while let Some((s, d)) = stack.pop() {
             let mut rd = tokio::fs::read_dir(&s).await?;
             while let Some(entry) = rd.next_entry().await? {
                 let target = d.join(entry.file_name());
                 let kind = entry.file_type().await?;
-                if kind.is_symlink() {
-                    return Err(refuse(&entry.path()));
-                }
                 if is_symlink(&target).await {
                     return Err(refuse(&target));
+                }
+                if kind.is_symlink() {
+                    match tokio::fs::canonicalize(entry.path()).await {
+                        Ok(real) if real.starts_with(&root) && real.is_file() => {
+                            tokio::fs::copy(&real, &target).await?;
+                            continue;
+                        }
+                        _ => return Err(refuse(&entry.path())),
+                    }
                 }
                 if kind.is_dir() {
                     tokio::fs::create_dir_all(&target).await?;
@@ -1355,6 +1363,24 @@ mod tests {
             allow_dirs: vec![allowed.clone()],
             ..Default::default()
         });
+
+        // A link that stays inside the input directory is an ordinary part of it.
+        std::fs::create_dir_all(allowed.join("bundle")).unwrap();
+        std::fs::write(allowed.join("bundle/genome.fa"), ">g\nACGT\n").unwrap();
+        std::os::unix::fs::symlink("genome.fa", allowed.join("bundle/genome.fasta")).unwrap();
+        let mut task = sh_task("", "cat in/genome.fasta");
+        task.inputs.push(proteus_core::tes::TesInput {
+            name: None,
+            description: None,
+            url: Some(format!("file://{}", allowed.join("bundle").display())),
+            path: "/data/in".into(),
+            type_: proteus_core::tes::TesFileType::Directory,
+            content: None,
+        });
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        assert_eq!(done.logs[0].logs[0].stdout.as_deref(), Some(">g\nACGT\n"));
 
         let mut task = sh_task("", "cat in/s");
         task.inputs.push(proteus_core::tes::TesInput {

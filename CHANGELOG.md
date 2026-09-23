@@ -29,9 +29,12 @@ Each has a regression test that reproduces the reported attack.
   timing.
 
 ### Changed
-- **`proteus view --compare` pairs residues by identity** (chain ID, residue number, insertion
-  code) and superposes only the residues both structures have; fewer than three shared is an
-  error. The summary gives the pair count against each structure's total, is green only when
+- **`proteus view --compare` pairs residues instead of positions**: by identity (chain ID,
+  residue number, insertion code) when the files share a numbering, by residue number when
+  each is a single chain with a different chain ID (a predicted model against a deposited
+  entry), and by sequence alignment when the numbering differs; the pairing that matches the
+  most identical residues wins and is named in the summary. Only paired residues are
+  superposed; fewer than three is an error. The summary gives the pair count against each structure's total, is green only when
   the sequences match residue for residue, and warns what differs otherwise. `--color` and
   `--dashboard`, which `--compare` silently ignored, are now rejected with it.
   `render_superposition_snapshot` returns `SuperpositionStats` rather than a bare RMSD.
@@ -52,8 +55,12 @@ Each has a regression test that reproduces the reported attack.
   `CANCELING` were missing.
 - **Native jobs** that failed after starting (unwritable work dir, database error) stayed
   Running with an open event stream; they now fail. `submit --wait=false` jobs were never run by
-  anything; a running `proteus serve` now picks up queued jobs, and every start claims the job
-  atomically so none runs twice.
+  anything; they are now marked Pending and a running `proteus serve` picks them up
+  (`--queue-workers`, default 2, at a time). Jobs a `screen` or `submit --wait` inserted belong
+  to that process and are never taken, and every start claims its job atomically.
+- **One daemon per data directory.** `proteus serve` takes a lock on the data directory and
+  binds its port before closing out tasks a previous run left unfinished, so a second daemon
+  can no longer mark the first one's live tasks SYSTEM_ERROR.
 - **Malformed structure files crashed the process.** pdbtbx panics on an mmCIF `?` in a
   required field and on multi-byte characters in PDB records; both are now parse errors.
 - **Hostile chain ids ran as script** in `view --html`/`--web` and `/view/{job}`
@@ -64,8 +71,11 @@ Each has a regression test that reproduces the reported attack.
   a header-less ESMFold model with low confidence was classed experimental (which raised its
   score); a declared `--confidence-source predicted` skipped the 0–1 rescale. Detection now reads
   machine-readable provenance from the whole file first and matches words as words.
-- **A blank element column turned `CA` into calcium**, dropping every residue; deuterium was kept
-  as a heavy atom; ATOM lines cut after the B-factor were refused.
+- **A blank element column turned `CA` into calcium**, dropping every residue (element symbols
+  read from atom names are now corrected in the standard amino acids only, so mercury in CMH
+  or bromine in a modified residue is kept); deuterium was kept as a heavy atom; ATOM lines cut
+  after the B-factor were refused; an SSBOND or CONECT record naming a residue no longer in the
+  file made the whole file unreadable (bond records are not needed and are skipped).
 - **Hydrogen bonds.** Proline's N was counted as a donor and a Ser/Thr/Tyr hydroxyl pair was
   counted twice. Against mdtraj, precision on 1D3Z rises 76.1 → 78.5 % and on 1L2Y
   63.2 → 66.7 %; 2L3B recall falls 97.1 → 95.7 % (one bond is now kept in the other direction).

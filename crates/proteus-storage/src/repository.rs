@@ -130,15 +130,14 @@ impl ProteusRepository {
         Ok(result.rows_affected() == 1)
     }
 
-    /// Ids of jobs waiting to run, oldest first.
-    pub async fn queued_job_ids(&self, limit: i64) -> Result<Vec<Uuid>, StorageError> {
-        let rows = sqlx::query(
-            "SELECT id FROM jobs WHERE status IN ('Queued', 'Pending') \
-             ORDER BY created_at LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await?;
+    /// Ids of jobs handed to the daemon (status Pending), oldest first. Queued jobs belong to
+    /// the process that inserted them and are not listed.
+    pub async fn pending_job_ids(&self, limit: i64) -> Result<Vec<Uuid>, StorageError> {
+        let rows =
+            sqlx::query("SELECT id FROM jobs WHERE status = 'Pending' ORDER BY created_at LIMIT ?")
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(rows
             .iter()
             .filter_map(|r| Uuid::parse_str(&r.get::<String, _>("id")).ok())
@@ -1089,5 +1088,39 @@ mod tests {
                 .len(),
             1
         );
+    }
+    #[tokio::test]
+    async fn only_pending_jobs_are_offered_to_the_daemon_and_each_is_claimed_once() {
+        // Regression review: the daemon's queue poller took Queued jobs belonging to a running
+        // `screen` in another process.
+        let repo = ProteusRepository::new(crate::pool::create_in_memory_pool().await.unwrap());
+        let seq = Sequence {
+            id: Uuid::new_v4(),
+            header: "x".into(),
+            fasta: "ACDE".into(),
+            length: 4,
+            created_at: Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let mut ids = Vec::new();
+        for status in [JobStatus::Queued, JobStatus::Pending] {
+            let job = PipelineJob {
+                id: Uuid::new_v4(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status,
+                priority: 1,
+                created_at: Utc::now(),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            };
+            repo.insert_job(&job).await.unwrap();
+            ids.push(job.id);
+        }
+        assert_eq!(repo.pending_job_ids(10).await.unwrap(), vec![ids[1]]);
+        assert!(repo.claim_job(ids[1]).await.unwrap());
+        assert!(!repo.claim_job(ids[1]).await.unwrap(), "claimed twice");
+        assert!(repo.pending_job_ids(10).await.unwrap().is_empty());
     }
 }

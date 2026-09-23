@@ -97,9 +97,13 @@ pub fn sniff_format(text: &str, hint: Option<&str>) -> StructureFormat {
 /// (SEQRES, SEQADV, DBREF, HELIX, SHEET, SITE, LINK, …) are dropped before parsing: they carry
 /// nothing Proteus uses, and pdbtbx's lexer rejects legitimate deposited files on malformed
 /// ones (e.g. blank sequence numbers in the SEQADV deletion records of 1TIM).
+/// Records handed to pdbtbx. Bond records (SSBOND, CONECT) and the MASTER checksum are left
+/// out: nothing here reads them (disulfides are found from geometry), and in a trimmed or
+/// edited file a bond record naming a residue that is no longer there makes pdbtbx refuse the
+/// whole file.
 const COORDINATE_RECORDS: &[&str] = &[
     "HEADER", "REMARK", "CRYST1", "SCALE", "ORIGX", "MTRIX", "MODEL", "ATOM", "HETATM", "ANISOU",
-    "TER", "ENDMDL", "END", "SSBOND", "CONECT", "MASTER",
+    "TER", "ENDMDL", "END",
 ];
 
 fn coordinate_records_only(text: &str) -> String {
@@ -448,9 +452,10 @@ fn is_standard_amino_acid(name: &str) -> bool {
     )
 }
 
-/// Elements an amino-acid atom can be. Anything else in a protein residue (Ca for ` CA `,
-/// Cd for `CD1`, Hg for `HG`, Ne for `NE`, …) came from reading the atom name as an element
-/// symbol, and the first letter of the name is the real element.
+/// Elements an atom of a standard amino acid can be. Anything else there (Ca for ` CA `, Cd for
+/// `CD1`, Hg for `HG`, Ne for `NE`, …) came from reading the atom name as an element symbol,
+/// and the first letter of the name is the real element. Only standard residues are corrected:
+/// modified ones legitimately carry mercury (CMH), bromine, chlorine and the like.
 const PROTEIN_ELEMENTS: &[&str] = &["C", "N", "O", "S", "SE", "H", "D"];
 
 /// Hydrogen or deuterium, including deuterium that pdbtbx leaves without an element.
@@ -465,12 +470,17 @@ fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
 pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
     let mut out = pdb.clone();
     out.remove_residues_by(|r| !is_protein_residue(r));
-    for atom in out.atoms_mut() {
-        let e = element_symbol(atom).to_ascii_uppercase();
-        if !PROTEIN_ELEMENTS.contains(&e.as_str()) {
-            let first = atom.name().trim().chars().next().unwrap_or('C').to_string();
-            if let Some(fixed) = pdbtbx::Element::from_symbol(&first) {
-                atom.set_element(fixed);
+    for residue in out.residues_mut() {
+        if !is_standard_amino_acid(residue.name().unwrap_or("")) {
+            continue;
+        }
+        for atom in residue.atoms_mut() {
+            let e = element_symbol(atom).to_ascii_uppercase();
+            if !PROTEIN_ELEMENTS.contains(&e.as_str()) {
+                let first = atom.name().trim().chars().next().unwrap_or('C').to_string();
+                if let Some(fixed) = pdbtbx::Element::from_symbol(&first) {
+                    atom.set_element(fixed);
+                }
             }
         }
     }
@@ -750,5 +760,40 @@ END\n";
             matches!(r, Ok(Err(_))),
             "must be an error, not a panic or a wrapped value"
         );
+    }
+    #[test]
+    fn a_bond_record_naming_a_missing_residue_does_not_sink_the_file() {
+        // Found while testing `view --compare`: 1CRN with its chain relabelled kept SSBOND
+        // records for chain A, and pdbtbx refused the file.
+        let text = std::fs::read_to_string(data("1crn.pdb")).unwrap();
+        let relabelled: String = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("ATOM") {
+                    format!("{}B{}\n", &l[..21], &l[22..])
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
+        let loaded = load_structure_bytes(relabelled.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(protein_heavy_atoms(&loaded.pdb).residue_count(), 46);
+    }
+
+    #[test]
+    fn declared_elements_in_modified_residues_are_kept() {
+        // Regression review: the element correction for blank columns also rewrote correct
+        // ones, turning mercury in CMH into hydrogen (then removed) and Br into boron.
+        let pdb = "ATOM      1  N   CMH A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+                   ATOM      2  CA  CMH A   1       1.450   0.000   0.000  1.00 10.00           C\n\
+                   ATOM      3  C   CMH A   1       2.000   1.400   0.000  1.00 10.00           C\n\
+                   ATOM      4 HG   CMH A   1       3.000   3.000   1.000  1.00 10.00          HG\n";
+        let loaded = load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        let protein = protein_heavy_atoms(&loaded.pdb);
+        let hg = protein
+            .atoms()
+            .find(|a| a.name().trim() == "HG")
+            .expect("Hg removed");
+        assert!(element_symbol(hg).eq_ignore_ascii_case("Hg"));
     }
 }

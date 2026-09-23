@@ -67,7 +67,13 @@ pub async fn run(
         id: job_id,
         sequence_id: sequence.id,
         tier: pipeline_tier,
-        status: proteus_core::models::JobStatus::Queued,
+        // Pending hands the job to a running `proteus serve`; Queued keeps it for this
+        // process, which runs it right away.
+        status: if wait {
+            proteus_core::models::JobStatus::Queued
+        } else {
+            proteus_core::models::JobStatus::Pending
+        },
         priority: 1,
         created_at: chrono::Utc::now(),
         started_at: None,

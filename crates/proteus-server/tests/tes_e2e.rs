@@ -214,6 +214,7 @@ async fn bearer_token_guards_tes_and_native_apis_but_not_health() {
     let base = spawn(
         proteus_server::ServerOptions {
             auth_token: Some("s3cret".into()),
+            ..Default::default()
         },
         None,
     )

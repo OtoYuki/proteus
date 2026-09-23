@@ -30,6 +30,8 @@ pub struct AppState {
 pub struct ServerOptions {
     /// When set, every `/v1`, `/ga4gh` and `/api` request must carry `Authorization: Bearer <token>`.
     pub auth_token: Option<String>,
+    /// Jobs submitted with `proteus submit --wait=false` run at most this many at a time.
+    pub queue_workers: usize,
 }
 
 impl AppState {
@@ -176,16 +178,21 @@ pub fn build_router_with_options(state: AppState, options: ServerOptions) -> Rou
         .with_state(state)
 }
 
-/// Run native jobs that were queued without a worker (`proteus submit --wait=false`, or a
-/// job queued before the daemon started). Every few seconds the oldest queued jobs are handed
-/// to the scheduler, which claims each atomically, so a job the API handler or a CLI already
-/// started is skipped rather than run twice.
-fn spawn_queue_poller(scheduler: PipelineScheduler) {
+/// Run native jobs handed to the daemon without a worker (`proteus submit --wait=false`,
+/// status Pending). Jobs a `screen` or `submit --wait` inserted (status Queued) belong to that
+/// process and are never taken, even if it died. At most `workers` jobs run at once; each start
+/// claims the job atomically, so nothing runs twice.
+fn spawn_queue_poller(scheduler: PipelineScheduler, workers: usize) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(workers));
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
         loop {
             tick.tick().await;
-            let ids = match scheduler.repo().queued_job_ids(16).await {
+            let free = slots.available_permits();
+            if free == 0 {
+                continue;
+            }
+            let ids = match scheduler.repo().pending_job_ids(free as i64).await {
                 Ok(ids) => ids,
                 Err(e) => {
                     tracing::warn!("queue poll failed: {e}");
@@ -193,11 +200,15 @@ fn spawn_queue_poller(scheduler: PipelineScheduler) {
                 }
             };
             for id in ids {
+                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                    break;
+                };
                 let s = scheduler.clone();
                 tokio::spawn(async move {
                     if let Err(e) = s.process_job(id).await {
-                        tracing::warn!("queued job {id} failed: {e}");
+                        tracing::warn!("pending job {id} failed: {e}");
                     }
+                    drop(permit);
                 });
             }
         }
@@ -230,6 +241,10 @@ pub async fn run_server_with_options(
         }
     }
     tracing::info!("TES executor backend: {executor_kind}");
+    // Bind before touching any task: a second daemon that cannot get the port must not have
+    // already rewritten the first daemon's tasks. (The caller also holds the data directory's
+    // lock, so a second daemon on another port never gets this far either.)
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     match scheduler.recover_interrupted_tes_tasks().await {
         Ok(0) => {}
         Ok(n) => tracing::warn!(
@@ -237,11 +252,10 @@ pub async fn run_server_with_options(
         ),
         Err(e) => tracing::error!("could not close out interrupted TES tasks: {e}"),
     }
-    spawn_queue_poller(scheduler.clone());
+    spawn_queue_poller(scheduler.clone(), options.queue_workers.max(1));
     let state = AppState::new(scheduler);
 
     let app = build_router_with_options(state, options);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Proteus server running on http://{}", addr);
     tracing::info!(
         "Swagger UI documentation available at http://{}/swagger-ui",

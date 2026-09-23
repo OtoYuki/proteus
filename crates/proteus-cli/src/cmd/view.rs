@@ -9,8 +9,9 @@ pub struct Args {
     target: String,
 
     /// Reference structure to superpose onto, with C-alpha RMSD. Residues are paired by
-    /// chain ID, residue number and insertion code; the two are drawn in fixed colours, so
-    /// --color and --dashboard do not apply
+    /// chain ID and number, by number alone for two single-chain files, or by sequence
+    /// alignment, whichever matches most; the two are drawn in fixed colours, so --color and
+    /// --dashboard do not apply
     #[arg(long, conflicts_with_all = ["color", "dashboard"])]
     compare: Option<PathBuf>,
 
@@ -345,8 +346,8 @@ fn superposition_summary(s: &proteus_render::SuperpositionStats) -> String {
     let colour = if s.same_sequence() { "32" } else { "33" };
     format!(
         "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[{colour}mRMSD: \
-         {:.3} Å over {} Cα pairs\x1b[0m (target {}/{}, reference {}/{} residues paired)",
-        s.rmsd, s.paired, s.paired, s.target_residues, s.paired, s.reference_residues
+         {:.3} Å over {} Cα pairs\x1b[0m (target {}/{}, reference {}/{} residues paired by {})",
+        s.rmsd, s.paired, s.paired, s.target_residues, s.paired, s.reference_residues, s.pairing
     )
 }
 
@@ -377,10 +378,12 @@ fn superposition_warning(s: &proteus_render::SuperpositionStats) -> Option<Strin
     ))
 }
 
-/// Whether `target` could be a job UUID or a prefix of one: hex digits and hyphens only. A
-/// file name (`typo.pdb`, `models/x.cif`) never is.
+/// Whether `target` could be a job UUID or a prefix of one: any form `Uuid::parse_str`
+/// accepts (braced, `urn:uuid:`, simple), or hex digits and hyphens. A file name (`typo.pdb`,
+/// `models/x.cif`) never is.
 fn looks_like_job_ref(target: &str) -> bool {
-    !target.is_empty() && target.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    Uuid::parse_str(target).is_ok()
+        || (!target.is_empty() && target.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
 }
 
 /// Create the `--web` page as a new file with an unpredictable name in `dir`.
@@ -542,6 +545,13 @@ mod tests {
             "8c716e90-5b74-4a0e-9f3b-0123456789ab"
         ));
         assert!(!super::looks_like_job_ref("typo.pdb"));
+        // Reported: braced and URN forms, accepted by every other command, were not.
+        assert!(super::looks_like_job_ref(
+            "{8c716e90-0000-4000-8000-000000000000}"
+        ));
+        assert!(super::looks_like_job_ref(
+            "urn:uuid:8c716e90-0000-4000-8000-000000000000"
+        ));
         assert!(!super::looks_like_job_ref(""));
     }
 
@@ -570,6 +580,7 @@ mod tests {
             target_residues: 46,
             reference_residues: 46,
             mismatched_names: 0,
+            pairing: "residue id",
         };
         let line = super::superposition_summary(&same);
         assert!(
