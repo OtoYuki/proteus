@@ -393,7 +393,7 @@ fn an_empty_database_says_how_to_start() {
     let screen = rendered(&app, 100, 24);
     assert!(screen.contains("No jobs yet."), "{screen}");
     assert!(screen.contains("proteus submit"), "{screen}");
-    assert!(screen.contains("1 Jobs"));
+    assert!(screen.contains("(jobs)"));
     assert!(screen.contains("q quit"));
 }
 
@@ -423,11 +423,15 @@ fn every_tab_renders_at_every_size_without_panicking() {
     }
     app.help = false;
     app.tab = Tab::Jobs;
+    // A job's name is data: never re-cased (I6A is a mutation, i6a is not).
+    app.jobs.all[0].header = "query_I6A [mutation=I6A]".into();
     let screen = rendered(&app, 120, 30);
+    assert!(!screen.contains("i6a"), "{screen}");
     assert!(
-        screen.contains("lysozyme") && screen.contains("esmfold-api"),
+        screen.matches("query_I6A [mutation=I6A]").count() >= 2,
         "{screen}"
     );
+    assert!(screen.contains("esmfold-api"), "{screen}");
     assert!(screen.contains("84.2"), "{screen}");
 }
 
@@ -439,7 +443,7 @@ fn the_structures_tab_shows_the_measurements() {
     press(&mut app, "2j");
     let path = dir.path().join("a.pdb");
     app.analyses.insert(path.clone(), Analysis::Pending);
-    assert!(rendered(&app, 100, 24).contains("Measuring"));
+    assert!(rendered(&app, 100, 24).contains("measuring"));
     app.analyses.insert(
         path,
         Analysis::Done {
@@ -460,7 +464,10 @@ fn the_run_tab_shows_the_command_it_will_run() {
     app.tab = Tab::Run;
     let screen = rendered(&app, 100, 24);
     assert!(screen.contains("enter a sequence"), "{screen}");
-    assert!(screen.contains("[ Run ]"), "the Run button fits: {screen}");
+    assert!(
+        screen.contains("[ run ▸ ]"),
+        "the Run button fits: {screen}"
+    );
     app.handle_key(key(KeyCode::Enter));
     press(&mut app, "MKT");
     let screen = rendered(&app, 100, 24);

@@ -2,7 +2,8 @@
 # `type_out` writes a command a character at a time so the recording has motion; the real
 # commands then run unpiped, so progress bars and spinners animate as they do in a terminal.
 type_out() {
-    printf '\033[1;36m$\033[0m '
+    # The s1re.sh prompt: a dim `~ $`.
+    printf '\033[2m~ $\033[0m '
     local i
     for ((i = 0; i < ${#1}; i++)); do
         printf '%s' "${1:i:1}"

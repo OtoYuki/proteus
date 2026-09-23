@@ -252,18 +252,18 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 eprintln!("{warning}");
             }
             let dual_title = format!(
-                "{title} (Cyan) vs {ref_name} (Ruby), {} Cα paired",
+                "{title} (tide) vs {ref_name} (clay), {} Cα paired",
                 stats.paired
             );
             let config = proteus_render::tui::ViewerConfig {
                 title: dual_title,
                 initial_color_scheme: proteus_render::rasterizer::ColorScheme::Solid(
-                    proteus_render::rasterizer::ColorRGB::new(6, 182, 212),
+                    proteus_render::brand::structure::TARGET,
                 ),
                 auto_rotate: true,
                 secondary_mesh: Some((
                     sup_data.ref_mesh,
-                    proteus_render::rasterizer::ColorRGB::new(244, 63, 94),
+                    proteus_render::brand::structure::REFERENCE,
                 )),
                 rmsd: Some(sup_data.rmsd),
                 disulfide_mesh: None,
@@ -336,7 +336,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
 fn superposition_summary(s: &proteus_render::SuperpositionStats) -> String {
     let colour = if s.same_sequence() { "32" } else { "33" };
     format!(
-        "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[{colour}mRMSD: \
+        "\x1b[1mSuperposition:\x1b[0m target (tide) vs reference (clay) | \x1b[{colour}mRMSD: \
          {:.3} Å over {} Cα pairs\x1b[0m (target {}/{}, reference {}/{} residues paired by {})",
         s.rmsd, s.paired, s.paired, s.target_residues, s.paired, s.reference_residues, s.pairing
     )

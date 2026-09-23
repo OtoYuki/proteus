@@ -736,7 +736,7 @@ pub fn prepare_superposition_for_rendering(
 }
 
 /// Render a single static snapshot string of two superimposed structures.
-/// Target is rendered in Cyan (#06B6D4), Reference is rendered in Ruby (#F43F5E).
+/// The target is drawn in Tide and the reference in Clay (`brand::structure`).
 pub fn render_superposition_snapshot(
     target_pdb: &str,
     reference_pdb: &str,
@@ -751,8 +751,8 @@ pub fn render_superposition_snapshot(
     fb.clear(ColorRGB::BLACK);
 
     let mut rasterizer = Rasterizer::new(ColorScheme::Plddt);
-    // 1. Render reference in Ruby
-    let ref_color = ColorRGB::new(244, 63, 94);
+    // 1. Render the reference
+    let ref_color = brand::structure::REFERENCE;
     rasterizer.rasterize_mesh(
         &data.ref_mesh,
         &data.camera,
@@ -760,8 +760,8 @@ pub fn render_superposition_snapshot(
         ColorScheme::Solid(ref_color),
     );
 
-    // 2. Render aligned target in Cyan into the same depth buffer
-    let target_color = ColorRGB::new(6, 182, 212);
+    // 2. Render the aligned target into the same depth buffer
+    let target_color = brand::structure::TARGET;
     rasterizer.rasterize_mesh(
         &data.target_mesh,
         &data.camera,

@@ -124,23 +124,23 @@ impl ViewerLayout {
 
     /// The HUD as positioned lines, each exactly the terminal width so that nothing wraps: a
     /// line one column too wide on the bottom row scrolls the whole screen every frame.
-    /// `status` is the state line, `controls` the key help; with one HUD row only `status` is
-    /// shown.
+    /// `status` is the state line, `controls` the key help, both already styled; with one HUD
+    /// row only `status` is shown.
     pub fn hud_lines(&self, status: &str, controls: &str) -> Vec<String> {
         let width = self.cols as usize;
-        let mut lines: Vec<(&str, &str)> = Vec::new();
+        let mut lines: Vec<&str> = Vec::new();
         if self.hud_rows >= 1 {
-            lines.push(("\x1b[36m", status));
+            lines.push(status);
         }
         if self.hud_rows >= 2 {
-            lines.push(("\x1b[90m", controls));
+            lines.push(controls);
         }
         lines
             .into_iter()
             .enumerate()
-            .map(|(i, (style, text))| {
+            .map(|(i, text)| {
                 let row = self.view_rows as usize + i + 1;
-                format!("\x1b[{row};1H{style}{}\x1b[0m", fit_to_width(text, width))
+                format!("\x1b[{row};1H{}\x1b[0m", fit_to_width(text, width))
             })
             .collect()
     }
@@ -197,12 +197,14 @@ pub fn run_interactive_viewer(
 
     let mut dashboard_mode = config.dashboard_enabled && config.dashboard_data.is_some();
     let dashboard_renderer = DashboardRenderer::new();
+    use crate::brand::Role;
 
     let mut layout = ViewerLayout::compute(term_cols, term_rows, dashboard_mode);
     // Halfblock resolution: 1 character row = 2 pixel rows
     let mut fb = Framebuffer::new(layout.view_cols as usize, layout.view_rows as usize * 2);
 
     let mut rasterizer = Rasterizer::new(config.initial_color_scheme);
+    let ansi = crate::brand::ansi::Ansi::detect();
     let mut compositor = HalfBlockRenderer::new();
     let mut auto_rotate = config.auto_rotate;
     let mut color_scheme = config.initial_color_scheme;
@@ -301,7 +303,7 @@ pub fn run_interactive_viewer(
         out_buf.clear();
         if layout.view_cols > 0 && layout.view_rows > 0 {
             // Render frame
-            fb.clear(ColorRGB::BLACK);
+            fb.clear(ColorRGB::BLACK); // black = empty: the terminal's own background shows
             rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme);
 
             // Render superimposed secondary mesh if present
@@ -336,7 +338,11 @@ pub fn run_interactive_viewer(
             // Vertical separator in the column just left of the panel (1-based `dash_col`)
             for r in 0..layout.view_rows {
                 let row_pos = r + 1;
-                let _ = write!(out_buf, "\x1b[{row_pos};{dash_col}H\x1b[38;5;240m│\x1b[0m");
+                let _ = write!(
+                    out_buf,
+                    "\x1b[{row_pos};{dash_col}H{}",
+                    ansi.paint(Role::Line, "│")
+                );
             }
             dashboard_renderer.render_to_buffer(
                 d_data,
@@ -348,75 +354,128 @@ pub fn run_interactive_viewer(
             );
         }
 
-        // Draw HUD status lines
-        let hud_scheme = match color_scheme {
-            ColorScheme::Plddt => "pLDDT Confidence",
-            ColorScheme::SecondaryStructure => "Secondary Structure",
-            ColorScheme::Rainbow => "N->C Rainbow",
-            ColorScheme::Solid(_) => "Solid",
+        // The status bar: the structure, a legend for the current colours (swatch and word, so
+        // it reads without colour), the toggles, the frame rate; then the keys.
+        let sep = ansi.paint(Role::Line, "  ·  ");
+        let sw = |c: ColorRGB, word: &str| {
+            format!(
+                "{} {}",
+                ansi.paint_rgb(c, "■"),
+                ansi.paint(Role::Text, word)
+            )
         };
-
-        let auto_status = if auto_rotate { "ON " } else { "OFF" };
-        let fx_status = if rasterizer.enable_ssao && rasterizer.enable_outlines {
-            "ON "
-        } else if rasterizer.enable_ssao || rasterizer.enable_outlines {
-            "PART"
+        // Unknown (no analysis) counts as predicted: the pLDDT scheme is only the default then.
+        let predicted = config
+            .dashboard_data
+            .as_ref()
+            .and_then(|d| d.metrics.as_ref())
+            .is_none_or(|m| m.plddt().is_some());
+        let legend = if let Some(rmsd) = config.rmsd {
+            format!(
+                "{} {}  {}",
+                sw(crate::brand::structure::TARGET, "target"),
+                sw(crate::brand::structure::REFERENCE, "reference"),
+                ansi.paint(Role::Text, &format!("RMSD {rmsd:.3} Å"))
+            )
         } else {
-            "OFF "
-        };
-        let ds_status = if config.disulfide_mesh.is_some() {
-            if show_disulfides {
-                "ON "
-            } else {
-                "OFF"
+            match color_scheme {
+                ColorScheme::SecondaryStructure => [
+                    sw(crate::brand::structure::HELIX, "helix"),
+                    sw(crate::brand::structure::STRAND, "strand"),
+                    sw(crate::brand::structure::COIL, "coil"),
+                ]
+                .join("  "),
+                ColorScheme::Plddt => {
+                    let s = crate::rasterizer::shader::plddt_to_color;
+                    format!(
+                        "{}  {}",
+                        [
+                            sw(s(95.0), ">90"),
+                            sw(s(80.0), "70–90"),
+                            sw(s(60.0), "50–70"),
+                            sw(s(25.0), "<50")
+                        ]
+                        .join(" "),
+                        // On an experimental file this is the B-factor column drawn on the
+                        // pLDDT scale, and the legend says so.
+                        if predicted {
+                            ansi.paint(Role::Dim, "pLDDT")
+                        } else {
+                            ansi.paint(
+                                Role::Warm,
+                                "! B-factor on the pLDDT scale, not a confidence",
+                            )
+                        }
+                    )
+                }
+                ColorScheme::Rainbow => ansi.paint(Role::Text, "rainbow, N → C"),
+                ColorScheme::Solid(c) => sw(c, "solid"),
             }
-        } else {
-            "N/A"
         };
-        let dash_status = if config.dashboard_data.is_some() {
-            if !dashboard_mode {
-                "OFF"
-            } else if layout.dashboard.is_some() {
-                "ON "
-            } else {
-                "ON (no room)"
-            }
-        } else {
-            "N/A"
+        let toggle = |name: &str, state: Option<bool>| match state {
+            Some(true) => format!(
+                "{} {}",
+                ansi.paint(Role::Dim, name),
+                ansi.paint(Role::Text, "on")
+            ),
+            Some(false) => format!(
+                "{} {}",
+                ansi.paint(Role::Dim, name),
+                ansi.paint(Role::Dim, "off")
+            ),
+            None => String::new(),
         };
-        let total_triangles = mesh.triangle_count()
-            + config
-                .secondary_mesh
-                .as_ref()
-                .map_or(0, |(m, _)| m.triangle_count())
-            + if show_disulfides {
-                config
-                    .disulfide_mesh
-                    .as_ref()
-                    .map_or(0, |m| m.triangle_count())
+        let fx_on = rasterizer.enable_ssao && rasterizer.enable_outlines;
+        let dash_state = config.dashboard_data.as_ref().map(|_| dashboard_mode);
+        let dash_note =
+            if dashboard_mode && config.dashboard_data.is_some() && layout.dashboard.is_none() {
+                ansi.paint(Role::Warm, " (no room)")
             } else {
-                0
+                String::new()
             };
-
-        let status_row1 = if let Some(rmsd) = config.rmsd {
+        let parts: Vec<String> = [
             format!(
-                " {} | Superimposed RMSD: {:.3} Å | Tris: {} | Dash: {} | FX: {} | Spin: {} | {:.0} FPS",
-                config.title, rmsd, total_triangles, dash_status, fx_status, auto_status, fps
-            )
-        } else {
+                "{} {}",
+                ansi.paint(Role::Accent, "proteus"),
+                ansi.paint(Role::Text, &config.title)
+            ),
+            legend,
+            toggle(
+                "disulfides",
+                config.disulfide_mesh.as_ref().map(|_| show_disulfides),
+            ),
+            format!("{}{dash_note}", toggle("dashboard", dash_state)),
+            toggle("effects", Some(fx_on)),
+            toggle("spin", Some(auto_rotate)),
+            ansi.paint(Role::Dim, &format!("{fps:.0} fps")),
+        ]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
+        let status_row1 = format!(" {}", parts.join(&sep));
+        let key = |k: &str, v: &str| {
             format!(
-                " {} | Tris: {} | Color: {} | S-S: {} | Dash: {} | FX: {} | Spin: {} | {:.0} FPS",
-                config.title,
-                total_triangles,
-                hud_scheme,
-                ds_status,
-                dash_status,
-                fx_status,
-                auto_status,
-                fps
+                "{} {}",
+                ansi.paint(Role::Accent, k),
+                ansi.paint(Role::Dim, v)
             )
         };
-        let status_row2 = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [Tab] Dashboard | [c] Color | [o] FX | [d] S-S | [r] Reset | [q] Quit";
+        let status_row2 = format!(
+            " {}",
+            [
+                key("←↑↓→ hjkl", "orbit"),
+                key("+ −", "zoom"),
+                key("space", "spin"),
+                key("tab", "dashboard"),
+                key("c", "colour"),
+                key("o", "effects"),
+                key("d", "disulfides"),
+                key("r", "reset"),
+                key("q", "back"),
+            ]
+            .join(&sep)
+        );
+        let status_row2 = status_row2.as_str();
 
         for line in layout.hud_lines(&status_row1, status_row2) {
             out_buf.push_str(&line);

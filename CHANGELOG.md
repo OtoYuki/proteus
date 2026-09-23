@@ -24,6 +24,19 @@ All notable changes to this project are documented here. The format follows
   into a **p**), a dot-matrix wordmark, and a palette with roles for dark and light grounds,
   defined once in `proteus_render::brand` and tested for contrast (WCAG) and for colour-blind
   separation. The assets are in `docs/brand/`.
+- The home screen and the terminal 3-D viewer wear the identity:
+  - The launch folds the chain into the mark.
+  - Hairline sections and `(named)` panels.
+  - The `~ $` prompt as the status line.
+  - Colours at the terminal's depth (24-bit, 256, 16, or none under `NO_COLOR`).
+  - A job state is always a glyph and a word.
+
+  The viewer's status bar shows a legend for the current colours. On an experimental file it
+  says the pLDDT scheme is the B-factor column, not a confidence.
+- The dashboard's pLDDT strip uses the AlphaFold colours. It had four colours of its own, so
+  the strip and the ribbon beside it disagreed. Without colour, the strip shows the bands as
+  shade density.
+- `view --compare` draws the target in Tide and the reference in Clay (was cyan and ruby).
 - Secondary structure is now coloured Clay (helix), Tide (strand) and pale cream (coil), and
   disulfides Chartreuse, in the terminal and in the browser. The smallest difference between
   two structure colours as seen with red–green colour blindness rose from ΔE 23 to 32
