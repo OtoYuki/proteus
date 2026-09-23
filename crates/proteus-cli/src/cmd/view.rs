@@ -78,7 +78,19 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         (content, name)
     } else {
         // A path that exists wins; only then is the argument treated as a job reference, so a
-        // file literally named like a UUID is still openable.
+        // file literally named like a UUID is still openable. Opening the job database creates
+        // it (with its -wal and -shm files), which a mistyped file name must not do: look it
+        // up only for something shaped like a job ID, and only in a database that exists.
+        if !looks_like_job_ref(&target) {
+            bail!("No such file: '{target}'");
+        }
+        if !db_path.exists() {
+            bail!(
+                "'{target}' is neither an existing file path nor a known job (there is no job \
+                 database at {})",
+                db_path.display()
+            );
+        }
         let pool = create_sqlite_pool(&db_path).await?;
         let repo = ProteusRepository::new(pool);
         let job_id = job_ref::resolve(&repo, &target).await.with_context(|| {
@@ -317,6 +329,12 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Whether `target` could be a job UUID or a prefix of one: hex digits and hyphens only. A
+/// file name (`typo.pdb`, `models/x.cif`) never is.
+fn looks_like_job_ref(target: &str) -> bool {
+    !target.is_empty() && target.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
 /// Create the `--web` page as a new file with an unpredictable name in `dir`.
 ///
 /// The name used to be fixed (`proteus_view_<title>.html` in the shared temp directory), so
@@ -449,6 +467,34 @@ mod tests {
         let meta = std::fs::symlink_metadata(&path).unwrap();
         assert!(meta.file_type().is_file(), "the page is not a regular file");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "<html></html>");
+    }
+
+    /// `proteus view typo.pdb` used to create `proteus.db` (and its -wal/-shm files) before
+    /// failing, because the argument fell through to the job lookup, which opens the database
+    /// read-write. A missing file must fail without touching the data directory, and so must a
+    /// job ID when there is no database to look it up in.
+    #[tokio::test]
+    async fn a_missing_file_does_not_create_the_job_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("proteus.db");
+        for target in ["typo.pdb", "models/missing.cif", "deadbeef"] {
+            let Commands::View(args) = Cli::try_parse_from(["proteus", "view", target])
+                .unwrap()
+                .command
+            else {
+                unreachable!()
+            };
+            let err = super::run(args, &db).await.expect_err(target).to_string();
+            assert!(err.contains(target), "{target}: {err}");
+            let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+            assert!(left.is_empty(), "{target}: created {left:?}");
+        }
+        assert!(super::looks_like_job_ref("8c716e90"));
+        assert!(super::looks_like_job_ref(
+            "8c716e90-5b74-4a0e-9f3b-0123456789ab"
+        ));
+        assert!(!super::looks_like_job_ref("typo.pdb"));
+        assert!(!super::looks_like_job_ref(""));
     }
 
     /// A viewport the renderer cannot allocate is refused at the argument parser, with the
