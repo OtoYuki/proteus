@@ -144,7 +144,14 @@ pub fn braille(cols: usize, rows: usize, t: f32) -> Vec<Vec<(char, Ink)>> {
                             }
                         }
                     }
-                    (char::from_u32(0x2800 + bits).unwrap_or(' '), ink)
+                    // An empty cell is a space, not U+2800: some fonts draw the blank braille
+                    // pattern as faint dots.
+                    let ch = if bits == 0 {
+                        ' '
+                    } else {
+                        char::from_u32(0x2800 + bits).unwrap_or(' ')
+                    };
+                    (ch, ink)
                 })
                 .collect()
         })

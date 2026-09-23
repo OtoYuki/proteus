@@ -332,8 +332,8 @@ pub enum FormKind {
 impl FormKind {
     pub fn title(self) -> &'static str {
         match self {
-            FormKind::Fold => "Fold a sequence",
-            FormKind::Scan => "Scan a protein (mutate → fold → rank)",
+            FormKind::Fold => "fold a sequence",
+            FormKind::Scan => "scan a protein",
         }
     }
 }
@@ -557,7 +557,13 @@ pub struct App {
     pub help: bool,
     /// One line for the status bar: the result of the last action, or an error.
     pub status: Option<String>,
+    /// The last command run, shown at the prompt in the status line.
+    pub last_command: Option<String>,
     pub data_dir: PathBuf,
+    /// Colours at the terminal's depth, and whether motion is on.
+    pub look: super::style::Look,
+    /// Half-second ticks since start, for the running-state pulse.
+    pub tick: u64,
 }
 
 impl App {
@@ -570,7 +576,10 @@ impl App {
             run: RunView::default(),
             help: false,
             status: None,
+            last_command: None,
             data_dir: data_dir.to_path_buf(),
+            look: super::style::Look::with_depth(proteus_render::brand::ColorDepth::TrueColor),
+            tick: 0,
         }
     }
 

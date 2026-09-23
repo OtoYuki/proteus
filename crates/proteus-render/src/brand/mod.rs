@@ -3,6 +3,7 @@
 //! the brand assets) reads from here. See `docs/design/2026-09-23-proteus-identity-design.md`,
 //! whose measured numbers the tests below recompute.
 
+pub mod ansi;
 pub mod assets;
 pub mod mark;
 pub mod matrix;
@@ -36,6 +37,10 @@ pub mod structure {
     pub const COIL: ColorRGB = hex(0xE7E9C8);
     /// Disulfide bonds.
     pub const DISULFIDE: ColorRGB = palette::CHARTREUSE;
+    /// `view --compare`: the superposed target and its reference (ΔE 51 apart under
+    /// deuteranopia).
+    pub const TARGET: ColorRGB = palette::TIDE;
+    pub const REFERENCE: ColorRGB = palette::CLAY;
 }
 
 /// Colours by role, for a dark or a light ground.

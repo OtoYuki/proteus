@@ -94,7 +94,11 @@ pub fn braille(word: &str) -> Vec<String> {
                             }
                         }
                     }
-                    char::from_u32(0x2800 + bits).unwrap_or(' ')
+                    if bits == 0 {
+                        ' '
+                    } else {
+                        char::from_u32(0x2800 + bits).unwrap_or(' ')
+                    }
                 })
                 .collect()
         })

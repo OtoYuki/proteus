@@ -6,6 +6,7 @@
 //! `docs/design/2026-09-23-tui-home-design.md`.
 
 pub mod app;
+mod style;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -39,6 +40,7 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
     let signal = watch_signals()?;
 
     let mut app = App::new(&cwd, data_dir);
+    app.look = style::Look::detect();
     let mut repo: Option<ProteusRepository> = None;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Analysis)>();
     // The file selected and since when: only a selection that rests is measured, so scrolling
@@ -50,6 +52,8 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
     let mut terminal = ratatui::try_init().context("Cannot initialise the terminal")?;
     let restore = Restore;
     let _ = crossterm::execute!(std::io::stdout(), EnableBracketedPaste);
+    launch(&mut terminal, &app.look)?;
+    let started = Instant::now();
 
     let mut last_refresh: Option<Instant> = None;
     loop {
@@ -78,6 +82,7 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             }
         }
 
+        app.tick = (started.elapsed().as_millis() / 500) as u64;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if !event::poll(Duration::from_millis(100))? {
@@ -115,6 +120,7 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                     )?;
                     terminal.clear()?;
                 }
+                app.last_command = Some(spec.display());
                 app.status = Some(match outcome {
                     Ok(line) => line,
                     Err(e) => format!("could not run `{}`: {e:#}", spec.display()),
@@ -126,6 +132,35 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The launch: the chain folds into the mark (brand::mark::FOLD_SECONDS), the wordmark and
+/// signature appear, and it holds briefly. Any key skips it; `NO_MOTION` turns it off.
+fn launch(terminal: &mut ratatui::DefaultTerminal, look: &style::Look) -> Result<()> {
+    if !look.motion {
+        return Ok(());
+    }
+    let fold = Duration::from_secs_f32(proteus_render::brand::mark::FOLD_SECONDS);
+    let hold = Duration::from_millis(450);
+    let start = Instant::now();
+    loop {
+        let t = start.elapsed().as_secs_f32() / fold.as_secs_f32();
+        terminal.draw(|f| ui::draw_launch(f, look, t.min(1.0)))?;
+        if start.elapsed() >= fold + hold {
+            return Ok(());
+        }
+        // About 30 frames a second while folding; one wait for the hold.
+        let wait = if t < 1.0 {
+            Duration::from_millis(33)
+        } else {
+            (fold + hold).saturating_sub(start.elapsed())
+        };
+        if event::poll(wait)? {
+            if let Event::Key(_) = event::read()? {
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Leaves the terminal as the shell expects it, however the loop ends.
@@ -250,7 +285,7 @@ fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
 
     let summary = match failure {
         None if quiet => last_line(&captured).unwrap_or("done").to_string(),
-        None => format!("finished: {}", spec.display()),
+        None => "done".to_string(),
         Some((i, status)) => {
             let what = spec.stages[i].first().map_or("proteus", String::as_str);
             let detail = last_line(&captured).unwrap_or("");

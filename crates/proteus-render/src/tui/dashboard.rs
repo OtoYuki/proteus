@@ -1,3 +1,6 @@
+use crate::brand::ansi::{Ansi, RESET};
+use crate::brand::Role;
+use crate::rasterizer::buffer::ColorRGB;
 use proteus_core::models::BiophysicalMetrics;
 use proteus_core::structure::RamachandranRegion;
 use std::fmt::Write;
@@ -107,22 +110,54 @@ pub fn fit_to_width(s: &str, width: usize) -> String {
 }
 
 /// A section rule `{left}─{title}───…{right}` exactly `width` columns wide (the title is cut
-/// if it does not fit).
-fn section_rule(style: &str, left: char, title: &str, right: char, width: usize) -> String {
+/// if it does not fit): the title in `title_style`, the rule in the brand's line colour.
+fn section_rule(
+    a: &Ansi,
+    title_style: &str,
+    left: char,
+    title: &str,
+    right: char,
+    width: usize,
+) -> String {
     let title = truncate_to_width(title, width.saturating_sub(3));
     let bar_len = width.saturating_sub(visible_width(&title) + 3);
+    let line = a.fg(Role::Line);
     format!(
-        "{style}{left}─{title}\x1b[0m\x1b[38;5;240m{:─<bar_len$}{right}\x1b[0m",
+        "{line}{left}─{RESET}{title_style}{title}{RESET}{line}{:─<bar_len$}{right}{RESET}",
         ""
     )
 }
 
-#[derive(Default)]
-pub struct DashboardRenderer;
+/// Ramachandran markers: outliers over allowed over favoured where they share a cell. Each
+/// region has its own glyph, so the plot reads without colour.
+fn rama_marker(region: RamachandranRegion) -> (u8, char, Role) {
+    match region {
+        RamachandranRegion::Outlier => (2, '▲', Role::Bad),
+        RamachandranRegion::Allowed => (1, '○', Role::Warm),
+        RamachandranRegion::Favored => (0, '●', Role::Accent),
+    }
+}
+
+pub struct DashboardRenderer {
+    ansi: Ansi,
+}
+
+impl Default for DashboardRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DashboardRenderer {
+    /// Colours at the terminal's detected depth.
     pub fn new() -> Self {
-        Self
+        Self {
+            ansi: Ansi::detect(),
+        }
+    }
+
+    pub fn with_ansi(ansi: Ansi) -> Self {
+        Self { ansi }
     }
 
     /// Render all dashboard sections and append positioned ANSI output into `out_buf`.
@@ -144,17 +179,25 @@ impl DashboardRenderer {
             let row = screen_offset_row + i as u16 + 1;
             let col = screen_offset_col + 1;
             let fitted = fit_to_width(line, width);
-            let _ = write!(out, "\x1b[{row};{col}H{fitted}\x1b[0m");
+            let _ = write!(out, "\x1b[{row};{col}H{fitted}{RESET}");
         }
     }
 
     /// Generate the formatted list of lines for the dashboard.
     pub fn generate_lines(&self, data: &DashboardData, width: usize, height: usize) -> Vec<String> {
+        let a = &self.ansi;
         let mut lines = Vec::with_capacity(height);
 
-        // Header Title
-        let header_title = format!(" {} ({} res) ", data.title, data.num_residues);
-        lines.push(section_rule("\x1b[1;36m", '┌', &header_title, '┐', width));
+        // Header: the structure, in the text colour, bold.
+        let header_title = format!(" {} · {} residues ", data.title, data.num_residues);
+        lines.push(section_rule(
+            a,
+            &format!("{}\x1b[1m", a.fg(Role::Text)),
+            '┌',
+            &header_title,
+            '┐',
+            width,
+        ));
 
         // Adaptive vertical layout
         let (plot_h, has_telemetry) = if height >= 30 {
@@ -167,16 +210,13 @@ impl DashboardRenderer {
             (5, false)
         };
 
-        // 1. Ramachandran Section
         self.render_ramachandran_section(data, width, plot_h, &mut lines);
 
-        // 2. pLDDT Confidence Profile
         let remaining = height.saturating_sub(lines.len());
         if remaining >= 5 {
             self.render_plddt_section(data, width, &mut lines);
         }
 
-        // 3. Biophysical Telemetry Card
         let remaining = height.saturating_sub(lines.len());
         if has_telemetry && remaining >= 4 {
             self.render_telemetry_section(data, width, remaining, &mut lines);
@@ -202,19 +242,19 @@ impl DashboardRenderer {
         plot_h: usize,
         lines: &mut Vec<String>,
     ) {
+        let a = &self.ansi;
         let plot_w = width.saturating_sub(8).clamp(16, 36);
-
-        // Section header
         lines.push(section_rule(
-            "\x1b[1;35m",
+            a,
+            &a.fg(Role::Muted),
             '├',
-            " Ramachandran (φ, ψ) ",
+            " (ramachandran φ, ψ) ",
             '┤',
             width,
         ));
 
         // Precompute residue points on the grid
-        let mut grid_markers = vec![None; plot_w * plot_h];
+        let mut grid_markers: Vec<Option<(u8, char, Role)>> = vec![None; plot_w * plot_h];
         for (phi_opt, psi_opt, region) in &data.ramachandran_points {
             if let (Some(phi), Some(psi)) = (*phi_opt, *psi_opt) {
                 let gx = (((phi - (-180.0)) / 360.0) * (plot_w as f64 - 1.0))
@@ -223,31 +263,19 @@ impl DashboardRenderer {
                 let gy = (((180.0 - psi) / 360.0) * (plot_h as f64 - 1.0))
                     .round()
                     .clamp(0.0, (plot_h - 1) as f64) as usize;
-
                 let idx = gy * plot_w + gx;
-                let (sym, col) = match region {
-                    RamachandranRegion::Outlier => ('▲', "\x1b[1;31m"),
-                    RamachandranRegion::Allowed => ('●', "\x1b[1;33m"),
-                    _ => ('●', "\x1b[1;32m"),
-                };
-
-                // Prioritize outliers over allowed over favored in cell overlap
-                if let Some((prev_sym, _)) = grid_markers[idx] {
-                    if prev_sym == '▲' {
-                        continue;
-                    }
-                    if prev_sym == '●' && sym != '▲' {
-                        continue;
-                    }
+                let marker = rama_marker(*region);
+                if grid_markers[idx].is_none_or(|(rank, _, _)| marker.0 > rank) {
+                    grid_markers[idx] = Some(marker);
                 }
-                grid_markers[idx] = Some((sym, col));
             }
         }
 
         let mid_x = (plot_w - 1) / 2;
         let mid_y = (plot_h - 1) / 2;
+        let line = a.fg(Role::Line);
+        let dim = a.fg(Role::Dim);
 
-        // Render grid rows
         for r in 0..plot_h {
             let left_label = if r == 0 {
                 " +180°│"
@@ -262,165 +290,165 @@ impl DashboardRenderer {
             } else {
                 "      │"
             };
-
             let right_border = if r == mid_y { "┤" } else { "│" };
 
             let mut row_str = String::with_capacity(plot_w * 4 + 10);
-            row_str.push_str("\x1b[38;5;244m");
-            row_str.push_str(left_label);
-            row_str.push_str("\x1b[0m");
-
+            let _ = write!(row_str, "{dim}{left_label}{RESET}");
             let psi_c = 180.0 - (r as f64 / (plot_h - 1) as f64) * 360.0;
 
             for c in 0..plot_w {
                 let idx = r * plot_w + c;
-                if let Some((sym, col)) = grid_markers[idx] {
-                    let _ = write!(row_str, "{col}{sym}\x1b[0m");
+                if let Some((_, sym, role)) = grid_markers[idx] {
+                    row_str.push_str(&a.paint(role, &sym.to_string()));
                 } else {
                     let phi_c = -180.0 + (c as f64 / (plot_w - 1) as f64) * 360.0;
-
-                    if c == mid_x && r == mid_y {
-                        row_str.push_str("\x1b[38;5;240m┼\x1b[0m");
+                    let basin = ((-180.0..=-45.0).contains(&phi_c)
+                        && (psi_c >= 90.0 || psi_c <= -150.0))
+                        || ((-100.0..=-30.0).contains(&phi_c) && (-70.0..=-10.0).contains(&psi_c))
+                        || ((30.0..=90.0).contains(&phi_c) && (10.0..=70.0).contains(&psi_c));
+                    let ch = if c == mid_x && r == mid_y {
+                        "┼"
                     } else if c == mid_x {
-                        row_str.push_str("\x1b[38;5;240m│\x1b[0m");
+                        "│"
                     } else if r == mid_y {
-                        row_str.push_str("\x1b[38;5;240m─\x1b[0m");
-                    } else if (-180.0..=-45.0).contains(&phi_c)
-                        && (psi_c >= 90.0 || psi_c <= -150.0)
-                    {
-                        // Core beta sheet basin
-                        row_str.push_str("\x1b[38;5;238m·\x1b[0m");
-                    } else if (-100.0..=-30.0).contains(&phi_c) && (-70.0..=-10.0).contains(&psi_c)
-                    {
-                        // Core alpha helix basin
-                        row_str.push_str("\x1b[38;5;238m·\x1b[0m");
-                    } else if (30.0..=90.0).contains(&phi_c) && (10.0..=70.0).contains(&psi_c) {
-                        // Left-handed helix basin
-                        row_str.push_str("\x1b[38;5;238m·\x1b[0m");
+                        "─"
+                    } else if basin {
+                        // The favoured basins (β, right-handed α, left-handed α).
+                        "·"
                     } else {
+                        " "
+                    };
+                    if ch == " " {
                         row_str.push(' ');
+                    } else {
+                        let _ = write!(row_str, "{line}{ch}{RESET}");
                     }
                 }
             }
-
-            row_str.push_str("\x1b[38;5;244m");
-            row_str.push_str(right_border);
-            row_str.push_str("\x1b[0m");
-
+            let _ = write!(row_str, "{dim}{right_border}{RESET}");
             lines.push(row_str);
         }
 
-        // Horizontal axis footer
         let mut axis_bar = String::from("      └───");
         for c in 4..plot_w {
-            if c == mid_x {
-                axis_bar.push('┴');
-            } else {
-                axis_bar.push('─');
-            }
+            axis_bar.push(if c == mid_x { '┴' } else { '─' });
         }
         axis_bar.push('┘');
-        lines.push(format!("\x1b[38;5;244m{axis_bar}\x1b[0m"));
-
-        // Axis scale markers
+        lines.push(format!("{dim}{axis_bar}{RESET}"));
         lines.push(format!(
-            "       \x1b[38;5;242m-180°{: <pad$}0°{: >pad2$}+180°\x1b[0m",
+            "       {dim}-180°{: <pad$}φ 0°{: >pad2$}+180°{RESET}",
             "",
             "",
-            pad = (plot_w / 2).saturating_sub(6),
-            pad2 = (plot_w / 2).saturating_sub(5)
+            pad = (plot_w / 2).saturating_sub(7),
+            pad2 = (plot_w / 2).saturating_sub(6)
         ));
 
-        // Conformation summary stats
         if let Some(rama) = data
             .metrics
             .as_ref()
             .and_then(|m| m.ramachandran_stats.as_ref())
         {
             lines.push(format!(
-                " \x1b[32mFav: {:.1}%\x1b[0m │ \x1b[33mAll: {:.1}%\x1b[0m │ \x1b[31mOutliers: {}\x1b[0m",
-                rama.favored_fraction * 100.0,
-                rama.allowed_fraction * 100.0,
-                rama.outlier_count
+                " {} {}  {} {}  {} {}",
+                a.paint(Role::Accent, "●"),
+                a.paint(
+                    Role::Text,
+                    &format!("favoured {:.1}%", rama.favored_fraction * 100.0)
+                ),
+                a.paint(Role::Warm, "○"),
+                a.paint(
+                    Role::Text,
+                    &format!("allowed {:.1}%", rama.allowed_fraction * 100.0)
+                ),
+                a.paint(Role::Bad, "▲"),
+                a.paint(Role::Text, &format!("outliers {}", rama.outlier_count)),
             ));
         }
     }
 
     fn render_plddt_section(&self, data: &DashboardData, width: usize, lines: &mut Vec<String>) {
+        let a = &self.ansi;
         let predicted = data
             .metrics
             .as_ref()
             .map(|m| m.plddt().is_some())
             .unwrap_or(true);
         let title = if predicted {
-            " pLDDT Confidence Profile "
+            " (plddt, AlphaFold colours) "
         } else {
-            " B-factor Profile (experimental; no pLDDT) "
+            " (b-factor · experimental, not a confidence) "
         };
-        lines.push(section_rule("\x1b[1;34m", '├', title, '┤', width));
+        lines.push(section_rule(a, &a.fg(Role::Muted), '├', title, '┤', width));
 
         if let Some(m) = data.metrics.as_ref() {
+            let dim = |s: &str| a.paint(Role::Dim, s);
             match m.plddt() {
-                Some(plddt_dist) => lines.push(format!(
-                    " Mean: \x1b[1m{:.1}\x1b[0m │ Med: \x1b[1m{:.1}\x1b[0m │ ≥70: \x1b[32m{:.1}%\x1b[0m",
-                    plddt_dist.mean,
-                    plddt_dist.median,
-                    plddt_dist.high_confidence_fraction * 100.0
+                Some(p) => lines.push(format!(
+                    " {} {}  {} {}  {} {}",
+                    dim("mean"),
+                    a.bold(&format!("{:.1}", p.mean)),
+                    dim("median"),
+                    a.bold(&format!("{:.1}", p.median)),
+                    dim("≥70"),
+                    a.bold(&format!("{:.1}%", p.high_confidence_fraction * 100.0)),
                 )),
                 None => lines.push(format!(
-                    " Mean B: \x1b[1m{:.1} Å²\x1b[0m │ Med: \x1b[1m{:.1}\x1b[0m │ \x1b[38;5;242mnot a confidence\x1b[0m",
-                    m.plddt_distribution.mean, m.plddt_distribution.median
+                    " {} {}  {} {}",
+                    dim("mean B"),
+                    a.bold(&format!("{:.1} Å²", m.plddt_distribution.mean)),
+                    dim("median"),
+                    a.bold(&format!("{:.1}", m.plddt_distribution.median)),
                 )),
             }
         }
 
-        // Resampled per-residue pLDDT bar
+        // Resampled per-residue strip.
         let n_res = data.plddts.len();
         if n_res > 0 {
             let bar_w = width.saturating_sub(4).clamp(10, 44);
             let mut bar_str = String::with_capacity(bar_w * 20);
             bar_str.push(' ');
-
+            let (lo, hi) = data
+                .plddts
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
             for col in 0..bar_w {
                 let start_idx = col * n_res / bar_w;
                 let end_idx = ((col + 1) * n_res / bar_w).max(start_idx + 1).min(n_res);
-
-                let slice_plddts = &data.plddts[start_idx..end_idx];
-                let avg = if !slice_plddts.is_empty() {
-                    slice_plddts.iter().sum::<f64>() / slice_plddts.len() as f64
+                let slice = &data.plddts[start_idx..end_idx];
+                let avg = slice.iter().sum::<f64>() / slice.len().max(1) as f64;
+                if predicted {
+                    // The AlphaFold bands, the same colours as the ribbon; without colour, the
+                    // band shows as shade density instead.
+                    let glyph = match avg {
+                        _ if a.colours() => "█",
+                        v if v >= 90.0 => "█",
+                        v if v >= 70.0 => "▓",
+                        v if v >= 50.0 => "▒",
+                        _ => "░",
+                    };
+                    bar_str.push_str(
+                        &a.paint_rgb(crate::rasterizer::shader::plddt_to_color(avg as f32), glyph),
+                    );
                 } else {
-                    70.0
-                };
-
-                // Color code: Very High (Blue), High (Cyan), Low (Yellow), Very Low (Orange/Red).
-                // Experimental B-factors: a neutral grey ramp scaled to the structure's own range.
-                let block_color = if !predicted {
-                    let (lo, hi) = data
-                        .plddts
-                        .iter()
-                        .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
-                    let t = if hi > lo { (avg - lo) / (hi - lo) } else { 0.5 };
-                    let g = 90 + (t * 140.0) as u8;
-                    let _ = write!(bar_str, "\x1b[38;2;{g};{g};{g}m█\x1b[0m");
-                    continue;
-                } else if avg >= 90.0 {
-                    "\x1b[38;2;30;64;175m" // Deep Blue
-                } else if avg >= 70.0 {
-                    "\x1b[38;2;56;189;248m" // Cyan
-                } else if avg >= 50.0 {
-                    "\x1b[38;2;250;204;21m" // Yellow
-                } else {
-                    "\x1b[38;2;239;68;68m" // Red
-                };
-
-                let _ = write!(bar_str, "{block_color}█\x1b[0m");
+                    // B-factors: a neutral ramp over the structure's own range, Moss to Khaki.
+                    let t = if hi > lo {
+                        ((avg - lo) / (hi - lo)) as f32
+                    } else {
+                        0.5
+                    };
+                    let c = ColorRGB::lerp(
+                        crate::brand::palette::MOSS,
+                        crate::brand::palette::KHAKI,
+                        t,
+                    );
+                    bar_str.push_str(&a.paint_rgb(c, "█"));
+                }
             }
-
             lines.push(bar_str);
-
-            // Sequence range indices
             lines.push(format!(
-                " \x1b[38;5;242m1{: <pad$}{}\x1b[0m",
+                " {}1{: <pad$}{}{RESET}",
+                a.fg(Role::Dim),
                 "",
                 n_res,
                 pad = bar_w.saturating_sub(format!("{n_res}").len() + 1)
@@ -435,97 +463,123 @@ impl DashboardRenderer {
         max_rows: usize,
         lines: &mut Vec<String>,
     ) {
+        let a = &self.ansi;
         lines.push(section_rule(
-            "\x1b[1;33m",
+            a,
+            &a.fg(Role::Muted),
             '├',
-            " Biophysical Telemetry ",
+            " (measurements) ",
             '┤',
             width,
         ));
+        let row = |label: &str, value: String| {
+            format!(" {} {value}", a.paint(Role::Dim, &format!("{label:<23}")))
+        };
 
         let mut row_count = 1;
-
-        if let Some(ref m) = data.metrics {
+        let Some(ref m) = data.metrics else {
+            lines.push(format!(" {}", a.paint(Role::Dim, "measuring…")));
+            return;
+        };
+        let mut push = |line: String, lines: &mut Vec<String>| {
             if row_count < max_rows {
-                lines.push(format!(
-                    " Radius of Gyration (Rg) : \x1b[1m{:.3} Å\x1b[0m",
-                    m.radius_of_gyration
-                ));
+                lines.push(line);
                 row_count += 1;
             }
+        };
 
-            if row_count < max_rows {
-                lines.push(format!(
-                    " Contact Density (≤8Å)   : \x1b[1m{:.1}%\x1b[0m (Cα)",
-                    m.contact_density * 100.0
-                ));
-                row_count += 1;
-            }
-
-            if let Some(ref sasa) = m.sasa_metrics {
-                if row_count < max_rows {
-                    lines.push(format!(
-                        " SASA Surface Area       : \x1b[1m{:.1} Å²\x1b[0m",
-                        sasa.total_sasa
-                    ));
-                    row_count += 1;
-                }
-                if row_count < max_rows {
-                    lines.push(format!(
-                        " Hydrophobic Core Burial : \x1b[1m{:.1}%\x1b[0m",
-                        sasa.hydrophobic_burial_ratio * 100.0
-                    ));
-                    row_count += 1;
-                }
-            }
-
-            if let Some(ref ss) = m.secondary_structure_summary {
-                if row_count < max_rows {
-                    lines.push(format!(
-                        " 2° Structure : \x1b[35mα {:.0}%\x1b[0m │ \x1b[33mβ {:.0}%\x1b[0m │ \x1b[37mCoil {:.0}%\x1b[0m",
-                        ss.helix_fraction * 100.0,
-                        ss.strand_fraction * 100.0,
-                        ss.coil_fraction * 100.0
-                    ));
-                    row_count += 1;
-                }
-            }
-
-            if data.num_disulfides > 0 && row_count < max_rows {
-                lines.push(format!(
-                    " Disulfide Bridges (S-S) : \x1b[1;33m{} covalent pairs\x1b[0m",
-                    data.num_disulfides
-                ));
-                row_count += 1;
-            }
-
-            if let Some(ref clash) = m.steric_overlap {
-                if row_count < max_rows {
-                    let score_color = if clash.heavy_atom_overlap_score < 5.0 {
-                        "\x1b[1;32m"
-                    } else if clash.heavy_atom_overlap_score < 15.0 {
-                        "\x1b[1;33m"
-                    } else {
-                        "\x1b[1;31m"
-                    };
-                    lines.push(format!(
-                        " Clash/1k (no H)        : {score_color}{:.1}\x1b[0m ({} overlaps)",
-                        clash.heavy_atom_overlap_score, clash.clash_count
-                    ));
-                    row_count += 1;
-                }
-            }
-
-            if let Some(fitness) = m.candidate_fitness_score {
-                if row_count < max_rows {
-                    lines.push(format!(
-                        " Candidate Fitness Score : \x1b[1;32m{:.1} / 100\x1b[0m",
-                        fitness
-                    ));
-                }
-            }
-        } else {
-            lines.push(" [Biophysical analysis calculating...]".to_string());
+        push(
+            row(
+                "radius of gyration",
+                a.bold(&format!("{:.3} Å", m.radius_of_gyration)),
+            ),
+            lines,
+        );
+        push(
+            row(
+                "contact density ≤8 Å",
+                format!(
+                    "{} {}",
+                    a.bold(&format!("{:.1}%", m.contact_density * 100.0)),
+                    a.paint(Role::Dim, "Cα")
+                ),
+            ),
+            lines,
+        );
+        if let Some(ref sasa) = m.sasa_metrics {
+            push(
+                row("SASA", a.bold(&format!("{:.1} Å²", sasa.total_sasa))),
+                lines,
+            );
+            push(
+                row(
+                    "hydrophobic burial",
+                    a.bold(&format!("{:.1}%", sasa.hydrophobic_burial_ratio * 100.0)),
+                ),
+                lines,
+            );
+        }
+        if let Some(ref ss) = m.secondary_structure_summary {
+            use crate::brand::structure::{COIL, HELIX, STRAND};
+            push(
+                row(
+                    "secondary structure",
+                    format!(
+                        "{} {}  {} {}  {} {}",
+                        a.paint_rgb(HELIX, "■"),
+                        a.paint(Role::Text, &format!("α {:.0}%", ss.helix_fraction * 100.0)),
+                        a.paint_rgb(STRAND, "■"),
+                        a.paint(Role::Text, &format!("β {:.0}%", ss.strand_fraction * 100.0)),
+                        a.paint_rgb(COIL, "■"),
+                        a.paint(
+                            Role::Text,
+                            &format!("coil {:.0}%", ss.coil_fraction * 100.0)
+                        ),
+                    ),
+                ),
+                lines,
+            );
+        }
+        if data.num_disulfides > 0 {
+            push(
+                row(
+                    "disulfide bonds",
+                    a.paint_rgb(
+                        crate::brand::structure::DISULFIDE,
+                        &format!("{} pairs", data.num_disulfides),
+                    ),
+                ),
+                lines,
+            );
+        }
+        if let Some(ref clash) = m.steric_overlap {
+            let (glyph, role) = if clash.heavy_atom_overlap_score < 5.0 {
+                ("✓", Role::Accent)
+            } else if clash.heavy_atom_overlap_score < 15.0 {
+                ("!", Role::Warm)
+            } else {
+                ("✗", Role::Bad)
+            };
+            push(
+                row(
+                    "overlaps /1000 atoms",
+                    format!(
+                        "{} {}",
+                        a.paint(
+                            role,
+                            &format!("{glyph} {:.1}", clash.heavy_atom_overlap_score)
+                        ),
+                        a.paint(Role::Dim, &format!("({}, no H)", clash.clash_count))
+                    ),
+                ),
+                lines,
+            );
+        }
+        if let Some(fitness) = m.candidate_fitness_score {
+            push(
+                row("triage score", a.bold(&format!("{fitness:.1} / 100"))),
+                lines,
+            );
         }
     }
 }
@@ -690,17 +744,33 @@ mod tests {
             ],
         };
 
-        let renderer = DashboardRenderer::new();
+        use crate::brand::{ansi::Ansi, ColorDepth};
+        let renderer = DashboardRenderer::with_ansi(Ansi::with_depth(ColorDepth::TrueColor));
         let lines = renderer.generate_lines(&data, 45, 30);
 
         assert_eq!(lines.len(), 30);
         assert!(lines[0].contains("1CRN"));
-        assert!(lines[0].contains("46 res"));
+        assert!(lines[0].contains("46 residues"));
 
         let full_text = lines.join("\n");
-        assert!(full_text.contains("Ramachandran"));
-        assert!(full_text.contains("pLDDT"));
-        assert!(full_text.contains("Biophysical Telemetry"));
+        assert!(full_text.contains("(ramachandran"));
+        assert!(full_text.contains("(plddt") || full_text.contains("(b-factor"));
+        assert!(full_text.contains("(measurements)"));
         assert!(full_text.contains("9.762"));
+        if full_text.contains("(plddt") {
+            // pLDDT 92 everywhere: the strip is the AlphaFold ≥90 blue, #0053D6, as in the ribbon.
+            assert!(full_text.contains("\x1b[38;2;0;83;214m█"), "{full_text:?}");
+        }
+
+        // Without colour, not one colour escape, and every Ramachandran region still has its
+        // own glyph.
+        let plain = DashboardRenderer::with_ansi(Ansi::with_depth(ColorDepth::None))
+            .generate_lines(&data, 45, 30)
+            .join("\n");
+        assert!(
+            !plain.contains("\x1b[38;") && !plain.contains("\x1b[3"),
+            "{plain:?}"
+        );
+        assert!(plain.contains('●'));
     }
 }
