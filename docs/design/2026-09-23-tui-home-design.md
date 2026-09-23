@@ -51,7 +51,7 @@ So nothing is implemented twice, signal and terminal handling stay where they ar
 every action teaches its command line.
 
 **Keys:** `↑↓`/`jk` move, `Enter` opens, `v` terminal viewer, `w` browser page, `r` refresh,
-`/` filter the jobs list, `?` help, `q`/`Esc`/`Ctrl-C` quit. Mouse is not required.
+`/` filter the jobs list, `?` (or `F1`, which also works in a text field) help, `q`/`Esc`/`Ctrl-C` quit (`Esc` first closes a filter or finishes editing). Mouse is not required.
 
 ## Tests
 

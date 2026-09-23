@@ -53,7 +53,8 @@
   layout(location=0) in vec3 aPos;
   layout(location=1) in vec3 aNrm;
   layout(location=2) in vec3 aCol;
-  layout(location=3) in uint aRes;
+  // The residue index as a float, exact to 2^24 (see PICK_FS for why not an integer).
+  layout(location=3) in float aRes;
   uniform vec3 uLo, uSpan, uCenter;
   uniform mat3 uRot;
   uniform vec2 uScale, uPan, uOffset;
@@ -61,7 +62,7 @@
   out vec3 vNormal;
   out vec3 vColor;
   out float vDepth;
-  flat out uint vRes;
+  flat out float vRes;
   void main() {
     vec3 world = uLo + aPos * uSpan;
     vec3 view = uRot * (world - uCenter);
@@ -83,7 +84,7 @@
   in vec3 vNormal;
   in vec3 vColor;
   in float vDepth;
-  flat in uint vRes;
+  flat in float vRes;
   uniform float uFogLo, uFogHi;
   out vec4 outColor;
   void main() {
@@ -99,14 +100,20 @@
     outColor = vec4(min(vColor * i, vec3(1.0)) * (1.0 - 0.45 * frac), 1.0);
   }`;
 
+  // The residue id (+1, so 0 is background) in red and green only, computed in float (exact
+  // below 2^24). Found in WebKit (Playwright 1.55's build): a UNSIGNED_INT vertex attribute,
+  // uint constants of 65536 and above, and the blue and alpha bytes of the RGBA8 target all
+  // came back wrong. With more than 65 535 residues a second pass (uHigh) writes the high part.
   const PICK_FS = `#version 300 es
   precision highp float;
-  flat in uint vRes;
+  flat in float vRes;
   in vec3 vNormal; in vec3 vColor; in float vDepth;
+  uniform bool uHigh;
   out vec4 outColor;
   void main() {
-    uint id = vRes + 1u;
-    outColor = vec4(float(id & 255u), float((id >> 8) & 255u), float((id >> 16) & 255u), 255.0) / 255.0;
+    float id = floor(vRes + 0.5) + 1.0;
+    float v = uHigh ? floor(id / 65536.0) : mod(id, 65536.0);
+    outColor = vec4(mod(v, 256.0), floor(v / 256.0), 0.0, 255.0) / 255.0;
   }`;
 
   const POST_VS = `#version 300 es
@@ -204,9 +211,9 @@
         colorBuf = buf(2, C.vertexColors(m, scheme), 3, gl.UNSIGNED_BYTE, true);
         const rb = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, rb);
-        gl.bufferData(gl.ARRAY_BUFFER, m.res, gl.STATIC_DRAW);
+        gl.bufferData(gl.ARRAY_BUFFER, Float32Array.from(m.res), gl.STATIC_DRAW);
         gl.enableVertexAttribArray(3);
-        gl.vertexAttribIPointer(3, 1, gl.UNSIGNED_INT, 0, 0);
+        gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0);
       }
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
@@ -233,7 +240,7 @@
     const reset = () => Object.assign(state, { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0] });
 
     // Offscreen targets: colour + depth for the post pass, colour + depth for picking.
-    let W = 0, H = 0, sceneFb, colorTex, depthTex, pickFb;
+    let W = 0, H = 0, sceneFb, colorTex, depthTex, pickFb, pickColor, pickDepth;
     function targets() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
@@ -241,13 +248,15 @@
       if (w === W && h === H) return;
       W = w; H = h;
       canvas.width = W; canvas.height = H;
-      for (const t of [colorTex, depthTex]) if (t) gl.deleteTexture(t);
+      // Free the previous size's targets: a resize drag fires many times.
+      for (const t of [colorTex, depthTex, pickColor, pickDepth]) if (t) gl.deleteTexture(t);
+      for (const f of [sceneFb, pickFb]) if (f) gl.deleteFramebuffer(f);
       colorTex = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
       depthTex = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
       sceneFb = fbo(colorTex, depthTex);
-      const pc = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-      const pd = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
-      pickFb = fbo(pc, pd);
+      pickColor = tex(gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+      pickDepth = tex(gl.DEPTH_COMPONENT24, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT);
+      pickFb = fbo(pickColor, pickDepth);
     }
     function tex(internal, format, type) {
       const t = gl.createTexture();
@@ -299,9 +308,9 @@
       gl.drawElements(gl.TRIANGLES, ribbon.count, gl.UNSIGNED_INT, 0);
       if (ds && state.ds && !forPick) {
         gl.bindVertexArray(ds.v);
-        const ds = meta.palette.disulfide; // brand::structure::DISULFIDE
-        gl.vertexAttrib3f(2, ds[0] / 255, ds[1] / 255, ds[2] / 255);
-        gl.vertexAttribI4ui(3, 0, 0, 0, 0);
+        const dsColour = meta.palette.disulfide; // brand::structure::DISULFIDE
+        gl.vertexAttrib3f(2, dsColour[0] / 255, dsColour[1] / 255, dsColour[2] / 255);
+        gl.vertexAttrib1f(3, 0);
         gl.drawElements(gl.TRIANGLES, ds.count, gl.UNSIGNED_INT, 0);
       }
       gl.bindVertexArray(null);
@@ -353,11 +362,17 @@
       gl.enable(gl.DEPTH_TEST);
       gl.useProgram(pick.p);
       setGeomUniforms(pick, rotation());
-      drawMeshes(pick, true);
       const px = new Uint8Array(4);
-      gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      const pass = (high) => {
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.uniform1i(pick.u.uHigh, high ? 1 : 0);
+        drawMeshes(pick, true);
+        gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return px[0] + px[1] * 256;
+      };
+      let id = pass(false);
+      if (id !== 0 && meta.residues >= 65535) id += pass(true) * 65536;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      const id = px[0] | (px[1] << 8) | (px[2] << 16);
       return id - 1;
     }
 
@@ -429,6 +444,13 @@
         case ' ': state.spin = !state.spin; e.preventDefault(); request(); break;
         case 'r': reset(); request(); break;
         case 's': save(); break;
+        // Rotate and zoom without a pointer, with the terminal viewer's keys.
+        case 'ArrowLeft': case 'h': state.yaw -= 0.15; request(); break;
+        case 'ArrowRight': case 'l': state.yaw += 0.15; request(); break;
+        case 'ArrowUp': case 'k': state.pitch -= 0.15; request(); break;
+        case 'ArrowDown': case 'j': state.pitch += 0.15; request(); break;
+        case '+': case '=': state.zoom = Math.min(50, state.zoom * 1.15); request(); break;
+        case '-': case '_': state.zoom = Math.max(0.1, state.zoom * 0.85); request(); break;
         default: return;
       }
     });

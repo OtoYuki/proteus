@@ -51,10 +51,10 @@ All notable changes to this project are documented here. The format follows
 - `view --compare` draws the target in Tide and the reference in Clay (was cyan and ruby).
 - Secondary structure is now coloured Clay (helix), Tide (strand) and pale cream (coil), and
   disulfides Chartreuse, in the terminal and in the browser. The smallest difference between
-  two structure colours as seen with red–green colour blindness rose from ΔE 23 to 32
+  of the three secondary-structure colours as seen with red–green colour blindness rose from ΔE 23 to 32
   (Machado 2009 simulation).
 - The browser viewer (`proteus view --web/--html`, the daemon's `/view/{job}`) is now our own:
-  about 730 lines of our own JavaScript (WebGL2) drawing the same ribbon mesh, DSSP and colours as the terminal
+  about 800 lines of our own JavaScript (WebGL2) drawing the same ribbon mesh, DSSP and colours as the terminal
   viewer, with the same keys (`c`, `o`, `d`, `Space`, `r`, plus `s` to save a PNG), hover labels
   (chain, residue, 8-state DSSP, pLDDT or B-factor), and panels for the measurements, a
   Ramachandran plot and the per-residue pLDDT. It replaces the vendored 3Dmol.js 2.5.5, which
@@ -64,6 +64,54 @@ All notable changes to this project are documented here. The format follows
   structure file; that stays next to the page or at `/api/v1/predictions/by-job/{id}/pdb`.
 
 ### Fixed
+- Found by a review of everything since 0.7.0 (four reviewers, each finding reproduced) and a
+  WebKit run.
+
+  **Browser page:**
+  - A structure with a disulfide bond (1CRN, for one) drew an empty 3-D view. A variable was
+    shadowed; this came in with the identity foundation. A real-browser test now runs in CI
+    (`scripts/browser-check.mjs` in Chromium, Firefox and WebKit), and it fails on that page.
+  - Hover labels named residues that do not exist in WebKit, the engine behind Safari. WebKit
+    misread the integer residue attribute, `uint` shader constants of 65536 and above, and the
+    blue and alpha bytes of the pick target. Picking now uses float arithmetic and the red and
+    green bytes only.
+  - The page had no keyboard rotate or zoom. It now has arrows/hjkl and `+`/`−`, as in the
+    terminal.
+  - GPU targets leaked on every resize.
+  - The legend overlapped the key help.
+
+  **Home screen:**
+  - Closing the terminal could leave `proteus` spinning at full CPU and ignoring SIGTERM:
+    crossterm retries a dead tty inside `event::poll`. The signal handler now stops any child,
+    restores the terminal and exits by itself.
+  - `q` could hang on an analysis still running, for good on a FIFO. It now exits at once, and
+    only regular files are listed.
+  - An escape sequence in a file name reached the terminal through the echoed command. Control
+    characters are now quoted as `$'\xNN'`.
+  - Measurements went stale when a file changed; they are now keyed to its modification time
+    and size.
+  - Typing on a focused Run field without Enter ran commands (`q` quit, digits switched tabs).
+    Typing now edits; `F1` opens the help from a field.
+  - The jobs filter did not match the "done" it displays.
+  - Esc did not quit; it now quits when nothing is open.
+  - A one-line `>header SEQ` record folded header words into the sequence, and rejected a
+    lower-case sequence.
+  - `SIGTERM` was ignored while a child command ran.
+  - The jobs list and `view`/`inspect` could disagree about which prediction a job has. Both
+    now use the newest.
+
+  **Terminal colour:**
+  - In 16 colours, helix, strand and the `--compare` target and reference all turned the same
+    grey. Data colours now go by hue.
+  - kitty, ghostty, alacritty, foot and wezterm fell back to 16 colours over SSH, which does not
+    pass `COLORTERM` on. They are now known by `TERM`, as are `-direct` and `truecolor` names.
+  - `TERM=dumb` received escape codes.
+  - In 16 colours, the empty part of a progress bar was invisible black.
+
+  **Dashboard:**
+  - Rows were cut mid-number ("coil 4" for 43 %). Whole items are now dropped instead.
+  - The Ramachandran φ = 0 tick sat one column left of its axis (older than 0.7.0).
+  - A name with an emoji sequence could make a line one column too wide.
 - `proteus view --web` always ran `xdg-open`. On macOS, which has no `xdg-open`, the failure was
   ignored and no browser opened. It now uses `open` on macOS and says so when no opener can be
   started.

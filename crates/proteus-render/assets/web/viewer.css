@@ -46,7 +46,7 @@ html, body { margin: 0; height: 100%; background: var(--ground); color: var(--te
 #panel .warn { color: var(--warm); }
 
 /* Legend for the current colours: swatch and word. */
-#legend { position: fixed; left: 20px; bottom: 46px; display: flex; flex-wrap: wrap; gap: 14px;
+#legend { position: fixed; left: 20px; top: 76px; display: flex; flex-wrap: wrap; gap: 14px;
   align-items: center; padding: 8px 12px; background: var(--surface); border: 1px solid var(--line);
   font: 400 11.5px/1.3 var(--mono); max-width: calc(100vw - 360px); }
 #legend b { font-weight: 400; color: var(--muted); letter-spacing: .04em; }
@@ -71,7 +71,7 @@ kbd { font: inherit; color: var(--accent); margin-right: 4px; }
   #head { right: 16px; flex-wrap: wrap; gap: 10px; }
   #subject { border-left: 0; padding-left: 0; }
   #panel { top: auto; left: 8px; right: 8px; width: auto; height: 38vh; }
-  #legend { bottom: calc(38vh + 24px); max-width: calc(100vw - 32px); }
+  #legend { top: auto; bottom: calc(38vh + 24px); max-width: calc(100vw - 32px); }
   #keys { display: none; }
   #fallback { right: 16px; }
 }

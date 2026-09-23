@@ -307,7 +307,7 @@ impl WebPage<'_> {
 <aside id="panel" aria-label="structure details"></aside>
 <div id="legend" aria-live="polite"></div>
 <div id="tip" role="tooltip" hidden></div>
-<footer id="keys"><span><kbd>drag</kbd> rotate</span><span><kbd>wheel</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>

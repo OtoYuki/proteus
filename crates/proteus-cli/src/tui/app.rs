@@ -82,12 +82,26 @@ pub fn shell_quote(s: &str) -> String {
     let safe = |c: char| c.is_ascii_alphanumeric() || "_./:=@%+,-".contains(c);
     if !s.is_empty() && s.chars().all(safe) {
         s.to_string()
-    } else if s.contains('\n') {
-        let escaped = s
-            .replace('\\', r"\\")
-            .replace('\'', r"\'")
-            .replace('\n', r"\n");
-        format!("$'{escaped}'")
+    } else if s.chars().any(char::is_control) {
+        // $'…' with every control character escaped: a newline stays on one line, and an
+        // escape sequence in a file name is shown, never sent to the terminal.
+        let mut out = String::from("$'");
+        for c in s.chars() {
+            match c {
+                '\\' => out.push_str(r"\\"),
+                '\'' => out.push_str(r"\'"),
+                '\n' => out.push_str(r"\n"),
+                '\t' => out.push_str(r"\t"),
+                c if c.is_control() => {
+                    for b in c.to_string().bytes() {
+                        out.push_str(&format!("\\x{b:02x}"));
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        out.push('\'');
+        out
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
@@ -130,6 +144,7 @@ impl JobsView {
                     || format!("{:?}", j.job.status)
                         .to_lowercase()
                         .contains(&needle)
+                    || state_word(&j.job.status).contains(&needle)
                     || engine(j).to_lowercase().contains(&needle)
             })
             .collect()
@@ -156,6 +171,18 @@ impl JobsView {
     fn clamp(&mut self) {
         let n = self.visible().len();
         self.selected = self.selected.min(n.saturating_sub(1));
+    }
+}
+
+/// The word the jobs list shows for a state (the filter matches it as well as the state's name).
+pub fn state_word(s: &JobStatus) -> &'static str {
+    match s {
+        JobStatus::Completed => "done",
+        JobStatus::Failed => "failed",
+        JobStatus::Cancelled => "cancelled",
+        JobStatus::Running => "running",
+        JobStatus::Queued => "queued",
+        JobStatus::Pending => "pending",
     }
 }
 
@@ -223,7 +250,7 @@ impl FilesView {
                             is_dir: true,
                             size: 0,
                         });
-                    } else if proteus_core::qc::is_structure_file_name(&path) {
+                    } else if meta.is_file() && proteus_core::qc::is_structure_file_name(&path) {
                         files.push(Entry {
                             name,
                             path,
@@ -505,20 +532,19 @@ impl SequenceInput {
             let (header, seq) = match raw.split_once('\n') {
                 // A pasted record keeps its lines: the first is the header.
                 Some((header, rest)) => (header.trim().to_string(), rest.to_string()),
-                // Typed on one line: the sequence is the trailing run of words that are all
-                // capital letters, and the header is what comes before it.
-                None => {
-                    let words: Vec<&str> = raw.split_whitespace().collect();
-                    let tail = words
-                        .iter()
-                        .rev()
-                        .take_while(|w| w.chars().all(|c| c.is_ascii_uppercase()))
-                        .count();
-                    let split = words.len() - tail.min(words.len() - 1);
-                    (words[..split].join(" "), words[split..].concat())
-                }
+                // Typed on one line: the last word is the sequence (any case) and the rest is
+                // the header. A sequence broken by spaces needs a FASTA file or a paste.
+                None => match raw.rsplit_once(char::is_whitespace) {
+                    Some((header, seq)) if seq.chars().all(|c| c.is_ascii_alphabetic()) => {
+                        (header.trim().to_string(), seq.to_ascii_uppercase())
+                    }
+                    _ => (raw.to_string(), String::new()),
+                },
             };
-            let seq: String = seq.split_whitespace().collect();
+            let seq: String = seq
+                .split_whitespace()
+                .collect::<String>()
+                .to_ascii_uppercase();
             if seq.is_empty() {
                 return Err("the FASTA record has a header but no sequence".into());
             }
@@ -553,6 +579,9 @@ pub struct App {
     pub jobs: JobsView,
     pub files: FilesView,
     pub analyses: HashMap<PathBuf, Analysis>,
+    /// The (modification time, size) each measurement was taken at: a file changed since is
+    /// measured again.
+    pub stamps: HashMap<PathBuf, Option<(std::time::SystemTime, u64)>>,
     pub run: RunView,
     pub help: bool,
     /// One line for the status bar: the result of the last action, or an error.
@@ -573,6 +602,7 @@ impl App {
             jobs: JobsView::default(),
             files: FilesView::open(cwd),
             analyses: HashMap::new(),
+            stamps: HashMap::new(),
             run: RunView::default(),
             help: false,
             status: None,
@@ -594,7 +624,12 @@ impl App {
             return None;
         }
         let e = self.files.current()?;
-        (!e.is_dir && !self.analyses.contains_key(&e.path)).then(|| e.path.clone())
+        if e.is_dir {
+            return None;
+        }
+        let fresh = self.analyses.contains_key(&e.path)
+            && self.stamps.get(&e.path) == Some(&file_stamp(&e.path));
+        (!fresh).then(|| e.path.clone())
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {
@@ -607,11 +642,36 @@ impl App {
             self.help = false;
             return Action::None;
         }
+        // F1 opens the help from anywhere, even a text field where ? is just a character.
+        if key.code == KeyCode::F(1) {
+            self.help = true;
+            return Action::None;
+        }
         if self.typing() {
             return self.type_key(key);
         }
+        // On a focused text field of the Run form, a printable key is text: it starts editing
+        // rather than acting as a command (a sequence typed straight in used to jump tabs at a
+        // digit and quit at a q, losing the form).
+        if let KeyCode::Char(c) = key.code {
+            if self.tab == Tab::Run && !ctrl && !c.is_control() {
+                if let Some(Field {
+                    kind: FieldKind::Text(s),
+                    ..
+                }) = self.run.focused_mut()
+                {
+                    s.push(c);
+                    self.run.editing = true;
+                    return Action::None;
+                }
+            }
+        }
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
+            // Esc backs out of whatever is open, and quits when nothing is.
+            KeyCode::Esc if self.tab != Tab::Jobs || self.jobs.filter.is_empty() => {
+                return Action::Quit
+            }
             KeyCode::Char('?') => {
                 self.help = true;
                 return Action::None;
@@ -851,6 +911,12 @@ fn move_selection(selected: &mut usize, n: usize, code: KeyCode) {
         KeyCode::End | KeyCode::Char('G') => last,
         _ => *selected,
     };
+}
+
+/// A file's modification time and size, to tell whether it changed since it was measured.
+pub fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 pub fn short_id(id: &str) -> &str {
