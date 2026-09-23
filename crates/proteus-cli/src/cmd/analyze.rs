@@ -283,17 +283,19 @@ fn print_report(
     confidence_source: ConfidenceSourceArg,
 ) -> Result<()> {
     println!("Analyzing structure file: {:?}", pdb);
-    let mut metrics = analyze_pdb_file(pdb, reference).context("Biophysical analysis failed")?;
-    if let Some(src) = forced_source(confidence_source) {
-        metrics.confidence_source = src;
-        let residues = metrics
-            .secondary_structure_summary
-            .as_ref()
-            .map(|s| s.assignment.len())
-            .unwrap_or(1);
-        metrics.candidate_fitness_score =
-            Some(evaluate_candidate_fitness(&metrics, residues).total_score);
-    }
+    let loaded = proteus_core::io::load_structure(pdb).context("Biophysical analysis failed")?;
+    let reference = reference
+        .map(proteus_core::io::open_structure)
+        .transpose()
+        .context("cannot read the reference structure")?;
+    let metrics = proteus_core::metrics::analyze_pdb_detailed_with_source(
+        &loaded.pdb,
+        reference.as_ref(),
+        Some(&loaded.header_preview),
+        forced_source(confidence_source),
+    )
+    .context("Biophysical analysis failed")?
+    .metrics;
 
     let mut table = Table::new();
     table.load_style(UTF8_FULL);

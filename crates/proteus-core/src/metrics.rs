@@ -184,6 +184,19 @@ pub fn analyze_pdb_detailed_with_header(
     reference_pdb: Option<&pdbtbx::PDB>,
     extra_header: Option<&str>,
 ) -> Result<DetailedBiophysicalAnalysis, CoreError> {
+    analyze_pdb_detailed_with_source(pdb, reference_pdb, extra_header, None)
+}
+
+/// As [`analyze_pdb_detailed_with_header`], with the pLDDT-vs-B-factor decision taken from
+/// `source` when given instead of detected. Everything downstream — the 0–1 → 0–100 rescale
+/// of ESMFold-style pLDDT, the statistics, the fitness weights — follows the decision, so a
+/// declared source is treated exactly like a detected one.
+pub fn analyze_pdb_detailed_with_source(
+    pdb: &pdbtbx::PDB,
+    reference_pdb: Option<&pdbtbx::PDB>,
+    extra_header: Option<&str>,
+    source: Option<crate::confidence::ConfidenceSource>,
+) -> Result<DetailedBiophysicalAnalysis, CoreError> {
     // All metrics are defined on protein heavy atoms: drop solvent, ions, ligands, hydrogens.
     let protein = crate::io::protein_heavy_atoms(pdb);
     let pdb = &protein;
@@ -234,7 +247,8 @@ pub fn analyze_pdb_detailed_with_header(
         crate::confidence::pdb_header_text(pdb),
         extra_header.unwrap_or("")
     );
-    let confidence_source = crate::confidence::detect_confidence_source(&header, &plddts);
+    let confidence_source =
+        source.unwrap_or_else(|| crate::confidence::detect_confidence_source(&header, &plddts));
 
     // Normalize pLDDT if model wrote it in [0.0, 1.0] range (e.g. ESMFold)
     let max_plddt = plddts.iter().copied().fold(f64::MIN, f64::max);

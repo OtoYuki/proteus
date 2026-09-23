@@ -140,6 +140,113 @@ fn reject_non_finite_coordinates(text: &str, is_cif: bool) -> Result<(), CoreErr
     Ok(())
 }
 
+/// The machine-readable provenance records wherever they sit in the file: `EXPDTA` and
+/// `CRYST1` (PDB), `_exptl.method` with the rows of its loop, and the first ModelCIF
+/// `_ma_qa_metric` line (mmCIF). In deposited mmCIF `_exptl` usually comes 70–210 KB in, far
+/// past [`HEADER_PREVIEW_BYTES`], so confidence detection needs them collected explicitly.
+fn provenance_lines(text: &str) -> String {
+    let mut out = String::new();
+    let mut take_next = 0;
+    let mut seen_ma = false;
+    for line in text.lines() {
+        if take_next > 0 {
+            take_next -= 1;
+            out.push_str(line);
+            out.push('\n');
+            if line.starts_with('#') || line.starts_with("loop_") {
+                take_next = 0;
+            }
+            continue;
+        }
+        if line.starts_with("EXPDTA") || line.starts_with("CRYST1") {
+            out.push_str(line);
+            out.push('\n');
+        } else if line.starts_with("_exptl.method") {
+            out.push_str(line);
+            out.push('\n');
+            // In a loop the value is on a later row; also covers a value wrapped onto the
+            // next line.
+            take_next = 4;
+        } else if !seen_ma && line.starts_with("_ma_qa_metric") {
+            seen_ma = true;
+            out.push_str(line);
+            out.push('\n');
+        } else if line.starts_with("ATOM") || line.starts_with("_atom_site.") {
+            // Provenance precedes the coordinates in both formats; stop scanning there.
+            break;
+        }
+    }
+    if out.is_empty() {
+        out
+    } else {
+        format!("\n{out}")
+    }
+}
+
+/// PDB is a fixed-column ASCII format, and pdbtbx slices record lines by byte offset: a
+/// multi-byte UTF-8 character in a record it reads panics inside the lexer ("byte index is
+/// not a char boundary"). In an atom record that shifts every later column, so the file is
+/// refused with the line named; in free-text records (REMARK, HEADER, …) each such character
+/// becomes `?`, which keeps the columns and loses nothing the analysis reads.
+fn ascii_records(coordinates: String) -> Result<String, CoreError> {
+    if coordinates.is_ascii() {
+        return Ok(coordinates);
+    }
+    let mut out = String::with_capacity(coordinates.len());
+    for (n, line) in coordinates.lines().enumerate() {
+        if !line.is_ascii() {
+            if ["ATOM", "HETATM", "ANISOU"]
+                .iter()
+                .any(|r| line.starts_with(r))
+            {
+                return Err(CoreError::StructureParseError(format!(
+                    "PDB atom record {} contains non-ASCII characters, so its columns cannot \
+                     be read; PDB is a fixed-column ASCII format",
+                    n + 1
+                )));
+            }
+            out.extend(line.chars().map(|c| if c.is_ascii() { c } else { '?' }));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+thread_local! {
+    /// Set while this thread runs pdbtbx under [`parse_guarded`]; the panic hook stays quiet.
+    static PARSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a pdbtbx parse, turning a panic inside it into an ordinary parse error. pdbtbx asserts
+/// rather than errors on several malformed inputs (an mmCIF `?` where a coordinate, element
+/// or atom id is required, among others); a structure file from anywhere must not be able to
+/// take down a batch run or the daemon. The default panic message is suppressed for these
+/// parses only — the hook is installed once and defers to the previous hook otherwise.
+fn parse_guarded<T>(kind: &str, parse: impl FnOnce() -> T) -> Result<T, CoreError> {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !PARSING.with(|p| p.get()) {
+                previous(info);
+            }
+        }));
+    });
+    PARSING.with(|p| p.set(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse));
+    PARSING.with(|p| p.set(false));
+    result.map_err(|payload| {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "malformed input".into());
+        CoreError::StructureParseError(format!("{kind}: {msg}"))
+    })
+}
+
 /// Open a structure file by path. Extension decides the format when recognised
 /// (`.pdb`, `.ent`, `.cif`, `.mmcif`, each optionally `.gz`); otherwise the content is sniffed.
 pub fn open_structure(path: &Path) -> Result<pdbtbx::PDB, CoreError> {
@@ -193,26 +300,31 @@ pub fn load_structure_bytes(
         bytes
     };
     let text = std::str::from_utf8(bytes).map_err(|e| parse_err("utf-8", e))?;
-    let header_preview = text
+    let mut header_preview = text
         .char_indices()
         .take_while(|(i, _)| *i < HEADER_PREVIEW_BYTES)
         .map(|(_, c)| c)
         .collect::<String>();
+    header_preview.push_str(&provenance_lines(text));
     let is_cif = looks_like_cif(text, hint);
     reject_non_finite_coordinates(text, is_cif)?;
-    let result = if is_cif {
-        pdbtbx::ReadOptions::default()
-            .set_format(pdbtbx::Format::Mmcif)
-            .set_level(StrictnessLevel::Loose)
-            .read_raw(std::io::BufReader::new(text.as_bytes()))
-    } else {
-        let coordinates = coordinate_records_only(text);
-        pdbtbx::ReadOptions::default()
-            .set_format(pdbtbx::Format::Pdb)
-            .set_level(StrictnessLevel::Loose)
-            .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
-    };
     let kind = if is_cif { "mmCIF" } else { "PDB" };
+    let result = if is_cif {
+        parse_guarded(kind, || {
+            pdbtbx::ReadOptions::default()
+                .set_format(pdbtbx::Format::Mmcif)
+                .set_level(StrictnessLevel::Loose)
+                .read_raw(std::io::BufReader::new(text.as_bytes()))
+        })?
+    } else {
+        let coordinates = ascii_records(coordinate_records_only(text))?;
+        parse_guarded(kind, || {
+            pdbtbx::ReadOptions::default()
+                .set_format(pdbtbx::Format::Pdb)
+                .set_level(StrictnessLevel::Loose)
+                .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
+        })?
+    };
     let (mut pdb, _warnings) = result.map_err(|e| {
         // A file with no coordinates at all is a user mistake, not a malformed structure, and
         // deserves a message that names the mistake.
@@ -428,5 +540,44 @@ END\n";
         assert_eq!(p.residue_count(), 1);
         assert_eq!(p.atom_count(), 4);
         assert!(crate::backbone::extract_backbone(&p).len() == 1);
+    }
+    #[test]
+    fn malformed_files_are_errors_not_panics() {
+        // Reported: an mmCIF with `?` in a required field, and PDB lines with multi-byte
+        // characters, panicked inside pdbtbx and took the whole process down.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/edge");
+        for name in [
+            "q_x.cif",
+            "q_type.cif",
+            "q_id.cif",
+            "q_comp.cif",
+            "nonascii.pdb",
+            "nonascii2.pdb",
+            "nonascii3.pdb",
+            "nonascii4.pdb",
+        ] {
+            let path = dir.join(name);
+            let outcome = std::panic::catch_unwind(|| load_structure(&path));
+            assert!(outcome.is_ok(), "{name} panicked");
+        }
+        let err = load_structure(&dir.join("nonascii4.pdb"))
+            .err()
+            .expect("non-ASCII atom");
+        assert!(err.to_string().contains("non-ASCII"), "{err}");
+        // Non-ASCII text in REMARKs is not a reason to refuse the coordinates.
+        assert_eq!(
+            load_structure(&dir.join("nonascii3.pdb"))
+                .unwrap()
+                .pdb
+                .atom_count(),
+            1
+        );
+        let err = load_structure(&dir.join("q_x.cif"))
+            .err()
+            .expect("missing coordinate");
+        assert!(
+            err.to_string().starts_with("Structure parse error: mmCIF"),
+            "{err}"
+        );
     }
 }

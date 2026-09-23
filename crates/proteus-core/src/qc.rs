@@ -136,20 +136,13 @@ pub fn structure_qc(
     confidence: Option<ConfidenceSource>,
 ) -> Result<StructureQc, CoreError> {
     let loaded = crate::io::load_structure(path)?;
-    let detailed = crate::metrics::analyze_pdb_detailed_with_header(
+    let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,
         reference,
         Some(&loaded.header_preview),
+        confidence,
     )?;
-    let mut m = detailed.metrics;
-    if let Some(src) = confidence {
-        if src != m.confidence_source {
-            m.confidence_source = src;
-            let n = detailed.plddts.len();
-            m.candidate_fitness_score =
-                Some(crate::ranking::evaluate_candidate_fitness(&m, n).total_score);
-        }
-    }
+    let m = detailed.metrics;
 
     let protein = crate::io::protein_heavy_atoms(&loaded.pdb);
     let backbone = crate::backbone::extract_backbone(&protein);
@@ -293,6 +286,31 @@ mod tests {
             forced.fitness, auto.fitness,
             "pLDDT weight enters the score"
         );
+    }
+
+    #[test]
+    fn a_declared_prediction_gets_the_same_rescaling_as_a_detected_one() {
+        // Reported: forcing `predicted` on an ESMFold-style 0-1 file skipped the 0-1 -> 0-100
+        // rescale, reporting pLDDT 0.25 and scoring the model as if it were near zero.
+        let path = data("edge/esm01_low.pdb");
+        let forced = structure_qc(&path, None, Some(ConfidenceSource::Predicted)).unwrap();
+        let detected = structure_qc(&path, None, None).unwrap();
+        assert_eq!(detected.confidence_source, "predicted");
+        assert!(
+            (forced.plddt_mean.unwrap() - 25.0).abs() < 1e-9,
+            "{forced:?}"
+        );
+        assert_eq!(forced.plddt_mean, detected.plddt_mean);
+        assert_eq!(forced.fitness, detected.fitness);
+    }
+
+    #[test]
+    fn a_method_declared_late_in_an_mmcif_still_counts() {
+        // Reported: `_exptl.method 'X-RAY DIFFRACTION'` beyond the first 16 KiB was never
+        // read, so an X-ray entry with B-factors of 40-80 was reported as pLDDT.
+        let qc = structure_qc(&data("edge/xray_late_exptl.cif"), None, None).unwrap();
+        assert_eq!(qc.confidence_source, "experimental");
+        assert_eq!(qc.plddt_mean, None);
     }
 
     #[test]
