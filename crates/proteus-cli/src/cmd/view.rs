@@ -8,8 +8,10 @@ pub struct Args {
     /// Target PDB file path, or a job UUID or unique prefix of one
     target: String,
 
-    /// Optional reference PDB file path for 3D structural superposition and RMSD calculation
-    #[arg(long)]
+    /// Reference structure to superpose onto, with C-alpha RMSD. Residues are paired by
+    /// chain ID, residue number and insertion code; the two are drawn in fixed colours, so
+    /// --color and --dashboard do not apply
+    #[arg(long, conflicts_with_all = ["color", "dashboard"])]
     compare: Option<PathBuf>,
 
     /// Run the interactive TUI viewer with orbit camera controls
@@ -253,7 +255,14 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("Reference");
-            let dual_title = format!("{title} (Cyan) vs {ref_name} (Ruby)");
+            let stats = sup_data.stats;
+            if let Some(warning) = superposition_warning(&stats) {
+                eprintln!("{warning}");
+            }
+            let dual_title = format!(
+                "{title} (Cyan) vs {ref_name} (Ruby), {} Cα paired",
+                stats.paired
+            );
             let config = proteus_render::tui::ViewerConfig {
                 title: dual_title,
                 initial_color_scheme: proteus_render::rasterizer::ColorScheme::Solid(
@@ -273,7 +282,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             run_viewer(&sup_data.target_mesh, sup_data.camera, config)
                 .context("Interactive dual-structure 3D viewer error")?;
         } else {
-            let (snapshot, rmsd) = proteus_render::render_superposition_snapshot(
+            let (snapshot, stats) = proteus_render::render_superposition_snapshot(
                 &pdb_content,
                 &ref_content,
                 w,
@@ -283,10 +292,10 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             .context("Failed to render superposition snapshot")?;
 
             println!("{snapshot}");
-            println!(
-                "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[32mRMSD: {:.3} Å\x1b[0m",
-                rmsd
-            );
+            println!("{}", superposition_summary(&stats));
+            if let Some(warning) = superposition_warning(&stats) {
+                eprintln!("{warning}");
+            }
         }
     } else if interactive || dashboard {
         let structure_data = structure_data.expect("parsed above when --compare is absent");
@@ -327,6 +336,45 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         println!("{snapshot}");
     }
     Ok(())
+}
+
+/// The RMSD line, with how many residues it covers. Green only when the two structures are
+/// the same sequence residue for residue; otherwise yellow, since the number then describes
+/// only the paired part.
+fn superposition_summary(s: &proteus_render::SuperpositionStats) -> String {
+    let colour = if s.same_sequence() { "32" } else { "33" };
+    format!(
+        "\x1b[1mSuperposition:\x1b[0m Target (Cyan) vs Reference (Ruby) | \x1b[{colour}mRMSD: \
+         {:.3} Å over {} Cα pairs\x1b[0m (target {}/{}, reference {}/{} residues paired)",
+        s.rmsd, s.paired, s.paired, s.target_residues, s.paired, s.reference_residues
+    )
+}
+
+/// A warning when the structures are not the same sequence, saying what differs.
+fn superposition_warning(s: &proteus_render::SuperpositionStats) -> Option<String> {
+    if s.same_sequence() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let unpaired_t = s.target_residues - s.paired;
+    let unpaired_r = s.reference_residues - s.paired;
+    if unpaired_t > 0 || unpaired_r > 0 {
+        parts.push(format!(
+            "{unpaired_t} target and {unpaired_r} reference residue(s) have no partner with the \
+             same chain, number and insertion code"
+        ));
+    }
+    if s.mismatched_names > 0 {
+        parts.push(format!(
+            "{} paired residue(s) have a different amino acid",
+            s.mismatched_names
+        ));
+    }
+    Some(format!(
+        "warning: the sequences differ: {}; the RMSD covers the {} paired Cα only",
+        parts.join(", and "),
+        s.paired
+    ))
 }
 
 /// Whether `target` could be a job UUID or a prefix of one: hex digits and hyphens only. A
@@ -495,6 +543,62 @@ mod tests {
         ));
         assert!(!super::looks_like_job_ref("typo.pdb"));
         assert!(!super::looks_like_job_ref(""));
+    }
+
+    /// `--compare` draws both structures in fixed colours and has no dashboard, so asking for
+    /// either is refused instead of silently ignored.
+    #[test]
+    fn compare_rejects_options_it_cannot_honour() {
+        for extra in [["--color", "rainbow"], ["--dashboard", "--interactive"]] {
+            let mut argv = vec!["proteus", "view", "a.pdb", "--compare", "b.pdb"];
+            argv.extend(extra);
+            let Err(err) = Cli::try_parse_from(&argv) else {
+                panic!("{argv:?} was accepted");
+            };
+            assert!(err.to_string().contains("cannot be used with"), "{err}");
+        }
+        assert!(Cli::try_parse_from(["proteus", "view", "a.pdb", "--compare", "b.pdb"]).is_ok());
+    }
+
+    /// The RMSD is green only for the same sequence; otherwise it says how much was paired
+    /// and warns what differs.
+    #[test]
+    fn superposition_report_says_what_was_paired() {
+        let same = proteus_render::SuperpositionStats {
+            rmsd: 0.5,
+            paired: 46,
+            target_residues: 46,
+            reference_residues: 46,
+            mismatched_names: 0,
+        };
+        let line = super::superposition_summary(&same);
+        assert!(
+            line.contains("\x1b[32mRMSD: 0.500 Å over 46 Cα pairs"),
+            "{line}"
+        );
+        assert!(super::superposition_warning(&same).is_none());
+
+        let shorter = proteus_render::SuperpositionStats {
+            paired: 45,
+            target_residues: 45,
+            ..same
+        };
+        let line = super::superposition_summary(&shorter);
+        assert!(
+            !line.contains("\x1b[32m"),
+            "differing sequences reported in green: {line}"
+        );
+        assert!(line.contains("reference 45/46"), "{line}");
+        let warning = super::superposition_warning(&shorter).unwrap();
+        assert!(warning.contains("0 target and 1 reference"), "{warning}");
+
+        let mutant = proteus_render::SuperpositionStats {
+            mismatched_names: 2,
+            ..same
+        };
+        assert!(super::superposition_warning(&mutant)
+            .unwrap()
+            .contains("2 paired residue(s) have a different amino acid"));
     }
 
     /// A viewport the renderer cannot allocate is refused at the argument parser, with the
