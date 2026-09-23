@@ -386,7 +386,7 @@ impl Esm2 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn config_with(extra: &str) -> Result<EsmConfig> {
@@ -405,7 +405,10 @@ mod tests {
 
     /// A structurally complete ESM-2 with hidden size 4, two heads (head_dim 2) and `layers`
     /// encoder layers; weights are arbitrary.
-    fn tiny(layers: usize, inv_freq: Option<&[f32]>) -> std::collections::HashMap<String, Tensor> {
+    pub(crate) fn tiny(
+        layers: usize,
+        inv_freq: Option<&[f32]>,
+    ) -> std::collections::HashMap<String, Tensor> {
         let dev = Device::Cpu;
         let mut w = std::collections::HashMap::new();
         let mut put = |name: String, shape: &[usize]| {
@@ -451,7 +454,7 @@ mod tests {
         w
     }
 
-    fn tiny_config(layers: usize, heads: usize) -> EsmConfig {
+    pub(crate) fn tiny_config(layers: usize, heads: usize) -> EsmConfig {
         serde_json::from_str(&format!(
             r#"{{"hidden_size":4,"num_hidden_layers":{layers},"num_attention_heads":{heads},
             "intermediate_size":8,"vocab_size":33}}"#
@@ -459,9 +462,17 @@ mod tests {
         .unwrap()
     }
 
-    fn load_tiny(cfg: EsmConfig, w: std::collections::HashMap<String, Tensor>) -> Result<Esm2> {
+    pub(crate) fn load_tiny(
+        cfg: EsmConfig,
+        w: std::collections::HashMap<String, Tensor>,
+    ) -> Result<Esm2> {
         let vb = VarBuilder::from_tensors(w, DType::F32, &Device::Cpu);
         Esm2::load(cfg, vb, Device::Cpu)
+    }
+
+    /// Two layers, one head of 4: enough for position-dependent outputs in scoring tests.
+    pub(crate) fn tiny_model() -> Esm2 {
+        load_tiny(tiny_config(2, 1), tiny(2, None)).unwrap()
     }
 
     #[test]
@@ -510,7 +521,7 @@ mod tests {
             t
         };
         assert!(m.logits(&tokens(1022)).is_ok());
-        let err = m.logits(&tokens(1023)).err().expect("refused");
+        let err = m.logits(&tokens(1023)).expect_err("refused");
         assert!(err.to_string().contains("1023 residues"), "{err}");
         assert!(err.to_string().contains("at most 1022"), "{err}");
     }

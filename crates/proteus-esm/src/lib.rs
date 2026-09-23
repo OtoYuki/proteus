@@ -21,7 +21,7 @@ pub use scoring::{
     parse_mutation, scan, score_masked_marginal, score_wt_marginal, MarginalScorer, Mutation,
     ScanRow,
 };
-pub use tokenizer::{Tokenizer, AMINO_ACIDS, MASK_ID, VOCAB};
+pub use tokenizer::{Tokenizer, AMINO_ACIDS, MASK_ID, NON_CANONICAL, VOCAB};
 
 /// Errors from loading or running a model.
 #[derive(Debug, thiserror::Error)]

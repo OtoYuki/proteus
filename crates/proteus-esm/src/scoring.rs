@@ -21,7 +21,8 @@ impl std::fmt::Display for Mutation {
     }
 }
 
-/// Parse `P19A`-style notation.
+/// Parse `P19A`-style notation. Both residues must be one of the twenty standard amino acids
+/// (a score against `X` or `<unk>` means nothing); the position is 1-based decimal digits.
 pub fn parse_mutation(s: &str) -> Result<Mutation> {
     let s = s.trim();
     let bytes = s.as_bytes();
@@ -30,20 +31,42 @@ pub fn parse_mutation(s: &str) -> Result<Mutation> {
             "'{s}' is not in <wt><position><mt> form (e.g. P19A)"
         )));
     }
-    let pos: usize = s[1..s.len() - 1]
+    let digits = &s[1..s.len() - 1];
+    // `usize::from_str` also takes a leading '+'.
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(EsmError::Mutation(format!(
+            "'{s}': position is not a number"
+        )));
+    }
+    let pos: usize = digits
         .parse()
         .map_err(|_| EsmError::Mutation(format!("'{s}': position is not a number")))?;
-    if pos == 0 {
-        return Err(EsmError::Mutation(format!("'{s}': positions are 1-based")));
-    }
-    Ok(Mutation {
+    let m = Mutation {
         wt: (bytes[0] as char).to_ascii_uppercase(),
         pos,
         mt: (bytes[s.len() - 1] as char).to_ascii_uppercase(),
-    })
+    };
+    check_residues(&m)?;
+    Ok(m)
 }
 
+fn check_residues(m: &Mutation) -> Result<()> {
+    if m.pos == 0 {
+        return Err(EsmError::Mutation(format!("{m}: positions are 1-based")));
+    }
+    for c in [m.wt, m.mt] {
+        if !AMINO_ACIDS.contains(&c) {
+            return Err(EsmError::Mutation(format!(
+                "{m}: '{c}' is not one of the 20 standard amino acids"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `seq` is the [`Tokenizer::normalize`]d wild type.
 fn check(seq: &[u8], m: &Mutation) -> Result<()> {
+    check_residues(m)?;
     let Some(&actual) = seq.get(m.pos - 1) else {
         return Err(EsmError::Mutation(format!(
             "{m}: position {} is beyond the sequence length {}",
@@ -51,7 +74,7 @@ fn check(seq: &[u8], m: &Mutation) -> Result<()> {
             seq.len()
         )));
     };
-    if (actual as char).to_ascii_uppercase() != m.wt {
+    if actual as char != m.wt {
         return Err(EsmError::Mutation(format!(
             "{m}: wild-type residue at {} is {}, not {}",
             m.pos, actual as char, m.wt
@@ -60,14 +83,39 @@ fn check(seq: &[u8], m: &Mutation) -> Result<()> {
     Ok(())
 }
 
+/// The substitutions of one variant: each position at most once.
+fn check_variant(mutations: &[Mutation]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for m in mutations {
+        if !seen.insert(m.pos) {
+            return Err(EsmError::Mutation(format!(
+                "{m}: position {} is mutated more than once in one variant",
+                m.pos
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Normalised wild type and its tokens. Positions in mutations count residues of the
+/// normalised sequence, which is also what the tokens are built from, so the two cannot drift
+/// apart (whitespace, for one, used to be counted by one and skipped by the other).
+fn prepare(wt_seq: &str) -> Result<(String, Vec<u32>)> {
+    let seq = Tokenizer::normalize(wt_seq)?;
+    let (tokens, _) = Tokenizer::encode(&seq)?;
+    Ok((seq, tokens))
+}
+
 /// Wild-type marginals: one forward pass on the unmasked sequence;
 /// `score = log p(mt | wt seq) − log p(wt | wt seq)` at the mutated position.
+///
+/// `mutations` are scored independently (alternatives at one position are allowed); the wild
+/// type goes through [`Tokenizer::normalize`].
 pub fn score_wt_marginal(model: &Esm2, wt_seq: &str, mutations: &[Mutation]) -> Result<Vec<f32>> {
-    let seq = wt_seq.trim().as_bytes();
+    let (seq, tokens) = prepare(wt_seq)?;
     for m in mutations {
-        check(seq, m)?;
+        check(seq.as_bytes(), m)?;
     }
-    let (tokens, _) = Tokenizer::encode(wt_seq)?;
     let lp = model.log_probs(&tokens)?;
     Ok(mutations
         .iter()
@@ -80,16 +128,16 @@ pub fn score_wt_marginal(model: &Esm2, wt_seq: &str, mutations: &[Mutation]) -> 
 
 /// Masked marginals: mask each distinct mutated position (one forward pass per position);
 /// `score = log p(mt | masked) − log p(wt | masked)`. The ProteinGym-standard variant.
+/// Same input rules as [`score_wt_marginal`].
 pub fn score_masked_marginal(
     model: &Esm2,
     wt_seq: &str,
     mutations: &[Mutation],
 ) -> Result<Vec<f32>> {
-    let seq = wt_seq.trim().as_bytes();
+    let (seq, tokens) = prepare(wt_seq)?;
     for m in mutations {
-        check(seq, m)?;
+        check(seq.as_bytes(), m)?;
     }
-    let (tokens, _) = Tokenizer::encode(wt_seq)?;
     let positions: BTreeSet<usize> = mutations.iter().map(|m| m.pos).collect();
     let mut rows = std::collections::HashMap::with_capacity(positions.len());
     for pos in positions {
@@ -122,11 +170,12 @@ pub struct MarginalScorer<'m> {
 }
 
 impl<'m> MarginalScorer<'m> {
+    /// `wt_seq` goes through [`Tokenizer::normalize`].
     pub fn new(model: &'m Esm2, wt_seq: &str, masked: bool) -> Result<Self> {
-        let (tokens, _) = Tokenizer::encode(wt_seq)?;
+        let (seq, tokens) = prepare(wt_seq)?;
         Ok(Self {
             model,
-            seq: wt_seq.trim().as_bytes().to_vec(),
+            seq: seq.into_bytes(),
             tokens,
             masked,
             wt_rows: None,
@@ -134,8 +183,10 @@ impl<'m> MarginalScorer<'m> {
         })
     }
 
-    /// Score one variant's substitutions (same order as `mutations`).
+    /// Score one variant's substitutions (same order as `mutations`). A variant mutates each
+    /// position at most once.
     pub fn score(&mut self, mutations: &[Mutation]) -> Result<Vec<f32>> {
+        check_variant(mutations)?;
         for m in mutations {
             check(&self.seq, m)?;
         }
@@ -175,13 +226,13 @@ pub struct ScanRow {
 
 /// Full L × 20 scan. `masked = false` uses wild-type marginals (one pass);
 /// `masked = true` masks each position in turn (L passes).
+///
+/// Positions whose wild type is not one of the twenty (`X`, `B`, `Z`, `U`, `O`) get no row: a
+/// substitution score is relative to the wild-type residue, and there is none to compare with.
+/// Rows keep their true `pos`, so the result can be shorter than the sequence.
 pub fn scan(model: &Esm2, wt_seq: &str, masked: bool) -> Result<Vec<ScanRow>> {
-    let seq: Vec<char> = wt_seq
-        .trim()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    let (tokens, _) = Tokenizer::encode(wt_seq)?;
+    let (seq, tokens) = prepare(wt_seq)?;
+    let seq: Vec<char> = seq.chars().collect();
     let wt_rows: Option<Vec<Vec<f32>>> = if masked {
         None
     } else {
@@ -189,6 +240,9 @@ pub fn scan(model: &Esm2, wt_seq: &str, masked: bool) -> Result<Vec<ScanRow>> {
     };
     let mut out = Vec::with_capacity(seq.len());
     for (i, &wt) in seq.iter().enumerate() {
+        if !AMINO_ACIDS.contains(&wt) {
+            continue;
+        }
         let pos = i + 1;
         let row: Vec<f32> = match &wt_rows {
             Some(rows) => rows[pos].clone(),
@@ -203,11 +257,7 @@ pub fn scan(model: &Esm2, wt_seq: &str, masked: bool) -> Result<Vec<ScanRow>> {
         for (k, aa) in AMINO_ACIDS.iter().enumerate() {
             scores[k] = row[Tokenizer::residue_id(*aa) as usize] - wt_lp;
         }
-        out.push(ScanRow {
-            pos,
-            wt: wt.to_ascii_uppercase(),
-            scores,
-        });
+        out.push(ScanRow { pos, wt, scores });
     }
     Ok(out)
 }
@@ -259,5 +309,132 @@ mod tests {
             }
         )
         .is_err());
+    }
+
+    fn m(s: &str) -> Mutation {
+        parse_mutation(s).unwrap()
+    }
+
+    #[test]
+    fn whitespace_in_the_wild_type_does_not_shift_positions() {
+        // Residue 11 is the Q after the space. Counting the space made Q12A pass the wild-type
+        // check and score residue 12 (I); Q23A scored the <eos> row.
+        let model = crate::model::tests::tiny_model();
+        let spaced = "MKTAYIAKQR QISFVKSHFSRQ";
+        let plain = "MKTAYIAKQRQISFVKSHFSRQ";
+        let q11 = [m("Q11A")];
+        let want = score_wt_marginal(&model, plain, &q11).unwrap();
+        assert_eq!(score_wt_marginal(&model, spaced, &q11).unwrap(), want);
+        assert_eq!(
+            score_masked_marginal(&model, "MKTAYIAKQR\nQISF VKSHFSRQ", &q11).unwrap(),
+            score_masked_marginal(&model, plain, &q11).unwrap()
+        );
+        let mut scorer = MarginalScorer::new(&model, spaced, false).unwrap();
+        assert_eq!(scorer.score(&q11).unwrap(), want);
+        for bad in ["Q12A", "Q23A"] {
+            assert!(
+                score_wt_marginal(&model, spaced, &[m(bad)]).is_err(),
+                "{bad}"
+            );
+            assert!(
+                score_masked_marginal(&model, spaced, &[m(bad)]).is_err(),
+                "{bad}"
+            );
+            assert!(scorer.score(&[m(bad)]).is_err(), "{bad}");
+        }
+        assert_eq!(scan(&model, spaced, false).unwrap().len(), 22);
+    }
+
+    #[test]
+    fn non_amino_acid_characters_are_refused() {
+        let model = crate::model::tests::tiny_model();
+        // Mutation targets must be one of the twenty: J/X/B/Z/U/O were scored against <unk>
+        // or ambiguity tokens.
+        for bad in [
+            "A1J", "A1X", "A1B", "A1Z", "A1U", "A1O", "X1A", "A1*", "A1-",
+        ] {
+            assert!(parse_mutation(bad).is_err(), "{bad}");
+        }
+        // Wild type: digits, gaps, stops and unknown letters used to become tokens.
+        for bad in ["ACD1E", "AC-DE", "AC.DE", "AC*DE", "ACJDE", "AC_DE", ""] {
+            assert!(
+                score_wt_marginal(&model, bad, &[m("A1C")]).is_err(),
+                "{bad:?}"
+            );
+            assert!(MarginalScorer::new(&model, bad, false).is_err(), "{bad:?}");
+            assert!(scan(&model, bad, false).is_err(), "{bad:?}");
+        }
+        let err = score_wt_marginal(&model, "ACJDE", &[m("A1C")]).unwrap_err();
+        assert!(err.to_string().contains("'J' at position 3"), "{err}");
+        // A trailing stop is dropped; lower case is accepted.
+        assert_eq!(
+            score_wt_marginal(&model, "acdek*", &[m("A1C")]).unwrap(),
+            score_wt_marginal(&model, "ACDEK", &[m("A1C")]).unwrap()
+        );
+        // ESM's own ambiguity tokens are part of the vocabulary the model was trained on.
+        assert!(score_wt_marginal(&model, "ACXDE", &[m("A1C")]).is_ok());
+    }
+
+    #[test]
+    fn scan_skips_non_canonical_wild_type_positions() {
+        // A substitution score is relative to the wild-type residue, which X is not.
+        let model = crate::model::tests::tiny_model();
+        let rows = scan(&model, "ACXDE", false).unwrap();
+        assert_eq!(rows.iter().map(|r| r.pos).collect::<Vec<_>>(), [1, 2, 4, 5]);
+        for r in &rows {
+            let k = AMINO_ACIDS.iter().position(|&a| a == r.wt).unwrap();
+            assert_eq!(r.scores[k], 0.0);
+        }
+        assert_eq!(scan(&model, "ACXDE", true).unwrap().len(), 4);
+        // Substitutions at an ambiguous wild-type position are refused, not scored against X.
+        assert!(score_wt_marginal(&model, "ACXDE", &[m("C2A")]).is_ok());
+        let x3 = Mutation {
+            wt: 'X',
+            pos: 3,
+            mt: 'A',
+        };
+        assert!(score_wt_marginal(&model, "ACXDE", &[x3]).is_err());
+    }
+
+    #[test]
+    fn position_zero_is_an_error_not_an_underflow() {
+        let model = crate::model::tests::tiny_model();
+        let zero = Mutation {
+            wt: 'A',
+            pos: 0,
+            mt: 'C',
+        };
+        let err = score_wt_marginal(&model, "ACDE", &[zero]).unwrap_err();
+        assert!(err.to_string().contains("1-based"), "{err}");
+        assert!(score_masked_marginal(&model, "ACDE", &[zero]).is_err());
+        let mut scorer = MarginalScorer::new(&model, "ACDE", true).unwrap();
+        assert!(scorer.score(&[zero]).is_err());
+    }
+
+    #[test]
+    fn mutation_syntax_is_strict() {
+        // `usize::from_str` takes a leading '+'.
+        assert!(parse_mutation("A+10G").is_err());
+        assert!(parse_mutation("A 10G").is_err());
+        assert!(parse_mutation("A1_0G").is_err());
+        assert_eq!(parse_mutation(" a10g ").unwrap(), m("A10G"));
+    }
+
+    #[test]
+    fn one_variant_cannot_mutate_a_position_twice() {
+        // A10G,A10C is not a variant; summing both scores was meaningless.
+        let model = crate::model::tests::tiny_model();
+        let mut scorer = MarginalScorer::new(&model, "ACDE", false).unwrap();
+        let err = scorer.score(&[m("A1G"), m("A1C")]).unwrap_err();
+        assert!(err.to_string().contains("more than once"), "{err}");
+        assert!(scorer.score(&[m("A1G"), m("C2A")]).is_ok());
+        // The one-shot APIs score a list of independent substitutions, where alternatives at
+        // one position are the point.
+        assert_eq!(
+            score_wt_marginal(&model, "ACDE", &[m("A1G"), m("A1C")])
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

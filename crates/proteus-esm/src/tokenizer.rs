@@ -20,6 +20,10 @@ pub const AMINO_ACIDS: [char; 20] = [
     'Y',
 ];
 
+/// Ambiguity and rare amino-acid codes that are tokens of the ESM vocabulary: `X` unknown,
+/// `B` D/N, `Z` E/Q, `U` selenocysteine, `O` pyrrolysine.
+pub const NON_CANONICAL: [char; 5] = ['X', 'B', 'Z', 'U', 'O'];
+
 /// Character-level tokenizer: `<cls>` + one token per residue + `<eos>`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Tokenizer;
@@ -43,7 +47,41 @@ impl Tokenizer {
             .and_then(|t| t.chars().next())
     }
 
+    /// Clean a protein sequence for scoring: drop whitespace, upper-case, drop one trailing `*`
+    /// (stop), and refuse anything that is not an amino-acid letter.
+    ///
+    /// Accepted: the twenty standard amino acids, plus `X`, `B`, `Z`, `U` and `O`, which are
+    /// tokens of ESM's own vocabulary (UniRef contains them) and are encoded as such, as
+    /// `transformers` does. Everything else (`J`, digits, `-`/`.` gaps, `*` before the end)
+    /// is an error rather than an `<unk>` or gap token the scores would silently include.
+    /// Positions in the result are the residue numbers mutations refer to.
+    pub fn normalize(seq: &str) -> Result<String> {
+        let mut out: String = seq.chars().filter(|c| !c.is_whitespace()).collect();
+        if out.ends_with('*') {
+            out.pop();
+        }
+        out.make_ascii_uppercase();
+        if out.is_empty() {
+            return Err(EsmError::Sequence("empty sequence".into()));
+        }
+        if let Some((i, c)) = out
+            .chars()
+            .enumerate()
+            .find(|(_, c)| !AMINO_ACIDS.contains(c) && !NON_CANONICAL.contains(c))
+        {
+            return Err(EsmError::Sequence(format!(
+                "'{c}' at position {} is not an amino-acid letter (accepted: the 20 standard \
+                 amino acids, X/B/Z/U/O, and a final '*'; whitespace is ignored)",
+                i + 1
+            )));
+        }
+        Ok(out)
+    }
+
     /// Encode a protein sequence. Errors on empty input; counts `<unk>` substitutions.
+    ///
+    /// This mirrors the `transformers` tokenizer and does not validate; the scoring functions
+    /// run [`Tokenizer::normalize`] first.
     pub fn encode(seq: &str) -> Result<(Vec<u32>, usize)> {
         let seq = seq.trim();
         if seq.is_empty() {
@@ -84,6 +122,15 @@ mod tests {
                 17, 2
             ]
         );
+    }
+
+    #[test]
+    fn normalize_strips_whitespace_and_a_final_stop() {
+        assert_eq!(Tokenizer::normalize(" mkt ay\n\tQR* ").unwrap(), "MKTAYQR");
+        assert_eq!(Tokenizer::normalize("AXBZUO").unwrap(), "AXBZUO");
+        for bad in ["", " * ", "AC*D", "A-C", "A.C", "A1C", "AJC", "A?C", "Aé"] {
+            assert!(Tokenizer::normalize(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
