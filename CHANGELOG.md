@@ -37,9 +37,9 @@ All notable changes to this project are documented here. The format follows
     terminal viewers do infer secondary structure, so that is no longer claimed as a difference.
   - Both crates now ship `LICENSE-MIT` and `LICENSE-APACHE` in the package.
 - `view --html` and `--web` were described as a Mol\* page in `--help`, the README and the
-  smoke test; the page has been 3Dmol.js since 0.5.0. The smoke assertion had kept passing
-  only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now checks
-  for the page's own viewer call.
+  smoke test; the page moved to 3Dmol.js after 0.5.0 (unreleased). The smoke assertion kept
+  passing only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now
+  checks for the page's own viewer call.
 
 ### Changed
 - **Positioning corrected against a proper landscape search.** Three "only in Rust" claims were
