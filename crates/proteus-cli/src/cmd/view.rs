@@ -37,11 +37,11 @@ pub struct Args {
     #[arg(long)]
     height: Option<usize>,
 
-    /// Open structure in browser via standalone Mol* WebGL 3D viewer
+    /// Open the structure in a browser: a self-contained 3Dmol.js page, no network needed
     #[arg(long)]
     web: bool,
 
-    /// Export standalone Mol* WebGL 3D viewer HTML file
+    /// Write that self-contained 3Dmol.js page (with our DSSP assignment) to a file
     #[arg(long)]
     html: Option<PathBuf>,
 }

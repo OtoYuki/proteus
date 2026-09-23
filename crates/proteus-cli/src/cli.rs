@@ -13,7 +13,10 @@ use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "proteus")]
-#[command(about = "High-throughput Bio-Compute Pipeline & Orchestration CLI", long_about = None)]
+#[command(
+    about = "The protein-engineering design loop in one binary: mutate, fold, analyse, view, and serve GA4GH TES",
+    long_about = None
+)]
 #[command(version)]
 pub struct Cli {
     #[command(subcommand)]
@@ -29,23 +32,23 @@ pub enum ConfidenceSourceArg {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Submit a protein sequence to the bio-compute pipeline
+    /// Fold one sequence as a tracked job (prints its id)
     Submit(cmd::submit::Args),
-    /// Query the status of an existing computational job
+    /// State, tier and timings of a job
     Status(cmd::status::Args),
-    /// Inspect structural prediction and biophysical metrics for a job
+    /// Full biophysical report of a finished job
     Inspect(cmd::inspect::Args),
-    /// Direct offline biophysical analysis of a PDB file using native Rust engine
+    /// Quality metrics of structure files: one full report, or a table over many (Parquet/CSV/JSON)
     Analyze(cmd::analyze::Args),
-    /// 3D structural ribbon visualization in the terminal (half-block / Braille / Sixel / kitty)
+    /// Cartoon ribbon in the terminal (half-block, Braille, Sixel or kitty graphics)
     View(cmd::view::Args),
-    /// In-silico Deep Mutational Scanning (DMS) variant library generator
+    /// Write a variant library: alanine scan or site-saturation mutagenesis
     Mutate(cmd::mutate::Args),
-    /// High-throughput library screening funnel: batch folding, ranking, and leaderboard
+    /// Fold a variant library, analyse every model, rank, and export
     Screen(cmd::screen::Args),
-    /// ESM-2 protein language model: zero-shot mutation scores and deep mutational scans
+    /// ESM-2 zero-shot mutation scores and in-silico deep mutational scans
     Esm(cmd::esm::Args),
-    /// Run the headless background daemon (proteusd)
+    /// Run the daemon: GA4GH TES 1.1 server and job API
     Serve(cmd::serve::Args),
 }
 

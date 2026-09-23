@@ -1,6 +1,7 @@
 //! ESM-2 protein language model inference in pure Rust, on top of [`candle`](https://github.com/huggingface/candle).
 //!
-//! Loads any `facebook/esm2_t{6,12,30,33,36,48}_*` masked-LM checkpoint (safetensors) and
+//! Loads ESM-2 masked-LM checkpoints from safetensors — `facebook/esm2_t{6,12,30,33}_*` directly
+//! from the Hub, the 3B/15B models from local files after conversion — and
 //! exposes per-position log-probabilities, zero-shot mutation scores (wild-type marginals and
 //! masked marginals, Meier et al. 2021) and full 20×L deep-mutational-scan matrices.
 //!

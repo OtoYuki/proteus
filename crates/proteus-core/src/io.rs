@@ -83,7 +83,7 @@ fn looks_like_cif(text: &str, hint: Option<&str>) -> bool {
 }
 
 /// Which format a structure text is in, from the file-name hint when it is conclusive, else
-/// from the content (mmCIF starts with a `data_` block). Used by the Mol* exports, which must
+/// from the content (mmCIF starts with a `data_` block). Used by the HTML viewer exports, which must
 /// tell the viewer the format.
 pub fn sniff_format(text: &str, hint: Option<&str>) -> StructureFormat {
     if looks_like_cif(text, hint) {

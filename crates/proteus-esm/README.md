@@ -2,13 +2,16 @@
 
 ```toml
 [dependencies]
-proteus-esm = { git = "https://github.com/OtoYuki/proteus" }
+proteus-esm = "0.5"
 ```
 
 ESM-2 protein language model inference in pure Rust on [candle](https://github.com/huggingface/candle):
 masked-LM log-probabilities, zero-shot mutation scores (wild-type and masked marginals, Meier et al.
-2021) and full 20×L deep-mutational-scan matrices. Loads any `facebook/esm2_*` safetensors
-checkpoint from the Hub (tiny built-in fetcher, no `hf-hub`) or from local files.
+2021) and full 20×L deep-mutational-scan matrices. Loads `facebook/esm2_t6_8M` through
+`esm2_t33_650M` straight from the Hub (a small built-in fetcher, no `hf-hub`), or any ESM-2
+checkpoint from local `config.json` + `model.safetensors`. The 3B and 15B repositories on the
+Hub publish only sharded PyTorch `.bin` files, so those two need converting to safetensors
+first.
 
 ```rust
 use proteus_esm::{Device, Esm2, parse_mutation, score_masked_marginal};
@@ -30,20 +33,25 @@ This crate is aimed one step further down the pipeline: **variant effect**, not 
 
 - **Mutation scoring**, wild-type and masked marginals (Meier et al. 2021), and full 20×L deep
   mutational scans — not embedding extraction.
-- **`MarginalScorer` caches the wild-type forward pass**, so scoring a library is one pass
-  rather than one per variant (875 variants in 0.6 s on CPU).
-- **Parity pinned in CI** against `transformers.EsmForMaskedLM` on committed reference logits,
-  and accuracy reported on real data (ProteinGym v1.1 Spearman ρ, mean |ρ| 0.42 with the 35M
-  checkpoint) rather than only on synthetic checks.
-- **No `hf-hub` dependency** — a ~40-line fetcher, so the dependency tree stays small and the
+- **`MarginalScorer` caches forward passes**: wild-type marginals score a whole library from
+  one pass; masked marginals need one pass per distinct mutated position, not one per variant.
+  A full scan of crambin (46 residues, 874 single mutants) with the 8M checkpoint takes 0.05 s
+  with wild-type marginals and 1.1 s with masked marginals, end to end including model load,
+  on a laptop CPU (i7-11800H).
+- **Parity checked against `transformers.EsmForMaskedLM`** on committed reference logits (the
+  8M checkpoint on every push; the 35M test is `#[ignore]`d for download size and run by hand),
+  and accuracy reported on real data — ProteinGym v1.1 Spearman ρ, mean |ρ| 0.42 with the 35M
+  checkpoint over the five smallest single-mutant assays — rather than only on synthetic checks.
+- **No `hf-hub` dependency** — a ~50-line fetcher, so the dependency tree stays small and the
   MSRV stays put.
 
-Zero-shot scores from any protein language model are a triage signal, not a measurement. ESM-2's
-published weak spots are **viral proteins** and **long multi-domain sequences**; it is a
-reasonable signal for human and microbial ones. ESM-2 rather than ESM-3 because ESM-3's weights
-are licensed for non-commercial use only.
+Zero-shot scores from any protein language model are a triage signal, not a measurement. On
+ProteinGym's own per-taxon breakdown ESM-2 650M reaches Spearman ρ ≈ 0.46 on human assays and
+≈ 0.26 on viral ones, so treat viral proteins with particular caution. Newer checkpoints exist:
+ESM C and the open ESM3 weights are MIT-licensed as of mid-2026, but they are different
+architectures and this crate implements ESM-2 only.
 
 Numerical parity with `transformers.EsmForMaskedLM` (fp32) is pinned by `tests/parity.rs`
 against reference logits committed under `tests/data/*.json` (from `validate/esm_reference.py`): logits within 1e-2,
-amino-acid log-probabilities within 5e-3 (observed ≤ 2.5e-3) on three proteins for the 8M and 35M
-checkpoints. CPU only by default; enable `candle-core/cuda` or `candle-core/metal` downstream.
+amino-acid log-probabilities within 5e-3 (largest observed ≈ 2.5e-3) on three proteins for the
+8M and 35M checkpoints. CPU only by default; enable `candle-core/cuda` or `candle-core/metal` downstream.

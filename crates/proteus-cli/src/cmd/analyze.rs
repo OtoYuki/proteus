@@ -1,15 +1,30 @@
-//! `proteus analyze` — All-atom biophysics of a structure file, with no database involved.
+//! `proteus analyze` — All-atom biophysics of structure files, with no database involved.
+//!
+//! One file prints the full report. Several files, a directory, `--export` or `--json` switch
+//! to the table form: one row per structure, analysed in parallel, written as Parquet/CSV/JSON
+//! so a folder of predicted models can be triaged in DuckDB, Polars or pandas.
 
 use super::prelude::*;
+use proteus_core::qc::{is_structure_file_name, structure_qc, StructureQc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 /// Arguments of `proteus analyze`.
 #[derive(clap::Args, Debug)]
+#[command(after_help = "Examples:
+  proteus analyze model.pdb
+  proteus analyze models/ --export qc.parquet
+  proteus analyze designs/*.cif --reference target.pdb --json | jq .rmsd_to_reference")]
 pub struct Args {
-    /// Path to PDB structure file
-    #[arg(short, long)]
-    pdb: PathBuf,
+    /// Structure files (PDB or mmCIF, optionally gzipped) or directories to search recursively
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
 
-    /// Optional reference PDB for Kabsch RMSD alignment
+    /// Structure file (the same as a PATH argument; kept for older scripts)
+    #[arg(short, long, value_name = "PATH")]
+    pdb: Vec<PathBuf>,
+
+    /// Reference structure: adds the Kabsch C-alpha RMSD of every input against it
     #[arg(short, long)]
     reference: Option<PathBuf>,
 
@@ -17,23 +32,259 @@ pub struct Args {
     /// `auto` inspects the header and the value distribution.
     #[arg(long, value_enum, default_value_t = ConfidenceSourceArg::Auto)]
     confidence_source: ConfidenceSourceArg,
+
+    /// Write one row per structure to a .parquet, .csv or .json file
+    #[arg(short, long, value_name = "FILE")]
+    export: Option<PathBuf>,
+
+    /// Print one JSON object per structure to stdout (JSON Lines) instead of a table
+    #[arg(long)]
+    json: bool,
+
+    /// Structures analysed in parallel [default: the number of CPUs]
+    #[arg(short, long)]
+    jobs: Option<usize>,
+
+    /// Rows shown in the terminal summary, best fitness first (the export always has all)
+    #[arg(long, default_value_t = 20)]
+    top: usize,
+}
+
+/// Expand directories into the structure files beneath them, sorted, keeping explicit file
+/// arguments in the order given. An explicit file is taken whatever its extension.
+fn collect_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+            .with_context(|| format!("cannot read directory {}", dir.display()))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                walk(&p, out)?;
+            } else if is_structure_file_name(&p) {
+                out.push(p);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    for p in paths {
+        if p.is_dir() {
+            let before = out.len();
+            walk(p, &mut out)?;
+            if out.len() == before {
+                bail!(
+                    "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under {}",
+                    p.display()
+                );
+            }
+        } else if p.exists() {
+            out.push(p.clone());
+        } else {
+            bail!("no such file or directory: {}", p.display());
+        }
+    }
+    Ok(out)
+}
+
+fn forced_source(arg: ConfidenceSourceArg) -> Option<ConfidenceSource> {
+    match arg {
+        ConfidenceSourceArg::Auto => None,
+        ConfidenceSourceArg::Predicted => Some(ConfidenceSource::Predicted),
+        ConfidenceSourceArg::Experimental => Some(ConfidenceSource::ExperimentalBFactor),
+    }
+}
+
+/// Analyse `inputs` on `jobs` threads. Results come back in input order.
+fn analyze_many(
+    inputs: &[PathBuf],
+    reference: Option<&pdbtbx::PDB>,
+    confidence: Option<ConfidenceSource>,
+    jobs: usize,
+) -> Vec<std::result::Result<StructureQc, String>> {
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<std::result::Result<StructureQc, String>>>> =
+        Mutex::new(vec![None; inputs.len()]);
+    let bar = ProgressBar::new(inputs.len() as u64);
+    bar.set_style(
+        ProgressStyle::with_template("{bar:40} {pos}/{len} structures  {elapsed} (eta {eta})")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    if inputs.len() < 2 {
+        bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
+    std::thread::scope(|s| {
+        for _ in 0..jobs.clamp(1, inputs.len().max(1)) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = inputs.get(i) else { break };
+                let r = structure_qc(path, reference, confidence).map_err(|e| e.to_string());
+                results.lock().unwrap_or_else(|p| p.into_inner())[i] = Some(r);
+                bar.inc(1);
+            });
+        }
+    });
+    bar.finish_and_clear();
+    results
+        .into_inner()
+        .unwrap_or_else(|p| p.into_inner())
+        .into_iter()
+        .map(|r| r.unwrap_or_else(|| Err("not analysed".into())))
+        .collect()
+}
+
+fn opt(v: Option<f64>, prec: usize) -> String {
+    v.map(|v| format!("{v:.prec$}"))
+        .unwrap_or_else(|| "–".into())
+}
+
+fn print_summary(rows: &[StructureQc], top: usize) {
+    if top == 0 || rows.is_empty() {
+        return;
+    }
+    let mut order: Vec<&StructureQc> = rows.iter().collect();
+    order.sort_by(|a, b| b.fitness.total_cmp(&a.fitness));
+    let mut table = Table::new();
+    table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
+    table.set_header(vec![
+        "file",
+        "res",
+        "ch",
+        "pLDDT",
+        "Rama fav %",
+        "outliers",
+        "overlap/1k",
+        "Rg/Rg₀",
+        "H %",
+        "E %",
+        "RMSD",
+        "fitness",
+    ]);
+    for r in order.iter().take(top) {
+        let name = Path::new(&r.file)
+            .file_name()
+            .map_or_else(|| r.file.clone(), |n| n.to_string_lossy().into_owned());
+        table.add_row(vec![
+            name,
+            r.n_residues.to_string(),
+            r.n_chains.to_string(),
+            opt(r.plddt_mean, 1),
+            format!("{:.1}", r.rama_favored_pct),
+            r.rama_outliers.to_string(),
+            format!("{:.1}", r.heavy_atom_overlap_score),
+            format!("{:.2}", r.rg_ratio),
+            format!("{:.0}", r.helix_pct),
+            format!("{:.0}", r.strand_pct),
+            opt(r.rmsd_to_reference, 2),
+            format!("{:.1}", r.fitness),
+        ]);
+    }
+    println!("{table}");
+    if rows.len() > top {
+        println!(
+            "{} more not shown (--top {}); the export has every row.",
+            rows.len() - top,
+            top
+        );
+    }
 }
 
 pub async fn run(args: Args) -> Result<()> {
     let Args {
+        mut paths,
         pdb,
         reference,
         confidence_source,
+        export,
+        json,
+        jobs,
+        top,
     } = args;
+    paths.extend(pdb);
+    if paths.is_empty() {
+        bail!("give at least one structure file or directory, e.g. `proteus analyze model.pdb`");
+    }
+    if let Some(ref out) = export {
+        proteus_storage::export::check_export_path(out)?;
+    }
+    let inputs = collect_inputs(&paths)?;
+    let single_report = inputs.len() == 1 && paths[0].is_file() && export.is_none() && !json;
+    if single_report {
+        return print_report(&inputs[0], reference.as_deref(), confidence_source);
+    }
+
+    let reference_pdb = reference
+        .as_deref()
+        .map(proteus_core::io::open_structure)
+        .transpose()
+        .context("cannot read the reference structure")?;
+    let jobs = jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    });
+    let started = std::time::Instant::now();
+    let results = analyze_many(
+        &inputs,
+        reference_pdb.as_ref(),
+        forced_source(confidence_source),
+        jobs,
+    );
+    let elapsed = started.elapsed();
+
+    let mut rows = Vec::with_capacity(results.len());
+    let mut failures = Vec::new();
+    for (path, r) in inputs.iter().zip(results) {
+        match r {
+            Ok(row) => rows.push(row),
+            Err(e) => failures.push((path, e)),
+        }
+    }
+
+    if json {
+        for r in &rows {
+            println!("{}", serde_json::to_string(r)?);
+        }
+    } else {
+        print_summary(&rows, top);
+    }
+    if let Some(ref out) = export {
+        proteus_storage::save_qc_table(&rows, out)
+            .with_context(|| format!("cannot write {}", out.display()))?;
+    }
+    eprintln!(
+        "{} of {} structures analysed in {:.2} s{}",
+        rows.len(),
+        inputs.len(),
+        elapsed.as_secs_f64(),
+        export
+            .as_ref()
+            .map(|p| format!(", written to {}", p.display()))
+            .unwrap_or_default()
+    );
+    for (path, e) in &failures {
+        eprintln!("  failed: {}: {e}", path.display());
+    }
+    if !failures.is_empty() {
+        bail!(
+            "{} of {} structures could not be analysed",
+            failures.len(),
+            inputs.len()
+        );
+    }
+    Ok(())
+}
+
+/// The full single-structure report.
+fn print_report(
+    pdb: &Path,
+    reference: Option<&Path>,
+    confidence_source: ConfidenceSourceArg,
+) -> Result<()> {
     println!("Analyzing structure file: {:?}", pdb);
-    let mut metrics =
-        analyze_pdb_file(&pdb, reference.as_deref()).context("Biophysical analysis failed")?;
-    let forced = match confidence_source {
-        ConfidenceSourceArg::Auto => None,
-        ConfidenceSourceArg::Predicted => Some(ConfidenceSource::Predicted),
-        ConfidenceSourceArg::Experimental => Some(ConfidenceSource::ExperimentalBFactor),
-    };
-    if let Some(src) = forced {
+    let mut metrics = analyze_pdb_file(pdb, reference).context("Biophysical analysis failed")?;
+    if let Some(src) = forced_source(confidence_source) {
         metrics.confidence_source = src;
         let residues = metrics
             .secondary_structure_summary

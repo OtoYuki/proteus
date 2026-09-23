@@ -387,7 +387,7 @@ pub async fn get_prediction_pdb(
     }
 }
 
-/// Mol* page for a job's prediction. The prediction file is inspected so that the viewer is
+/// 3Dmol.js page for a job's prediction. The prediction file is inspected so that the viewer is
 /// told the right format and coloured by confidence on the file's own scale; a job without a
 /// prediction is a 404 rather than an empty viewer.
 pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uuid>) -> Response {
