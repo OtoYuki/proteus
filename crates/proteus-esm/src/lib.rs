@@ -41,3 +41,11 @@ pub enum EsmError {
 }
 
 pub type Result<T> = std::result::Result<T, EsmError>;
+
+/// An I/O error that names the path it happened on (`std::io::Error` does not).
+pub(crate) fn io_at(path: &std::path::Path, e: std::io::Error) -> EsmError {
+    EsmError::Io(std::io::Error::new(
+        e.kind(),
+        format!("{}: {e}", path.display()),
+    ))
+}

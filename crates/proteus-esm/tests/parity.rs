@@ -14,6 +14,7 @@
 //! `validate/esm_reference.py` (`--long` for the latter). Needs the checkpoints (downloaded from
 //! the Hub into the cache on first run), so the tests are `#[ignore]`d:
 //! `cargo test -p proteus-esm -- --ignored`.
+#![cfg(feature = "hub")]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

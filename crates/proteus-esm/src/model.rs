@@ -59,9 +59,9 @@ fn default_rotary() -> String {
 
 impl EsmConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)?;
-        let cfg: EsmConfig =
-            serde_json::from_str(&text).map_err(|e| EsmError::Config(e.to_string()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| crate::io_at(path, e))?;
+        let cfg: EsmConfig = serde_json::from_str(&text)
+            .map_err(|e| EsmError::Config(format!("{}: {e}", path.display())))?;
         if cfg.position_embedding_type != "rotary" {
             return Err(EsmError::Config(format!(
                 "only rotary position embeddings are supported (config has '{}')",
@@ -231,8 +231,14 @@ impl Esm2 {
     /// Load from a `config.json` and a `.safetensors` file.
     pub fn from_files(config: &Path, weights: &Path, device: &Device) -> Result<Self> {
         let cfg = EsmConfig::from_file(config)?;
-        let data = std::fs::read(weights)?;
-        let vb = VarBuilder::from_buffered_safetensors(data, DType::F32, device)?;
+        let data = std::fs::read(weights).map_err(|e| crate::io_at(weights, e))?;
+        let vb = VarBuilder::from_buffered_safetensors(data, DType::F32, device).map_err(|e| {
+            EsmError::Config(format!(
+                "{}: not a readable safetensors file ({e}); if it is a cached download, delete \
+                 it to fetch it again",
+                weights.display()
+            ))
+        })?;
         Self::load(cfg, vb, device.clone())
     }
 
@@ -505,6 +511,38 @@ pub(crate) mod tests {
             .expect("refused");
         assert!(err.to_string().contains("head dimension"), "{err}");
         assert!(load_tiny(tiny_config(1, 2), tiny(1, Some(&[1.0]))).is_ok());
+    }
+
+    #[test]
+    fn missing_or_broken_local_files_are_named() {
+        // Used to be a bare "io: No such file or directory (os error 2)".
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        let weights = dir.path().join("model.safetensors");
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&config.display().to_string()), "{err}");
+        std::fs::write(
+            &config,
+            r#"{"hidden_size":4,"num_hidden_layers":1,"num_attention_heads":1,
+            "intermediate_size":8,"vocab_size":33}"#,
+        )
+        .unwrap();
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&weights.display().to_string()), "{err}");
+        // An HTML error page cached under the weights' name.
+        std::fs::write(&weights, b"<html>login required</html>").unwrap();
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&weights.display().to_string()), "{err}");
+        assert!(err.contains("delete"), "{err}");
     }
 
     #[test]
