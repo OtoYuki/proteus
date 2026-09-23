@@ -1,6 +1,8 @@
 //! Brand colours as raw ANSI escape strings, for the hand-drawn terminal surfaces (the 3-D
 //! viewer's status bar and dashboard). Same rules as the home screen: roles at the terminal's
-//! colour depth, and nothing but bold and dim under `NO_COLOR`.
+//! colour depth, nothing but bold and dim under `NO_COLOR`, and no escapes at all for a dumb
+//! terminal or a pipe (`for_stdout`). The 3-D picture itself is drawn in 24-bit colour by the
+//! terminal back-ends and is not governed by this.
 
 use super::{to_ansi256, ColorDepth, Role, Theme, DARK};
 use crate::rasterizer::buffer::ColorRGB;
@@ -17,7 +19,12 @@ pub struct Ansi {
 
 impl Ansi {
     pub fn detect() -> Self {
-        Self::with_depth(ColorDepth::detect())
+        // A dumb terminal takes no escape sequences at all, not even bold.
+        let dumb = std::env::var("TERM").is_ok_and(|t| t == "dumb");
+        Self {
+            plain: dumb,
+            ..Self::with_depth(ColorDepth::detect())
+        }
     }
 
     /// For lines printed to standard output: no colour when it is not a terminal (a pipe, a
@@ -69,7 +76,7 @@ impl Ansi {
             ColorDepth::TrueColor => format!("\x1b[38;2;{};{};{}m", c.r, c.g, c.b),
             ColorDepth::Ansi256 => format!("\x1b[38;5;{}m", to_ansi256(c)),
             ColorDepth::Ansi16 => {
-                let i = nearest_ansi16(c);
+                let i = ansi16_for_data(c);
                 if i < 8 {
                     format!("\x1b[3{i}m")
                 } else {
@@ -112,7 +119,38 @@ impl Ansi {
     }
 }
 
+/// A data colour in 16 colours, by hue: nearest-RGB sends the brand's muted colours to grey
+/// (helix, strand, target and reference all became colour 8). Pale or grey colours map to
+/// white or grey; everything else to the chromatic colour of the nearest hue.
+fn ansi16_for_data(c: ColorRGB) -> u8 {
+    let (r, g, b) = (c.r as f32, c.g as f32, c.b as f32);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    if max - min < 40.0 {
+        return if max > 160.0 { 7 } else { 8 };
+    }
+    let d = max - min;
+    let hue = if max == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    // Bins, not nearest hue: orange (under 40°) counts as red, so the AlphaFold <50 band
+    // (orange) and 50–70 band (yellow) stay apart.
+    match hue {
+        h if h < 40.0 => 1,
+        h if h < 90.0 => 3,
+        h if h < 150.0 => 2,
+        h if h < 210.0 => 6,
+        h if h < 270.0 => 4,
+        h if h < 330.0 => 5,
+        _ => 1,
+    }
+}
+
 /// The nearest of the 16 standard colours, by the xterm default palette.
+#[cfg(test)]
 fn nearest_ansi16(c: ColorRGB) -> u8 {
     const XTERM16: [(u8, u8, u8); 16] = [
         (0, 0, 0),
@@ -163,6 +201,22 @@ mod tests {
         assert_eq!(none.paint(Role::Sea, "x"), "x");
         assert_eq!(none.paint_rgb(ColorRGB::new(0, 83, 214), "█"), "█");
         assert_eq!(nearest_ansi16(ColorRGB::new(0, 83, 214)), 4);
+        // Data colours stay apart in 16 colours (by nearest RGB they were all grey).
+        use crate::brand::structure::{COIL, HELIX, REFERENCE, STRAND, TARGET};
+        assert_eq!(nearest_ansi16(HELIX), 8, "the old mapping, for the record");
+        assert_eq!(
+            ansi16_for_data(HELIX),
+            1,
+            "Clay is an orange-tan: red in 16 colours"
+        );
+        assert_eq!(ansi16_for_data(STRAND), 6);
+        assert_eq!(ansi16_for_data(COIL), 7);
+        assert_ne!(ansi16_for_data(TARGET), ansi16_for_data(REFERENCE));
+        use crate::rasterizer::shader::plddt_to_color as p;
+        let bands: Vec<u8> = [95.0, 80.0, 60.0, 25.0]
+            .map(|v| ansi16_for_data(p(v)))
+            .to_vec();
+        assert_eq!(bands, [4, 6, 3, 1], "pLDDT bands blue, cyan, yellow, red");
         let plain = Ansi {
             plain: true,
             ..Ansi::with_depth(ColorDepth::TrueColor)

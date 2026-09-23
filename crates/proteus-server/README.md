@@ -6,6 +6,10 @@ job API (`/api/v1/…`) with Server-Sent Events per job, a self-contained WebGL2
 Prometheus `/metrics`, `/health`, and Swagger UI at `/swagger-ui`. Optional bearer-token auth
 covers everything except `/health`, `/metrics` and the Swagger UI.
 
+With `--auth-token`, `/view/{job}` needs the bearer header too, and a browser cannot send one
+when you follow a link. Fetch the page and open the file instead (it is self-contained):
+`curl -H "Authorization: Bearer $TOKEN" http://host:8080/view/<job> -o view.html`.
+
 ```rust
 use proteus_server::{build_router_with_options, AppState, ServerOptions};
 let router = build_router_with_options(AppState::new(scheduler), ServerOptions::default());

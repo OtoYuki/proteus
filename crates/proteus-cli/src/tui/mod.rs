@@ -74,6 +74,7 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
         } else if let Some(path) = wanted {
             if resting.1.elapsed() >= SETTLE {
                 app.analyses.insert(path.clone(), Analysis::Pending);
+                app.stamps.insert(path.clone(), app::file_stamp(&path));
                 let tx = tx.clone();
                 tokio::task::spawn_blocking(move || {
                     let result = analyse(&path);
@@ -131,7 +132,10 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             }
         }
     }
-    Ok(())
+    // End here rather than returning: dropping the runtime would wait for any analysis still
+    // running on a blocking thread (a large file takes seconds; a FIFO never finishes).
+    drop(restore);
+    std::process::exit(0);
 }
 
 /// The launch: the chain folds into the mark (brand::mark::FOLD_SECONDS), the wordmark and
@@ -260,6 +264,9 @@ fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
             cmd.stderr(file.try_clone()?);
         }
         let mut child = cmd.spawn().context("spawn")?;
+        if let Ok(mut c) = CHILDREN.lock() {
+            c.push(child.id());
+        }
         if i == 0 {
             if let (Some(lines), Some(mut stdin)) = (&spec.stdin, child.stdin.take()) {
                 let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -278,6 +285,9 @@ fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
     let mut failure = None;
     for (i, mut child) in children.into_iter().enumerate() {
         let status = child.wait()?;
+        if let Ok(mut c) = CHILDREN.lock() {
+            c.retain(|pid| *pid != child.id());
+        }
         if !status.success() && failure.is_none() {
             failure = Some((i, status));
         }
@@ -341,9 +351,15 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// SIGTERM and SIGHUP end the home screen with the terminal restored. SIGINT is swallowed:
-/// in raw mode Ctrl-C is a key, and while a child runs a Ctrl-C is meant for the child (which
-/// gets it from the terminal too), not for the home screen behind it.
+/// Process ids of the child `proteus` commands running now, so a signal can stop them too.
+static CHILDREN: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+/// SIGTERM and SIGHUP end the home screen: the handler itself stops any running child, restores
+/// the terminal and exits with 128 + the signal. It must not wait for the event loop, which may
+/// never come back: once the terminal is gone (a closed window, a killed tmux pane) crossterm
+/// retries the dead tty inside `event::poll` without returning, so a flag checked by the loop
+/// was never seen and the process spun at full CPU. SIGINT is swallowed: in raw mode Ctrl-C is
+/// a key, and while a child runs the child gets the terminal's Ctrl-C itself.
 #[cfg(unix)]
 fn watch_signals() -> Result<Arc<AtomicI32>> {
     use tokio::signal::unix::{signal, SignalKind};
@@ -353,15 +369,24 @@ fn watch_signals() -> Result<Arc<AtomicI32>> {
     let received = Arc::new(AtomicI32::new(0));
     let flag = Arc::clone(&received);
     tokio::spawn(async move {
-        loop {
-            let n = tokio::select! {
-                _ = term.recv() => 15,
-                _ = hup.recv() => 1,
+        let n = loop {
+            tokio::select! {
+                _ = term.recv() => break 15,
+                _ = hup.recv() => break 1,
                 _ = int.recv() => continue,
-            };
-            flag.store(n, Ordering::SeqCst);
-            break;
+            }
+        };
+        flag.store(n, Ordering::SeqCst);
+        let pids: Vec<u32> = CHILDREN.lock().map(|c| c.clone()).unwrap_or_default();
+        for pid in pids {
+            let _ = Command::new("kill")
+                .arg(if n == 1 { "-HUP" } else { "-TERM" })
+                .arg(pid.to_string())
+                .status();
         }
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
+        ratatui::restore();
+        std::process::exit(128 + n);
     });
     Ok(received)
 }

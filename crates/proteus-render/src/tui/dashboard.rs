@@ -61,7 +61,7 @@ pub fn visible_width(s: &str) -> usize {
 /// line wider than the terminal wraps, and on the bottom row that scrolls the whole screen, so
 /// every positioned line has to go through this.
 pub fn truncate_to_width(s: &str, max_width: usize) -> String {
-    use unicode_width::UnicodeWidthChar;
+    use unicode_width::UnicodeWidthStr;
     if visible_width(s) <= max_width {
         return s.to_string();
     }
@@ -74,17 +74,22 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
             styled = true;
             continue;
         }
-        for c in part.chars() {
-            let w = c.width().unwrap_or(0);
-            if used + w > max_width {
+        // Measure prefixes of the run with the same function as `visible_width`, so that a
+        // sequence such as ❤ + VS16 (two columns together) is never cut to a wider result.
+        let mut taken = 0;
+        for (i, c) in part.char_indices() {
+            let end = i + c.len_utf8();
+            if used + part[..end].width() > max_width {
+                out.push_str(&part[..taken]);
                 break 'segments;
             }
-            used += w;
-            out.push(c);
+            taken = end;
         }
+        out.push_str(part);
+        used += part.width();
     }
     if styled {
-        out.push_str("\x1b[0m");
+        out.push_str(RESET);
     }
     out
 }
@@ -130,6 +135,25 @@ fn section_rule(
 
 /// Ramachandran markers: outliers over allowed over favoured where they share a cell. Each
 /// region has its own glyph, so the plot reads without colour.
+/// Items joined by two spaces, as many whole items as fit in `width` columns: a row never ends
+/// in half a number ("coil 4" for "coil 43%").
+fn fit_items(items: &[String], width: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0;
+    for item in items {
+        let w = visible_width(item) + if out.is_empty() { 0 } else { 2 };
+        if used + w > width {
+            break;
+        }
+        if !out.is_empty() {
+            out.push_str("  ");
+        }
+        out.push_str(item);
+        used += w;
+    }
+    out
+}
+
 fn rama_marker(region: RamachandranRegion) -> (u8, char, Role) {
     match region {
         RamachandranRegion::Outlier => (2, '▲', Role::Bad),
@@ -329,8 +353,9 @@ impl DashboardRenderer {
             lines.push(row_str);
         }
 
-        let mut axis_bar = String::from("      └───");
-        for c in 4..plot_w {
+        // "      └" sits under the left label; the plot's own columns start after it.
+        let mut axis_bar = String::from("      └");
+        for c in 0..plot_w {
             axis_bar.push(if c == mid_x { '┴' } else { '─' });
         }
         axis_bar.push('┘');
@@ -348,21 +373,31 @@ impl DashboardRenderer {
             .as_ref()
             .and_then(|m| m.ramachandran_stats.as_ref())
         {
-            lines.push(format!(
-                " {} {}  {} {}  {} {}",
-                a.paint(Role::Accent, "●"),
-                a.paint(
-                    Role::Text,
-                    &format!("favoured {:.1}%", rama.favored_fraction * 100.0)
+            let pct = |x: f64| format!("{:.1}%", x * 100.0);
+            let items = [
+                format!(
+                    "{} {}",
+                    a.paint(Role::Accent, "●"),
+                    a.paint(
+                        Role::Text,
+                        &format!("favoured {}", pct(rama.favored_fraction))
+                    )
                 ),
-                a.paint(Role::Warm, "○"),
-                a.paint(
-                    Role::Text,
-                    &format!("allowed {:.1}%", rama.allowed_fraction * 100.0)
+                format!(
+                    "{} {}",
+                    a.paint(Role::Bad, "▲"),
+                    a.paint(Role::Text, &format!("outliers {}", rama.outlier_count))
                 ),
-                a.paint(Role::Bad, "▲"),
-                a.paint(Role::Text, &format!("outliers {}", rama.outlier_count)),
-            ));
+                format!(
+                    "{} {}",
+                    a.paint(Role::Warm, "○"),
+                    a.paint(
+                        Role::Text,
+                        &format!("allowed {}", pct(rama.allowed_fraction))
+                    )
+                ),
+            ];
+            lines.push(format!(" {}", fit_items(&items, width.saturating_sub(1))));
         }
     }
 
@@ -376,7 +411,7 @@ impl DashboardRenderer {
         let title = if predicted {
             " (plddt, AlphaFold colours) "
         } else {
-            " (b-factor · experimental, not a confidence) "
+            " (b-factor · not a confidence) "
         };
         lines.push(section_rule(a, &a.fg(Role::Muted), '├', title, '┤', width));
 
@@ -472,9 +507,20 @@ impl DashboardRenderer {
             '┤',
             width,
         ));
-        let row = |label: &str, value: String| {
-            format!(" {} {value}", a.paint(Role::Dim, &format!("{label:<23}")))
+        // The label column shrinks on a narrow panel, so the values are never what is cut.
+        let label_w = if width >= 56 {
+            23
+        } else {
+            (width / 2).saturating_sub(2).max(8)
         };
+        let row = |label: &str, value: String| {
+            let label = truncate_to_width(label, label_w);
+            format!(
+                " {} {value}",
+                a.paint(Role::Dim, &format!("{label:<label_w$}"))
+            )
+        };
+        let value_w = width.saturating_sub(label_w + 2);
 
         let mut row_count = 1;
         let Some(ref m) = data.metrics else {
@@ -521,22 +567,28 @@ impl DashboardRenderer {
         }
         if let Some(ref ss) = m.secondary_structure_summary {
             use crate::brand::structure::{COIL, HELIX, STRAND};
-            push(
-                row(
-                    "secondary structure",
-                    format!(
-                        "{} {}  {} {}  {} {}",
-                        a.paint_rgb(HELIX, "■"),
-                        a.paint(Role::Text, &format!("α {:.0}%", ss.helix_fraction * 100.0)),
-                        a.paint_rgb(STRAND, "■"),
-                        a.paint(Role::Text, &format!("β {:.0}%", ss.strand_fraction * 100.0)),
-                        a.paint_rgb(COIL, "■"),
-                        a.paint(
-                            Role::Text,
-                            &format!("coil {:.0}%", ss.coil_fraction * 100.0)
-                        ),
-                    ),
+            let items = [
+                format!(
+                    "{} {}",
+                    a.paint_rgb(HELIX, "■"),
+                    a.paint(Role::Text, &format!("α {:.0}%", ss.helix_fraction * 100.0))
                 ),
+                format!(
+                    "{} {}",
+                    a.paint_rgb(STRAND, "■"),
+                    a.paint(Role::Text, &format!("β {:.0}%", ss.strand_fraction * 100.0))
+                ),
+                format!(
+                    "{} {}",
+                    a.paint_rgb(COIL, "■"),
+                    a.paint(
+                        Role::Text,
+                        &format!("coil {:.0}%", ss.coil_fraction * 100.0)
+                    )
+                ),
+            ];
+            push(
+                row("secondary structure", fit_items(&items, value_w)),
                 lines,
             );
         }
@@ -772,5 +824,51 @@ mod tests {
             "{plain:?}"
         );
         assert!(plain.contains('●'));
+    }
+
+    #[test]
+    fn truncation_never_returns_a_wider_line_and_rows_keep_whole_numbers() {
+        // ❤ + VS16 is two columns together; cutting to 8 used to leave 9.
+        let s = "abcdefg\u{2764}\u{fe0f}";
+        assert_eq!(visible_width(s), 9);
+        assert!(visible_width(&truncate_to_width(s, 8)) <= 8);
+        let items = [
+            "α 25%".to_string(),
+            "β 43%".to_string(),
+            "coil 32%".to_string(),
+        ];
+        assert_eq!(fit_items(&items, 14), "α 25%  β 43%");
+        assert_eq!(fit_items(&items, 100), "α 25%  β 43%  coil 32%");
+    }
+
+    #[test]
+    fn the_ramachandran_axis_ticks_line_up_with_the_plot() {
+        use crate::brand::{ansi::Ansi, ColorDepth};
+        let data = DashboardData {
+            title: "t".into(),
+            num_residues: 3,
+            num_disulfides: 0,
+            metrics: None,
+            plddts: vec![],
+            ramachandran_points: vec![],
+        };
+        let lines = DashboardRenderer::with_ansi(Ansi::with_depth(ColorDepth::None))
+            .generate_lines(&data, 40, 30);
+        let plain: Vec<String> = lines
+            .iter()
+            .map(|l| {
+                ansi_segments(l)
+                    .filter(|(e, _)| !e)
+                    .map(|(_, t)| t)
+                    .collect()
+            })
+            .collect();
+        let cross = plain
+            .iter()
+            .find_map(|l| l.find('┼').map(|b| l[..b].chars().count()))
+            .unwrap();
+        let axis = plain.iter().find(|l| l.contains('└')).unwrap();
+        let tick = axis[..axis.find('┴').unwrap()].chars().count();
+        assert_eq!(tick, cross, "{axis}");
     }
 }

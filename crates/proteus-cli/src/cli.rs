@@ -197,10 +197,11 @@ pub fn tint(role: proteus_render::brand::Role) -> String {
         ColorDepth::Ansi256 => brand::to_ansi256(c).to_string(),
         _ => match role {
             Role::Accent => "yellow",
-            Role::Warm => "yellow",
+            Role::Warm => "yellow.bright",
             Role::Sea => "cyan",
             Role::Bad => "red",
-            Role::Dim | Role::Line => "black",
+            // Bright black (grey), as brand::ansi uses: plain black vanishes on a dark terminal.
+            Role::Dim | Role::Line => "black.bright",
             Role::Text | Role::Muted => "white",
         }
         .to_string(),

@@ -113,16 +113,23 @@ impl ColorDepth {
     }
 
     pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
-        if get("NO_COLOR").is_some_and(|v| !v.is_empty()) {
+        let term = get("TERM").unwrap_or_default();
+        if get("NO_COLOR").is_some_and(|v| !v.is_empty()) || term == "dumb" {
             return Self::None;
         }
         let colorterm = get("COLORTERM").unwrap_or_default().to_ascii_lowercase();
         if colorterm == "truecolor" || colorterm == "24bit" {
             return Self::TrueColor;
         }
-        let term = get("TERM").unwrap_or_default();
-        if term == "dumb" {
-            return Self::None;
+        // OpenSSH does not pass COLORTERM on, so over SSH a truecolor terminal is known only by
+        // its TERM: the terminfo `-direct` and `-truecolor` variants, and the terminals that
+        // name themselves and draw 24-bit colour.
+        const TRUECOLOR_TERMS: [&str; 5] = ["kitty", "ghostty", "alacritty", "foot", "wezterm"];
+        if term.ends_with("-direct")
+            || term.contains("truecolor")
+            || TRUECOLOR_TERMS.iter().any(|t| term.contains(t))
+        {
+            return Self::TrueColor;
         }
         if term.contains("256color") {
             return Self::Ansi256;
@@ -383,6 +390,23 @@ mod tests {
             ColorDepth::None
         );
         assert_eq!(ColorDepth::from_env(env(&[])), ColorDepth::Ansi16);
+        assert_eq!(
+            ColorDepth::from_env(env(&[("TERM", "dumb"), ("COLORTERM", "truecolor")])),
+            ColorDepth::None,
+            "a dumb terminal takes no escapes, whatever COLORTERM says"
+        );
+        for t in [
+            "xterm-kitty",
+            "xterm-ghostty",
+            "alacritty",
+            "foot",
+            "wezterm",
+            "xterm-direct",
+            "st-truecolor",
+        ] {
+            let depth = ColorDepth::from_env(|k: &str| (k == "TERM").then(|| t.to_string()));
+            assert_eq!(depth, ColorDepth::TrueColor, "{t} over SSH (no COLORTERM)");
+        }
     }
 
     #[test]

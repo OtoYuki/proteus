@@ -141,7 +141,7 @@ fn key_hints(app: &App) -> Line<'static> {
                 ("⏎", "edit / run"),
                 ("←→", "choose"),
                 ("f", "other form"),
-                ("?", "help"),
+                ("F1", "help"),
                 ("q", "quit"),
             ],
         }
@@ -711,7 +711,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
     let text = vec![
         head("everywhere"),
         row("1 2 3 · tab", "switch tab"),
-        row("?", "this help"),
+        row("? · F1", "this help (F1 also in a text field)"),
         row("q · ctrl-c", "quit"),
         Line::from(""),
         head("(jobs)"),

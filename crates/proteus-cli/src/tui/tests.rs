@@ -74,6 +74,10 @@ fn quoting_is_bare_single_or_dollar_quoted() {
     assert_eq!(shell_quote(""), "''");
     assert_eq!(shell_quote(">q\nMKT"), r"$'>q\nMKT'");
     assert_eq!(shell_quote("a'b\\c\nd"), r"$'a\'b\\c\nd'");
+    // An escape sequence in a file name is shown, never sent to the terminal.
+    let q = shell_quote("a\x1b[41mRED.pdb");
+    assert_eq!(q, r"$'a\x1b[41mRED.pdb'");
+    assert!(!q.contains('\x1b'));
 }
 
 /// What `display` prints must be what the home screen runs: parse it back with the shell.
@@ -95,6 +99,7 @@ fn displayed_commands_parse_back_to_the_same_arguments() {
         ">q\nMKT",
         "a'b\\c\nd",
         "$HOME `x` \"y\"",
+        "a\x1b]0;TITLE\x07\x1b[41mRED.pdb",
     ] {
         let line = format!("printf '%s\\0' {}", shell_quote(arg));
         let out = std::process::Command::new("bash")
@@ -114,11 +119,10 @@ fn displayed_commands_parse_back_to_the_same_arguments() {
 fn the_fold_form_builds_a_submit_command() {
     let mut app = app_in(Path::new("/"));
     app.tab = Tab::Run;
-    // Not editing yet: letters and digits are commands, not text (3 is the Run tab).
-    press(&mut app, "3");
-    assert_eq!(app.run.fold[0].value(), "");
-    app.handle_key(key(KeyCode::Enter)); // edit the Sequence field
+    // Typing on the focused Sequence field is text straight away, digits and q included.
     press(&mut app, "mktayiakq123");
+    assert_eq!(app.tab, Tab::Run);
+    assert_eq!(app.run.fold[0].value(), "mktayiakq123");
     for _ in 0..3 {
         app.handle_key(key(KeyCode::Backspace));
     }
@@ -224,14 +228,15 @@ fn sequence_input_forms() {
         .unwrap(),
         ">sp|P69905 Hemoglobin alpha\nMVLSPADKTNVKAAWGKVGA"
     );
-    // Typed on one line: the capital-letter words at the end are the sequence.
+    // Typed on one line: the last word is the sequence, in any case.
     assert_eq!(
-        fasta_of(
-            &mut run,
-            ">sp|P69905 Hemoglobin alpha MVLSPADKTN VKAAWGKVGA"
-        )
-        .unwrap(),
-        ">sp|P69905 Hemoglobin alpha\nMVLSPADKTNVKAAWGKVGA"
+        fasta_of(&mut run, ">GFP EGFP MVSKGEELFT").unwrap(),
+        ">GFP EGFP\nMVSKGEELFT"
+    );
+    assert_eq!(fasta_of(&mut run, ">q mktayiak").unwrap(), ">q\nMKTAYIAK");
+    assert_eq!(
+        fasta_of(&mut run, ">wt\nmktayiak\nqr\n").unwrap(),
+        ">wt\nMKTAYIAKQR"
     );
     assert!(fasta_of(&mut run, ">only-a-header").is_err());
     assert!(fasta_of(&mut run, ">a\nMKT\n>b\nMKV").is_err());
@@ -327,6 +332,17 @@ fn tabs_help_and_ctrl_c() {
     assert_eq!(app.tab, Tab::Jobs);
     app.handle_key(key(KeyCode::BackTab));
     assert_eq!(app.tab, Tab::Run);
+    // On the Run form's text field ? is text; F1 opens the help anywhere.
+    press(&mut app, "?");
+    assert!(!app.help);
+    assert_eq!(app.run.fold[0].value(), "?");
+    app.handle_key(key(KeyCode::Backspace));
+    app.handle_key(key(KeyCode::Esc));
+    app.handle_key(key(KeyCode::F(1)));
+    assert!(app.help);
+    app.help = false;
+    app.handle_key(key(KeyCode::BackTab));
+    assert_eq!(app.tab, Tab::Structures);
     press(&mut app, "?");
     assert!(app.help);
     assert_eq!(
@@ -336,7 +352,7 @@ fn tabs_help_and_ctrl_c() {
     );
     assert!(!app.help);
     // Ctrl-C quits even while typing.
-    app.handle_key(key(KeyCode::Enter));
+    press(&mut app, "3");
     press(&mut app, "x");
     assert!(app.typing());
     assert_eq!(
@@ -498,4 +514,52 @@ fn analysing_crambin_gives_its_residue_count_and_rows() {
         super::analyse(Path::new("/definitely/not/here.pdb")),
         Analysis::Failed(_)
     ));
+}
+
+#[test]
+fn esc_quits_when_nothing_is_open_and_the_filter_knows_done() {
+    let mut app = app_in(Path::new("/"));
+    app.jobs.replace(vec![
+        job("a", JobStatus::Completed, true),
+        job("b", JobStatus::Failed, false),
+    ]);
+    press(&mut app, "/");
+    press(&mut app, "done");
+    assert_eq!(
+        app.jobs.visible().len(),
+        1,
+        "the list says done, so the filter matches it"
+    );
+    // Esc clears the filter first, then quits.
+    assert_eq!(app.handle_key(key(KeyCode::Esc)), Action::None);
+    assert_eq!(app.jobs.visible().len(), 2);
+    assert_eq!(app.handle_key(key(KeyCode::Esc)), Action::Quit);
+}
+
+#[test]
+fn only_regular_files_are_listed_and_a_changed_file_is_measured_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdb = dir.path().join("a.pdb");
+    std::fs::write(&pdb, "x").unwrap();
+    #[cfg(unix)]
+    assert!(std::process::Command::new("mkfifo")
+        .arg(dir.path().join("pipe.pdb"))
+        .status()
+        .unwrap()
+        .success());
+    let mut app = app_in(dir.path());
+    let names: Vec<_> = app.files.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["..", "a.pdb"], "a FIFO would hang its analysis");
+
+    press(&mut app, "2j");
+    assert_eq!(app.wanted_analysis(), Some(pdb.clone()));
+    app.analyses.insert(pdb.clone(), Analysis::Pending);
+    app.stamps.insert(pdb.clone(), file_stamp(&pdb));
+    assert_eq!(app.wanted_analysis(), None, "measured and unchanged");
+    std::fs::write(&pdb, "a longer file").unwrap();
+    assert_eq!(
+        app.wanted_analysis(),
+        Some(pdb),
+        "the file changed: measure it again"
+    );
 }

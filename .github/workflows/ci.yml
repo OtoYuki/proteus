@@ -66,6 +66,34 @@ jobs:
       # colour and mesh-decoding parity of core.js against fixtures written by proteus-render
       - run: node --test crates/proteus-render/assets/web/test/core.test.js
 
+  browser:
+    name: browser viewer (Chromium, Firefox, WebKit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p proteus-cli
+      # Pages as users get them: a crystal structure with disulfides, a predicted model, and a
+      # Cα-only simulated job.
+      - name: viewer pages
+        run: |
+          mkdir -p pages
+          P=target/debug/proteus
+          export RUST_LOG=off PROTEUS_DATA_DIR="$RUNNER_TEMP/proteus-data"
+          $P view crates/proteus-core/tests/data/1crn.pdb --html pages/1crn.html
+          $P view crates/proteus-core/tests/data/edge/esm100_low.pdb --html pages/esm100_low.html
+          job=$($P submit --fasta $'>ca\nMKTAYIAKQRQISFVKSHFSRQ' --runner simulated | grep -oE 'Job created: [0-9a-f-]+' | cut -d' ' -f3)
+          $P view "$job" --html pages/simulated.html
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-save --no-package-lock playwright@1.55.0
+      - run: npx playwright install --with-deps chromium firefox webkit
+      # Script errors, a blank canvas, a hover label for a residue that does not exist, dead
+      # keys; or, where a browser has no WebGL2, an incomplete fallback.
+      - run: node scripts/browser-check.mjs pages/*.html
+
   supply-chain:
     name: cargo-deny + cargo-audit
     runs-on: ubuntu-latest

@@ -292,7 +292,8 @@ impl ProteusRepository {
     ) -> Result<Option<Prediction>, StorageError> {
         let job_id_str = job_id.to_string();
         let row = sqlx::query(
-            "SELECT id, job_id, pdb_path, plddt, confidence_category, metadata FROM predictions WHERE job_id = ?",
+            // The newest prediction, as `list_jobs` shows it (a job can gain a second one).
+            "SELECT id, job_id, pdb_path, plddt, confidence_category, metadata FROM predictions WHERE job_id = ? ORDER BY rowid DESC LIMIT 1",
         )
         .bind(job_id_str)
         .fetch_optional(&self.pool)
