@@ -35,9 +35,11 @@ pub fn plddt_to_color(plddt: f32) -> ColorRGB {
 
 pub fn secondary_structure_to_color(ss: SecondaryStructure) -> ColorRGB {
     match ss {
-        SecondaryStructure::Helix => ColorRGB::new(217, 70, 239), // Magenta
-        SecondaryStructure::Strand => ColorRGB::new(245, 158, 11), // Gold / Amber
-        SecondaryStructure::Coil => ColorRGB::new(6, 182, 212),   // Cyan / Slate
+        // The Proteus structure colours (Clay, Tide, pale cream): chosen to stay apart under
+        // deutan, protan and tritan vision (brand::tests).
+        SecondaryStructure::Helix => crate::brand::structure::HELIX,
+        SecondaryStructure::Strand => crate::brand::structure::STRAND,
+        SecondaryStructure::Coil => crate::brand::structure::COIL,
     }
 }
 

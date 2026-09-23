@@ -20,6 +20,14 @@ All notable changes to this project are documented here. The format follows
   home screen format measurements with the same function.
 
 ### Changed
+- Proteus has an identity, as a sub-brand of s1re.sh: a mark (a chain of residues that folds
+  into a **p**), a dot-matrix wordmark, and a palette with roles for dark and light grounds,
+  defined once in `proteus_render::brand` and tested for contrast (WCAG) and for colour-blind
+  separation. The assets are in `docs/brand/`.
+- Secondary structure is now coloured Clay (helix), Tide (strand) and pale cream (coil), and
+  disulfides Chartreuse, in the terminal and in the browser. The smallest difference between
+  two structure colours as seen with red–green colour blindness rose from ΔE 23 to 32
+  (Machado 2009 simulation).
 - The browser viewer (`proteus view --web/--html`, the daemon's `/view/{job}`) is now our own:
   about 730 lines of our own JavaScript (WebGL2) drawing the same ribbon mesh, DSSP and colours as the terminal
   viewer, with the same keys (`c`, `o`, `d`, `Space`, `r`, plus `s` to save a PNG), hover labels

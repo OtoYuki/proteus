@@ -293,7 +293,8 @@
       gl.drawElements(gl.TRIANGLES, ribbon.count, gl.UNSIGNED_INT, 0);
       if (ds && state.ds && !forPick) {
         gl.bindVertexArray(ds.v);
-        gl.vertexAttrib3f(2, 251 / 255, 191 / 255, 36 / 255); // lib.rs: disulfides in gold
+        const ds = meta.palette.disulfide; // brand::structure::DISULFIDE
+        gl.vertexAttrib3f(2, ds[0] / 255, ds[1] / 255, ds[2] / 255);
         gl.vertexAttribI4ui(3, 0, 0, 0, 0);
         gl.drawElements(gl.TRIANGLES, ds.count, gl.UNSIGNED_INT, 0);
       }

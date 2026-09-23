@@ -36,7 +36,8 @@
 
   /** shader.rs secondary_structure_to_color; codes from web.rs ss_code. */
   function ssColor(code) {
-    return code === 0 ? [217, 70, 239] : code === 1 ? [245, 158, 11] : [6, 182, 212];
+    // brand::structure: Clay, Tide, pale cream.
+    return code === 0 ? [216, 166, 100] : code === 1 ? [79, 154, 148] : [231, 233, 200];
   }
 
   function hsvToRgb(h, s, v) {

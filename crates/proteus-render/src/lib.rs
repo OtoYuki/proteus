@@ -1,3 +1,4 @@
+pub mod brand;
 pub mod error;
 pub mod geometry;
 pub mod rasterizer;
@@ -97,7 +98,7 @@ pub fn extract_disulfide_bonds(pdb: &pdbtbx::PDB) -> Vec<DisulfideBond> {
     bonds
 }
 
-/// Generate a triangle mesh of golden covalent cylinders and sulfur spheres for all disulfide bonds.
+/// Generate a triangle mesh of covalent cylinders and sulfur spheres for all disulfide bonds.
 pub fn generate_disulfide_mesh(bonds: &[DisulfideBond]) -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
     for bond in bonds {
@@ -466,7 +467,7 @@ pub fn render_structure_snapshot(
     rasterizer.rasterize_mesh(&structure.ribbon_mesh, &structure.camera, &mut fb, scheme);
 
     if let Some(ref ds_mesh) = structure.disulfide_mesh {
-        let gold = ColorRGB::new(251, 191, 36);
+        let gold = brand::structure::DISULFIDE; // Chartreuse
         rasterizer.rasterize_mesh(
             ds_mesh,
             &structure.camera,

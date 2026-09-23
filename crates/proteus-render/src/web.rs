@@ -223,6 +223,13 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             "name": s.residue_labels.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
         },
         "dssp": s.dssp,
+        "palette": {
+            "disulfide": [
+                crate::brand::structure::DISULFIDE.r,
+                crate::brand::structure::DISULFIDE.g,
+                crate::brand::structure::DISULFIDE.b
+            ],
+        },
         "perResidue": per_residue,
         "rama": rama,
         "metrics": s.metrics.as_ref().map_or_else(Vec::new, |m| proteus_core::qc::summary_rows(m, s.num_residues)),
