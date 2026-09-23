@@ -506,13 +506,11 @@ mod sse_tests {
 
     // ---- Regressions from the 2026-09-23 bug hunt -------------------------------------
 
-    fn test_app(dir: &std::path::Path) -> impl std::future::Future<Output = Router> + '_ {
-        async move {
-            let repo = ProteusRepository::new(create_in_memory_pool().await.unwrap());
-            let scheduler =
-                PipelineScheduler::new(repo, Arc::new(SimulatedRunner::new()), dir.to_path_buf());
-            build_router(AppState::new(scheduler))
-        }
+    async fn test_app(dir: &std::path::Path) -> Router {
+        let repo = ProteusRepository::new(create_in_memory_pool().await.unwrap());
+        let scheduler =
+            PipelineScheduler::new(repo, Arc::new(SimulatedRunner::new()), dir.to_path_buf());
+        build_router(AppState::new(scheduler))
     }
 
     async fn call(app: &Router, req: Request<Body>) -> (StatusCode, axum::http::HeaderMap, String) {
