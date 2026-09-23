@@ -1,6 +1,7 @@
 //! `proteus screen` — Fold, score and rank a variant library; export the table.
 
 use super::prelude::*;
+use proteus_render::brand::Role;
 
 /// Arguments of `proteus screen`.
 #[derive(clap::Args, Debug)]
@@ -59,7 +60,7 @@ pub async fn run(
         esm,
     } = args;
     let content: String = if library == "-" {
-        eprintln!("Reading sequence library from standard input (stdin)...");
+        eprintln!("reading the library from stdin");
         use tokio::io::AsyncReadExt;
         let mut buf = String::new();
         tokio::io::stdin()
@@ -69,7 +70,7 @@ pub async fn run(
         buf
     } else {
         let p = Path::new(&library);
-        eprintln!("Reading sequence library from: {:?}", p);
+        eprintln!("reading the library from {}", p.display());
         tokio::fs::read_to_string(p)
             .await
             .with_context(|| format!("Failed to read library file at {:?}", p))?
@@ -83,7 +84,7 @@ pub async fn run(
     }
 
     let total_seqs = sequences.len();
-    eprintln!("Loaded {total_seqs} candidate sequences for screening funnel");
+    eprintln!("{total_seqs} candidates to fold and measure");
 
     // ESM-2 scores are sequence-only: compute them before (and independently of) folding.
     let esm_scores = if scorer == esm_cmd::Scorer::Structure {
@@ -126,7 +127,7 @@ pub async fn run(
             ))?
             .progress_chars("█▓▒░"),
     );
-    pb.set_message("Screening candidate library in parallel...");
+    pb.set_message("folding and measuring");
 
     let compute_runner = resolve_runner(runner)?;
     let scheduler = PipelineScheduler::new(repo.clone(), compute_runner, artifacts_dir);
@@ -155,11 +156,11 @@ pub async fn run(
     let results = scheduler.process_batch(&job_ids, workers).await;
     ticker.abort();
     pb.set_position(total_seqs as u64);
-    pb.finish_with_message("Screening batch execution complete!");
+    pb.finish_with_message("done");
 
     let successful_count = results.iter().filter(|r| r.is_ok()).count();
     eprintln!(
-        "\nCompleted: {}/{} successful ({} parallel workers)",
+        "{}/{} folded ({} workers in parallel)",
         successful_count, total_seqs, workers
     );
 
@@ -322,17 +323,25 @@ pub async fn run(
             eprintln!("  {count}× {reason}");
         }
     }
+    let a = proteus_render::brand::ansi::Ansi::for_stdout();
     println!(
-        "\n=== Screening Funnel Leaderboard (Cutoff: pLDDT >= {:.1}){} ===",
-        min_plddt,
+        "\n{} {}{}",
+        a.paint(Role::Accent, "(leaderboard)"),
+        a.paint(Role::Dim, &format!("pLDDT ≥ {min_plddt:.1}")),
         if runner == RunnerMode::Simulated {
-            " — SIMULATED: synthetic structures, not predictions"
+            format!(
+                " {}",
+                a.paint(
+                    Role::Warm,
+                    "! SIMULATED: synthetic structures, not predictions"
+                )
+            )
         } else {
-            ""
+            String::new()
         }
     );
     let mut table = Table::new();
-    table.load_style(UTF8_FULL);
+    table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
     // A short job id split over two lines breaks grep and copy-paste.
     fit_table(&mut table);
     // A column of dashes says nothing, so ESM-2 only appears when something scored.
@@ -397,9 +406,12 @@ pub async fn run(
 
     if let Some(winner) = candidates.first() {
         println!(
-            "\nTop Candidate: '{}' (Fitness: {:.1})\nView structure in terminal: proteus view {}",
+            "\n{} best: {} {} fitness {:.1}\n  {} proteus view {}",
+            a.paint(Role::Accent, "✓"),
             winner.header,
+            a.paint(Role::Dim, "·"),
             winner.fitness,
+            a.paint(Role::Dim, "~ $"),
             job_ref::short(winner.job_id)
         );
     }
@@ -434,9 +446,9 @@ pub async fn run(
             .await
             .with_context(|| format!("Failed to export dataset to {:?}", export_path))?;
         eprintln!(
-            "Successfully exported {} ranked candidates -> {:?}",
+            "wrote {} ranked candidates to {}",
             records.len(),
-            export_path
+            export_path.display()
         );
     }
     Ok(())
