@@ -178,6 +178,14 @@ fn resolve_host_path(path: &std::path::Path) -> Option<PathBuf> {
     Some(real)
 }
 
+/// How [`PipelineScheduler::run_tes_lifecycle`] ended.
+enum Lifecycle {
+    /// Ran to a terminal state, which is in `task.state`.
+    Finished,
+    /// A cancel was recorded first; the task must not be written again.
+    LostToCancel,
+}
+
 #[derive(Clone)]
 pub struct PipelineScheduler {
     repo: ProteusRepository,
@@ -280,6 +288,53 @@ impl PipelineScheduler {
             .log_event(Some(job_id), "INFO", "Job started")
             .await;
 
+        // Every failure from here on — the runner, the analysis, but also an unwritable work
+        // dir or a database error — must leave the job Failed and end its event stream; a job
+        // left Running keeps `/events` open and the worker gauge up forever.
+        match self.run_started_job(&job, &seq).await {
+            Ok(prediction_id) => {
+                self.repo
+                    .update_job_status(job_id, JobStatus::Completed, None)
+                    .await?;
+                let _ = self
+                    .repo
+                    .log_event(Some(job_id), "INFO", "Job completed successfully")
+                    .await;
+                let _ = self.events_tx.send(EngineEvent::JobCompleted {
+                    job_id,
+                    prediction_id,
+                });
+                info!("Job {} completed successfully", job_id);
+                Ok(())
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                error!("Job {} failed: {}", job_id, err_msg);
+                let _ = self
+                    .repo
+                    .update_job_status(job_id, JobStatus::Failed, Some(err_msg.clone()))
+                    .await;
+                let _ = self.events_tx.send(EngineEvent::JobFailed {
+                    job_id,
+                    error: err_msg.clone(),
+                });
+                let _ = self
+                    .repo
+                    .log_event(Some(job_id), "ERROR", &format!("Job failed: {err_msg}"))
+                    .await;
+                Err(e)
+            }
+        }
+    }
+
+    /// The part of [`process_job`](Self::process_job) after the job is marked Running: fold,
+    /// analyse, check, persist. Returns the prediction id.
+    async fn run_started_job(
+        &self,
+        job: &proteus_core::models::PipelineJob,
+        seq: &proteus_core::models::Sequence,
+    ) -> Result<Uuid, EngineError> {
+        let job_id = job.id;
         let work_dir = self.artifacts_dir.join(job_id.to_string());
         tokio::fs::create_dir_all(&work_dir).await?;
 
@@ -288,50 +343,16 @@ impl PipelineScheduler {
             step: "Running compute container".into(),
             percent: 30,
         });
-
-        // Execute runner
-        let run_result = match self.runner.execute_job(&job, &seq, &work_dir).await {
-            Ok(res) => res,
-            Err(e) => {
-                let err_msg = e.to_string();
-                error!("Runner failed for job {}: {}", job_id, err_msg);
-                self.repo
-                    .update_job_status(job_id, JobStatus::Failed, Some(err_msg.clone()))
-                    .await?;
-                let _ = self.events_tx.send(EngineEvent::JobFailed {
-                    job_id,
-                    error: err_msg.clone(),
-                });
-                let _ = self
-                    .repo
-                    .log_event(Some(job_id), "ERROR", &format!("Compute failed: {err_msg}"))
-                    .await;
-                return Err(e);
-            }
-        };
+        let run_result = self.runner.execute_job(job, seq, &work_dir).await?;
 
         let _ = self.events_tx.send(EngineEvent::JobProgress {
             job_id,
             step: "Analyzing biophysical properties".into(),
             percent: 75,
         });
-
-        // Compute biophysical metrics in Rust via pdbtbx
-        let mut metrics = match self.analyze_timed(&run_result.pdb_path) {
-            Ok(m) => m,
-            Err(e) => {
-                let err_msg = format!("Biophysical analysis failed: {e}");
-                error!("{}", err_msg);
-                self.repo
-                    .update_job_status(job_id, JobStatus::Failed, Some(err_msg.clone()))
-                    .await?;
-                let _ = self.events_tx.send(EngineEvent::JobFailed {
-                    job_id,
-                    error: err_msg,
-                });
-                return Err(EngineError::Core(e));
-            }
-        };
+        let mut metrics = self
+            .analyze_timed(&run_result.pdb_path)
+            .map_err(|e| EngineError::Pipeline(format!("Biophysical analysis failed: {e}")))?;
 
         // A structure that does not cover the sequence (truncated or wrong output from a
         // predictor) must not be scored as if it did.
@@ -340,27 +361,16 @@ impl PipelineScheduler {
             .as_ref()
             .map_or(0, |s| s.assignment.len());
         if residues != seq.length {
-            let err_msg = format!(
+            return Err(EngineError::Pipeline(format!(
                 "predicted structure has {residues} residues but the sequence has {} \
                  (runner output {})",
                 seq.length,
                 run_result.pdb_path.display()
-            );
-            error!("Job {} rejected: {}", job_id, err_msg);
-            self.repo
-                .update_job_status(job_id, JobStatus::Failed, Some(err_msg.clone()))
-                .await?;
-            let _ = self.events_tx.send(EngineEvent::JobFailed {
-                job_id,
-                error: err_msg.clone(),
-            });
-            return Err(EngineError::Pipeline(err_msg));
+            )));
         }
 
-        // Persist prediction
         let prediction_id = Uuid::new_v4();
         metrics.prediction_id = prediction_id;
-
         let prediction = Prediction {
             id: prediction_id,
             job_id,
@@ -371,24 +381,9 @@ impl PipelineScheduler {
             )),
             metadata: run_result.metadata,
         };
-
         self.repo.insert_prediction(&prediction).await?;
         self.repo.insert_metrics(&metrics).await?;
-        self.repo
-            .update_job_status(job_id, JobStatus::Completed, None)
-            .await?;
-
-        let _ = self
-            .repo
-            .log_event(Some(job_id), "INFO", "Job completed successfully")
-            .await;
-        let _ = self.events_tx.send(EngineEvent::JobCompleted {
-            job_id,
-            prediction_id,
-        });
-
-        info!("Job {} completed successfully", job_id);
-        Ok(())
+        Ok(prediction_id)
     }
 
     /// Process a batch of jobs concurrently with a bounded worker pool.
@@ -482,13 +477,13 @@ impl PipelineScheduler {
 
     pub async fn submit_tes_task(&self, mut task: TesTask) -> Result<String, EngineError> {
         self.validate_tes_task(&task)?;
-        if task.id.is_empty() {
-            task.id = format!("task-{}", Uuid::new_v4());
-        }
+        // `id`, `state`, `logs` and `creation_time` are output-only in TES 1.1. The id in
+        // particular names the task's work dir on the host, so a client-chosen one (`../x`,
+        // `/abs/path`, or another task's id) must never reach the filesystem.
+        task.id = format!("task-{}", Uuid::new_v4());
         task.state = TesState::Queued;
-        if task.creation_time.is_none() {
-            task.creation_time = Some(Utc::now().to_rfc3339());
-        }
+        task.logs.clear();
+        task.creation_time = Some(Utc::now().to_rfc3339());
 
         let task_json = serde_json::to_string(&task)
             .map_err(|e| EngineError::Pipeline(format!("Failed to serialize TES task: {e}")))?;
@@ -585,9 +580,15 @@ impl PipelineScheduler {
             task.state = TesState::Canceled;
             let updated_json = serde_json::to_string(&task)
                 .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
-            self.repo
-                .update_tes_task_state(task_id, "CANCELED", &updated_json)
-                .await?;
+            // The worker may have finished between the read above and this write; its terminal
+            // state stands and the cancel becomes the idempotent no-op it would have been.
+            if !self
+                .repo
+                .update_tes_task_state_unless_terminal(task_id, "CANCELED", &updated_json)
+                .await?
+            {
+                return Ok(CancelOutcome::AlreadyTerminal);
+            }
             if let Some(token) = self.cancel_tokens.lock().unwrap().get(task_id) {
                 token.cancel();
             }
@@ -601,6 +602,11 @@ impl PipelineScheduler {
     }
 
     /// Process a GA4GH TES task through the execution lifecycle.
+    ///
+    /// Owns the task's end: exactly one terminal state write (refused if a cancel got there
+    /// first — a terminal state never changes again) and exactly one `TesTaskCompleted` /
+    /// `TesTaskFailed` event after `TesTaskStarted`, whatever path the lifecycle took, including
+    /// an I/O or database error half-way through.
     pub async fn process_tes_task(&self, task_id: &str) -> Result<(), EngineError> {
         let record = match self.repo.get_tes_task(task_id).await? {
             Some(r) => r,
@@ -608,11 +614,9 @@ impl PipelineScheduler {
                 return Err(EngineError::Tes(format!("TES task {task_id} not found")));
             }
         };
-
         if record.state == "CANCELED" {
             return Ok(());
         }
-
         let mut task: TesTask = serde_json::from_str(&record.task_json)
             .map_err(|e| EngineError::Tes(format!("Invalid task JSON for {task_id}: {e}")))?;
 
@@ -620,7 +624,6 @@ impl PipelineScheduler {
         let _ = self.events_tx.send(EngineEvent::TesTaskStarted {
             task_id: task_id.to_string(),
         });
-
         // The cancel token is registered before the first state write so that a cancel arriving
         // at any later point is seen; non-terminal writes are refused once the row is CANCELED.
         let cancel = CancellationToken::new();
@@ -629,6 +632,76 @@ impl PipelineScheduler {
             .unwrap()
             .insert(task_id.to_string(), cancel.clone());
 
+        let outcome = self.run_tes_lifecycle(task_id, &mut task, &cancel).await;
+        self.cancel_tokens.lock().unwrap().remove(task_id);
+
+        let mut error = None;
+        match outcome {
+            Ok(Lifecycle::Finished) => {}
+            Ok(Lifecycle::LostToCancel) => {
+                task.state = TesState::Canceled;
+            }
+            Err(e) => {
+                task.state = TesState::SystemError;
+                task.logs.push(TesTaskLog {
+                    end_time: Some(Utc::now().to_rfc3339()),
+                    system_logs: vec![format!("internal error: {e}")],
+                    ..Default::default()
+                });
+                error = Some(e);
+            }
+        }
+        if cancel.is_cancelled() {
+            task.state = TesState::Canceled;
+        }
+
+        let final_json = serde_json::to_string(&task)
+            .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
+        let written = task.state != TesState::Canceled
+            && self
+                .repo
+                .update_tes_task_state_unless_terminal(
+                    task_id,
+                    &task.state.to_string(),
+                    &final_json,
+                )
+                .await?;
+        if written && task.state == TesState::Complete {
+            let _ = self.events_tx.send(EngineEvent::TesTaskCompleted {
+                task_id: task_id.to_string(),
+            });
+            info!("TES task {} completed successfully", task_id);
+        } else {
+            let state = if written {
+                task.state.clone()
+            } else {
+                TesState::Canceled
+            };
+            let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
+                task_id: task_id.to_string(),
+                error: format!("TES task finished with state {state:?}"),
+            });
+            warn!(
+                "TES task {} finished with state {:?}; system_logs: {:?}",
+                task_id,
+                state,
+                task.logs.last().map(|l| &l.system_logs)
+            );
+        }
+        match error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Stage, execute, harvest. Leaves the terminal state in `task.state` and returns
+    /// [`Lifecycle::LostToCancel`] when a cancel was recorded before the task could move on.
+    async fn run_tes_lifecycle(
+        &self,
+        task_id: &str,
+        task: &mut TesTask,
+        cancel: &CancellationToken,
+    ) -> Result<Lifecycle, EngineError> {
         // 1. Initializing state
         task.state = TesState::Initializing;
         let mut task_json = serde_json::to_string(&task)
@@ -638,41 +711,23 @@ impl PipelineScheduler {
             .update_tes_task_state_unless_canceled(task_id, &task.state.to_string(), &task_json)
             .await?
         {
-            self.cancel_tokens.lock().unwrap().remove(task_id);
-            return Ok(());
+            return Ok(Lifecycle::LostToCancel);
         }
 
         let work_dir = self.artifacts_dir.join("tes").join(task_id);
         tokio::fs::create_dir_all(&work_dir).await?;
 
-        // 2. Stage inputs. A staging failure is the server's problem (SYSTEM_ERROR), and the
-        //    task must still reach a terminal state.
-        if let Err(msg) = self.stage_inputs(&task, &work_dir).await {
-            self.cancel_tokens.lock().unwrap().remove(task_id);
-            task.state = if cancel.is_cancelled() {
-                TesState::Canceled
-            } else {
-                TesState::SystemError
-            };
+        // 2. Stage inputs. A staging failure is the server's problem (SYSTEM_ERROR).
+        if let Err(msg) = self.stage_inputs(task, &work_dir).await {
+            task.state = TesState::SystemError;
             task.logs.push(TesTaskLog {
                 start_time: Some(Utc::now().to_rfc3339()),
                 end_time: Some(Utc::now().to_rfc3339()),
                 system_logs: vec![format!("input staging failed: {msg}")],
                 ..Default::default()
             });
-            let final_json = serde_json::to_string(&task)
-                .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
-            self.repo
-                .update_tes_task_state(task_id, &task.state.to_string(), &final_json)
-                .await?;
-            let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
-                task_id: task_id.to_string(),
-                error: format!("input staging failed: {msg}"),
-            });
-            warn!("TES task {} input staging failed: {}", task_id, msg);
-            return Ok(());
+            return Ok(Lifecycle::Finished);
         }
-
         // Pre-create parent directories for declared outputs
         for output in &task.outputs {
             let rel_path = output.path.trim_start_matches('/');
@@ -696,12 +751,11 @@ impl PipelineScheduler {
             .update_tes_task_state_unless_canceled(task_id, &task.state.to_string(), &task_json)
             .await?
         {
-            self.cancel_tokens.lock().unwrap().remove(task_id);
-            return Ok(());
+            return Ok(Lifecycle::LostToCancel);
         }
 
         let mut executor_failed = false;
-        let mount_roots = Self::mount_roots(&task)?;
+        let mount_roots = Self::mount_roots(task)?;
         task_log
             .system_logs
             .push(format!("executor backend: {}", self.tes.executor.kind()));
@@ -714,8 +768,7 @@ impl PipelineScheduler {
             }
             if let Some(cur) = self.repo.get_tes_task(task_id).await? {
                 if cur.state == "CANCELED" {
-                    self.cancel_tokens.lock().unwrap().remove(task_id);
-                    return Ok(());
+                    return Ok(Lifecycle::LostToCancel);
                 }
             }
 
@@ -734,12 +787,8 @@ impl PipelineScheduler {
                 mount_roots: &mount_roots,
                 cpu_cores: task.resources.cpu_cores,
                 ram_gb: task.resources.ram_gb,
-                network: self.tes.network
-                    || task
-                        .tags
-                        .get("proteus.network")
-                        .map(|v| v == "true")
-                        .unwrap_or(false),
+                // The operator's `--executor-network` alone decides; a task cannot opt itself in.
+                network: self.tes.network,
                 timeout: self.tes.executor_timeout,
                 cancel: cancel.clone(),
             };
@@ -758,20 +807,22 @@ impl PipelineScheduler {
                 }
             };
 
-            // Write stdout/stderr to files if requested
-            if let Some(ref stdout_file) = executor.stdout {
-                let p = work_dir.join(stdout_file.trim_start_matches('/'));
-                if let Some(parent) = p.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
+            // Write stdout/stderr to files if requested. The executor has just had write access
+            // to the work dir, so these paths may now be symlinks it planted: write only to a
+            // freshly created regular file whose real parent is inside the work dir.
+            for (file, text) in [
+                (&executor.stdout, &stdout_str),
+                (&executor.stderr, &stderr_str),
+            ] {
+                if let Some(file) = file {
+                    if let Err(e) = write_inside(&work_dir, file, text.as_bytes()).await {
+                        task_log
+                            .system_logs
+                            .push(format!("could not write {file}: {e}"));
+                        task.state = TesState::SystemError;
+                        executor_failed = true;
+                    }
                 }
-                let _ = tokio::fs::write(&p, &stdout_str).await;
-            }
-            if let Some(ref stderr_file) = executor.stderr {
-                let p = work_dir.join(stderr_file.trim_start_matches('/'));
-                if let Some(parent) = p.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                let _ = tokio::fs::write(&p, &stderr_str).await;
             }
 
             task_log.logs.push(TesExecutorLog {
@@ -795,8 +846,6 @@ impl PipelineScheduler {
                 break;
             }
         }
-        self.cancel_tokens.lock().unwrap().remove(task_id);
-
         // 4. Output harvesting: upload to the declared URL (file:// supported), record the log,
         //    and analyse structure files.
         let mut delivery_failed = false;
@@ -878,38 +927,9 @@ impl PipelineScheduler {
         } else if !executor_failed && task.state != TesState::Canceled {
             task.state = TesState::Complete;
         }
-
-        if cancel.is_cancelled() {
-            task.state = TesState::Canceled;
-        }
         task_log.end_time = Some(Utc::now().to_rfc3339());
         task.logs.push(task_log);
-
-        let final_json = serde_json::to_string(&task)
-            .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
-        self.repo
-            .update_tes_task_state(task_id, &task.state.to_string(), &final_json)
-            .await?;
-
-        if task.state == TesState::Complete {
-            let _ = self.events_tx.send(EngineEvent::TesTaskCompleted {
-                task_id: task_id.to_string(),
-            });
-            info!("TES task {} completed successfully", task_id);
-        } else {
-            let _ = self.events_tx.send(EngineEvent::TesTaskFailed {
-                task_id: task_id.to_string(),
-                error: format!("TES task finished with state {:?}", task.state),
-            });
-            warn!(
-                "TES task {} finished with state {:?}; system_logs: {:?}",
-                task_id,
-                task.state,
-                task.logs.last().map(|l| &l.system_logs)
-            );
-        }
-
-        Ok(())
+        Ok(Lifecycle::Finished)
     }
 }
 
@@ -944,19 +964,88 @@ async fn dir_size(root: &std::path::Path) -> u64 {
     total
 }
 
+/// Create `rel` (a container path such as `/data/log.txt`) under `work_dir` and write `bytes`
+/// to it, without following a symlink anywhere below `work_dir`: the parent directory must
+/// resolve inside `work_dir`, and the file itself is created fresh (`O_CREAT|O_EXCL` does not
+/// follow a symlink at the final component; an existing link or file is unlinked first).
+async fn write_inside(
+    work_dir: &std::path::Path,
+    rel: &str,
+    bytes: &[u8],
+) -> Result<(), std::io::Error> {
+    use std::io::{Error, ErrorKind};
+    let root = tokio::fs::canonicalize(work_dir).await?;
+    let target = work_dir.join(rel.trim_start_matches('/'));
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name()) else {
+        return Err(Error::new(ErrorKind::InvalidInput, "not a file path"));
+    };
+    tokio::fs::create_dir_all(parent).await?;
+    let real_parent = tokio::fs::canonicalize(parent).await?;
+    if !real_parent.starts_with(&root) {
+        return Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "path resolves outside the task work dir",
+        ));
+    }
+    let target = real_parent.join(name);
+    match tokio::fs::symlink_metadata(&target).await {
+        Ok(m) if m.is_dir() => {
+            return Err(Error::new(ErrorKind::AlreadyExists, "is a directory"));
+        }
+        Ok(_) => tokio::fs::remove_file(&target).await?,
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    use tokio::io::AsyncWriteExt;
+    let mut f = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target)
+        .await?;
+    f.write_all(bytes).await?;
+    f.flush().await
+}
+
 /// Copy `src` (file or directory) to `dst`, creating parents.
+///
+/// `src` itself may be a symlink (callers resolve and check it first), but nothing *inside* a
+/// copied directory may be: an executor or another task can plant `d/x -> /etc/shadow`, and
+/// following it would carry a host file across the allowed-dir boundary. A symlink found
+/// below the top level, on either side, fails the copy.
 async fn copy_recursive(
     src: &std::path::Path,
     dst: &std::path::Path,
 ) -> Result<(), std::io::Error> {
+    use std::io::{Error, ErrorKind};
+    let refuse = |p: &std::path::Path| {
+        Error::new(
+            ErrorKind::PermissionDenied,
+            format!("refusing to copy through symbolic link {}", p.display()),
+        )
+    };
+    async fn is_symlink(p: &std::path::Path) -> bool {
+        tokio::fs::symlink_metadata(p)
+            .await
+            .is_ok_and(|m| m.file_type().is_symlink())
+    }
     if src.is_dir() {
+        if is_symlink(dst).await {
+            return Err(refuse(dst));
+        }
         tokio::fs::create_dir_all(dst).await?;
         let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
         while let Some((s, d)) = stack.pop() {
             let mut rd = tokio::fs::read_dir(&s).await?;
             while let Some(entry) = rd.next_entry().await? {
                 let target = d.join(entry.file_name());
-                if entry.metadata().await?.is_dir() {
+                let kind = entry.file_type().await?;
+                if kind.is_symlink() {
+                    return Err(refuse(&entry.path()));
+                }
+                if is_symlink(&target).await {
+                    return Err(refuse(&target));
+                }
+                if kind.is_dir() {
                     tokio::fs::create_dir_all(&target).await?;
                     stack.push((entry.path(), target));
                 } else {
@@ -967,6 +1056,9 @@ async fn copy_recursive(
     } else {
         if let Some(parent) = dst.parent() {
             tokio::fs::create_dir_all(parent).await?;
+        }
+        if is_symlink(dst).await {
+            return Err(refuse(dst));
         }
         tokio::fs::copy(src, dst).await?;
     }
@@ -1063,13 +1155,186 @@ mod tests {
             path: "/data/out.txt".into(),
             type_: proteus_core::tes::TesFileType::File,
         });
-        scheduler.submit_tes_task(task).await.unwrap();
-        let done = finished(&repo, "t-symlink").await;
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
         assert!(
             !dest.exists(),
             "symlinked host file was copied to the output URL"
         );
         assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+    }
+
+    #[tokio::test]
+    async fn a_client_chosen_task_id_never_becomes_a_host_path() {
+        // Reported: `"id": "../../outside"` created a work dir above the data dir, and
+        // `"id": "<abs>/hostroot"` let inputs and outputs read and write arbitrary host paths.
+        let tmp = tempdir().unwrap();
+        let artifacts = tmp.path().join("data").join("artifacts");
+        let (scheduler, repo) = host_scheduler(&artifacts).await;
+        let mut task = sh_task("../../outside", "echo hi > out.txt");
+        task.inputs.push(proteus_core::tes::TesInput {
+            name: None,
+            description: None,
+            url: None,
+            path: "/data/planted.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+            content: Some("x".into()),
+        });
+        task.logs.push(TesTaskLog {
+            system_logs: vec!["FORGED".into()],
+            ..Default::default()
+        });
+        task.creation_time = Some("1999-01-01T00:00:00Z".into());
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        assert!(id.starts_with("task-") && !id.contains('/'), "{id}");
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        assert!(!tmp.path().join("outside").exists());
+        assert!(artifacts
+            .join("tes")
+            .join(&id)
+            .join("data/planted.txt")
+            .exists());
+        // Output-only fields are the server's too.
+        assert!(done
+            .logs
+            .iter()
+            .all(|l| !l.system_logs.contains(&"FORGED".to_string())));
+        assert_ne!(done.creation_time.as_deref(), Some("1999-01-01T00:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn stdout_file_planted_as_a_symlink_does_not_write_through_to_the_host() {
+        // Reported: an executor ran `ln -s <host file> /data/log.txt` with `stdout:
+        // /data/log.txt`, and the daemon then overwrote the host file with the executor's output.
+        let tmp = tempdir().unwrap();
+        let victim = tmp.path().join("victim.txt");
+        std::fs::write(&victim, "original").unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mut task = sh_task(
+            "",
+            &format!(
+                "ln -s {} log.txt; echo ATTACKER-CONTROLLED",
+                victim.display()
+            ),
+        );
+        task.executors[0].stdout = Some("/data/log.txt".into());
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original");
+        // The planted link is replaced by a real file inside the work dir.
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        let log = tmp
+            .path()
+            .join("artifacts/tes")
+            .join(&id)
+            .join("data/log.txt");
+        assert!(!std::fs::symlink_metadata(&log)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "ATTACKER-CONTROLLED\n"
+        );
+
+        // A planted *directory* link cannot be written through either; that fails the task.
+        let outside = tmp.path().join("outside-dir");
+        std::fs::create_dir_all(&outside).unwrap();
+        let mut task = sh_task("", &format!("ln -s {} sub; echo x", outside.display()));
+        task.executors[0].stdout = Some("/data/sub/log.txt".into());
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert!(
+            !outside.join("log.txt").exists(),
+            "wrote through a planted dir link"
+        );
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+
+        // An ordinary stdout file is still written.
+        let mut task = sh_task("", "echo plain");
+        task.executors[0].stdout = Some("/data/log.txt".into());
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        let written = tmp
+            .path()
+            .join("artifacts/tes")
+            .join(&id)
+            .join("data/log.txt");
+        assert_eq!(std::fs::read_to_string(written).unwrap(), "plain\n");
+    }
+
+    #[tokio::test]
+    async fn symlinks_inside_directory_inputs_and_outputs_are_not_followed() {
+        // Reported: a DIRECTORY output containing `leak.txt -> <host file>` delivered the host
+        // file, and a DIRECTORY input from an allowed dir did the same on the way in.
+        let tmp = tempdir().unwrap();
+        let secret = tmp.path().join("outside-secret.txt");
+        std::fs::write(&secret, "outside-secret").unwrap();
+        let allowed = tmp.path().join("allow");
+        std::fs::create_dir_all(allowed.join("indir")).unwrap();
+        std::fs::write(allowed.join("indir/ok.txt"), "ok").unwrap();
+        std::os::unix::fs::symlink(&secret, allowed.join("indir/s")).unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let scheduler = scheduler.with_tes_config(TesExecutionConfig {
+            allow_dirs: vec![allowed.clone()],
+            ..Default::default()
+        });
+
+        let mut task = sh_task("", "cat in/s");
+        task.inputs.push(proteus_core::tes::TesInput {
+            name: None,
+            description: None,
+            url: Some(format!("file://{}", allowed.join("indir").display())),
+            path: "/data/in".into(),
+            type_: proteus_core::tes::TesFileType::Directory,
+            content: None,
+        });
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+        assert!(done.logs[0].logs.is_empty(), "the executor must not run");
+
+        let dest = allowed.join("delivered");
+        let mut task = sh_task(
+            "",
+            &format!("mkdir out && ln -s {} out/leak.txt", secret.display()),
+        );
+        task.outputs.push(proteus_core::tes::TesOutput {
+            name: None,
+            description: None,
+            url: Some(format!("file://{}", dest.display())),
+            path: "/data/out".into(),
+            type_: proteus_core::tes::TesFileType::Directory,
+        });
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
+        assert!(!dest.join("leak.txt").exists(), "host file delivered");
+    }
+
+    #[tokio::test]
+    async fn a_terminal_state_is_never_overwritten() {
+        // Reported: a cancel that returned 200 was later overwritten by COMPLETE, because the
+        // worker's final write was unconditional.
+        let tmp = tempdir().unwrap();
+        let (_scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        repo.insert_tes_task("t", "RUNNING", None, None, "{}")
+            .await
+            .unwrap();
+        assert!(repo
+            .update_tes_task_state_unless_terminal("t", "CANCELED", "{}")
+            .await
+            .unwrap());
+        assert!(!repo
+            .update_tes_task_state_unless_terminal("t", "COMPLETE", "{}")
+            .await
+            .unwrap());
+        assert_eq!(
+            repo.get_tes_task("t").await.unwrap().unwrap().state,
+            "CANCELED"
+        );
     }
 
     fn file_input(url: &str) -> proteus_core::tes::TesInput {
@@ -1166,8 +1431,8 @@ mod tests {
             "file://{}/missing.txt",
             tmp.path().display()
         )));
-        scheduler.submit_tes_task(task).await.unwrap();
-        let done = finished(&repo, "t-missing").await;
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
         assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
         let log = &done.logs[0];
         assert!(log.logs.is_empty(), "executor must not run: {:?}", log.logs);
@@ -1225,8 +1490,8 @@ mod tests {
         let mut task = sh_task("t-bare", "cp in.txt out.txt");
         task.inputs.push(file_input(&src.display().to_string()));
         task.outputs.push(file_output(&dest.display().to_string()));
-        scheduler.submit_tes_task(task).await.unwrap();
-        let done = finished(&repo, "t-bare").await;
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
         assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
         assert_eq!(std::fs::read_to_string(&dest).unwrap(), "payload");
     }
@@ -1285,8 +1550,8 @@ mod tests {
                 path: "/data/out.pdb".into(),
                 type_: proteus_core::tes::TesFileType::File,
             });
-            scheduler.submit_tes_task(task).await.unwrap();
-            let done = finished(&repo, id).await;
+            let id = scheduler.submit_tes_task(task).await.unwrap();
+            let done = finished(&repo, &id).await;
             assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
         }
         let mut cas = Vec::new();
@@ -1315,21 +1580,21 @@ mod tests {
         let tmp = tempdir().unwrap();
         let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
         let mut rx = scheduler.subscribe();
-        scheduler
+        let id = scheduler
             .submit_tes_task(sh_task("t-cancel", "sleep 30"))
             .await
             .unwrap();
         for _ in 0..100 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            if repo.get_tes_task("t-cancel").await.unwrap().unwrap().state == "RUNNING" {
+            if repo.get_tes_task(&id).await.unwrap().unwrap().state == "RUNNING" {
                 break;
             }
         }
         assert_eq!(
-            scheduler.cancel_tes_task("t-cancel").await.unwrap(),
+            scheduler.cancel_tes_task(&id).await.unwrap(),
             CancelOutcome::Canceled
         );
-        let done = finished(&repo, "t-cancel").await;
+        let done = finished(&repo, &id).await;
         assert_eq!(done.state, TesState::Canceled);
         let (mut started, mut canceled, mut failed) = (0, 0, 0);
         while let Ok(ev) = rx.try_recv() {
@@ -1423,8 +1688,8 @@ mod tests {
             path: "/data/out.txt".into(),
             type_: proteus_core::tes::TesFileType::File,
         });
-        scheduler.submit_tes_task(task).await.unwrap();
-        let done = finished(&repo, "t-upload").await;
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
         assert_eq!(done.state, TesState::SystemError, "{:?}", done.logs);
         assert!(done.logs[0]
             .system_logs
@@ -1671,7 +1936,9 @@ mod tests {
 
         // Submit task
         let task_id = scheduler.submit_tes_task(task).await.unwrap();
-        assert_eq!(task_id, "tes-task-unit-test");
+        // The id is the server's, never the client's: it names a directory on the host.
+        assert_ne!(task_id, "tes-task-unit-test");
+        assert!(task_id.starts_with("task-"), "{task_id}");
 
         // Wait a short moment for background execution
         tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;

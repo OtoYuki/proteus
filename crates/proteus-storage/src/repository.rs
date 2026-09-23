@@ -579,6 +579,42 @@ impl ProteusRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    /// As [`update_tes_task_state`](Self::update_tes_task_state), but refused once the task is
+    /// in any terminal state (COMPLETE, EXECUTOR_ERROR, SYSTEM_ERROR, CANCELED). A cancel and a
+    /// finishing worker race for the same row; whichever writes a terminal state first wins and
+    /// the other is told so (`false`).
+    pub async fn update_tes_task_state_unless_terminal(
+        &self,
+        id: &str,
+        state: &str,
+        task_json: &str,
+    ) -> Result<bool, StorageError> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE tes_tasks SET state = ?, task_json = ?, updated_at = ? WHERE id = ? \
+             AND state NOT IN ('COMPLETE', 'EXECUTOR_ERROR', 'SYSTEM_ERROR', 'CANCELED', 'PREEMPTED')",
+        )
+        .bind(state)
+        .bind(task_json)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Ids of TES tasks that are not in a terminal state (queued, initializing, running,
+    /// paused). At daemon start these are tasks whose worker died with the previous process.
+    pub async fn unfinished_tes_task_ids(&self) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id FROM tes_tasks WHERE state NOT IN \
+             ('COMPLETE', 'EXECUTOR_ERROR', 'SYSTEM_ERROR', 'CANCELED', 'PREEMPTED')",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
+
     pub async fn get_tes_task(&self, id: &str) -> Result<Option<TesTaskRecord>, StorageError> {
         let row = sqlx::query(
             "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks WHERE id = ?"
