@@ -119,7 +119,11 @@ pub async fn run(
     let pb = ProgressBar::new(total_seqs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({percent}%) {msg}")?
+            .template(&format!(
+                "[{{elapsed_precise}}] {{bar:40.{}/{}}} {{pos}}/{{len}} ({{percent}}%) {{msg}}",
+                tint(proteus_render::brand::Role::Accent),
+                tint(proteus_render::brand::Role::Line)
+            ))?
             .progress_chars("█▓▒░"),
     );
     pb.set_message("Screening candidate library in parallel...");

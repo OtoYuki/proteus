@@ -15,6 +15,7 @@ shipped code differs from a document, the table below says so — the code, `CHA
 | [2026-09-21 SP4 ESM-2 scoring](2026-09-21-sp4-esm2-fitness-scoring-design.md) | implemented | Library scoring caches the wild-type forward pass (`MarginalScorer`, 2026-09-22). |
 | [2026-09-23 WebGL viewer](2026-09-23-webgl-viewer-design.md) | implemented | Faces are flipped toward the viewer by the view-space normal, not `gl_FrontFacing` (the document says why). |
 | [2026-09-23 TUI home](2026-09-23-tui-home-design.md) | implemented | Text fields are edited only after Enter: typing straight into a focused field let a first key like `3` or `q` act as a command. Structure files are measured once the selection rests for 300 ms, not one at a time. |
+| [2026-09-23 Proteus identity](2026-09-23-proteus-identity-design.md) | implemented | Freigeist and Goga are not embedded in the browser page (licence for distribution unconfirmed); Geist Mono and Figtree (OFL) stand in. WebKit/Safari is not verified. |
 
 [2026-09-22 dependency choices](2026-09-22-dependency-choices.md) records where the popular
 answer was the wrong one for a binary that has to run offline, and what replaced it.

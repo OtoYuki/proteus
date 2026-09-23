@@ -224,7 +224,13 @@ fn analyse(path: &Path) -> Analysis {
 fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
     let quiet = spec.mode == RunMode::Quiet;
     if !quiet {
-        println!("\x1b[90m$ {}\x1b[0m", spec.display());
+        let a = proteus_render::brand::ansi::Ansi::detect();
+        use proteus_render::brand::Role;
+        println!(
+            "{} {}",
+            a.paint(Role::Dim, "~ $"),
+            a.paint(Role::Muted, &spec.display())
+        );
     }
     let capture = if quiet {
         Some(tempfile::tempfile().context("temporary file for the output")?)
@@ -293,7 +299,16 @@ fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
         }
     };
     if spec.mode == RunMode::Pause {
-        print!("\n\x1b[36m{summary}\x1b[0m\nPress Enter to return to proteus… ");
+        let a = proteus_render::brand::ansi::Ansi::detect();
+        use proteus_render::brand::Role;
+        let line = match failure {
+            None => a.paint(Role::Accent, &format!("✓ {summary}")),
+            Some(_) => a.paint(Role::Bad, &format!("✗ {summary}")),
+        };
+        print!(
+            "\n{line}\n{} ",
+            a.paint(Role::Dim, "press enter to return to proteus…")
+        );
         let _ = std::io::stdout().flush();
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);

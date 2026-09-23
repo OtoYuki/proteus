@@ -46,6 +46,28 @@ pub fn lockup_svg(theme: &Theme) -> String {
     )
 }
 
+/// The 1280 × 640 card a link preview shows (GitHub's social preview size): the lockup, the
+/// one-line description, and the prompt motif.
+pub fn social_card_svg() -> String {
+    let t = &DARK;
+    let mark = mark_svg(t, true)
+        .replace(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Proteus">"#, "")
+        .replace("</svg>", "");
+    let pitch = 14.0;
+    let mono = "Geist Mono, IBM Plex Mono, DejaVu Sans Mono, monospace";
+    format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="Proteus, a s1re.sh project"><rect width="1280" height="640" fill="{ground}"/><g transform="translate(96 150) scale(2.6)">{mark}</g><g transform="translate(420 190)" fill="{text}">{dots}</g><text x="420" y="378" fill="{muted}" font-family="{mono}" font-size="30">The protein-engineering design loop,</text><text x="420" y="420" fill="{muted}" font-family="{mono}" font-size="30">in one binary.</text><line x1="96" y1="520" x2="1184" y2="520" stroke="{line}" stroke-width="1.5"/><text x="96" y="566" font-family="{mono}" font-size="22" xml:space="preserve"><tspan fill="{dim}">~ $ </tspan><tspan fill="{text}">proteus</tspan><tspan fill="{warm}"> ▌</tspan></text><text x="1184" y="566" text-anchor="end" fill="{dim}" font-family="{mono}" font-size="18" letter-spacing="3">{sig}</text></svg>"#,
+        ground = css(t.ground),
+        text = css(t.text),
+        muted = css(t.muted),
+        dim = css(t.dim),
+        line = css(t.line),
+        warm = css(t.warm),
+        dots = matrix::svg_dots("proteus", pitch, pitch * 0.38),
+        sig = SIGNATURE.to_uppercase(),
+    )
+}
+
 /// Every asset: (file name, contents).
 pub fn all() -> Vec<(&'static str, String)> {
     vec![
@@ -53,6 +75,7 @@ pub fn all() -> Vec<(&'static str, String)> {
         ("proteus-mark-outline.svg", mark_svg(&LIGHT, false)),
         ("proteus-lockup-dark.svg", lockup_svg(&DARK)),
         ("proteus-lockup-light.svg", lockup_svg(&LIGHT)),
+        ("proteus-social.svg", social_card_svg()),
     ]
 }
 

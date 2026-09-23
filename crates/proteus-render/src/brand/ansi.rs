@@ -11,6 +11,8 @@ pub const RESET: &str = "\x1b[0m";
 pub struct Ansi {
     pub depth: ColorDepth,
     pub theme: Theme,
+    /// No escape sequences at all, not even bold: the output is going to a pipe or a file.
+    pub plain: bool,
 }
 
 impl Ansi {
@@ -18,12 +20,33 @@ impl Ansi {
         Self::with_depth(ColorDepth::detect())
     }
 
+    /// For lines printed to standard output: no colour when it is not a terminal (a pipe, a
+    /// file), so what a script captures is plain text.
+    pub fn for_stdout() -> Self {
+        use std::io::IsTerminal;
+        if std::io::stdout().is_terminal() {
+            Self::detect()
+        } else {
+            Self {
+                plain: true,
+                ..Self::with_depth(ColorDepth::None)
+            }
+        }
+    }
+
     pub fn with_depth(depth: ColorDepth) -> Self {
-        Self { depth, theme: DARK }
+        Self {
+            depth,
+            theme: DARK,
+            plain: false,
+        }
     }
 
     /// Foreground escape for a role.
     pub fn fg(&self, role: Role) -> String {
+        if self.plain {
+            return String::new();
+        }
         match self.depth {
             ColorDepth::None => match role {
                 Role::Dim | Role::Line => "\x1b[2m".into(),
@@ -77,7 +100,11 @@ impl Ansi {
     }
 
     pub fn bold(&self, text: &str) -> String {
-        format!("\x1b[1m{text}{RESET}")
+        if self.plain {
+            text.to_string()
+        } else {
+            format!("\x1b[1m{text}{RESET}")
+        }
     }
 
     pub fn colours(&self) -> bool {
@@ -136,5 +163,11 @@ mod tests {
         assert_eq!(none.paint(Role::Sea, "x"), "x");
         assert_eq!(none.paint_rgb(ColorRGB::new(0, 83, 214), "█"), "█");
         assert_eq!(nearest_ansi16(ColorRGB::new(0, 83, 214)), 4);
+        let plain = Ansi {
+            plain: true,
+            ..Ansi::with_depth(ColorDepth::TrueColor)
+        };
+        let out = plain.paint(Role::Accent, "a") + &plain.bold("b") + &plain.paint(Role::Dim, "c");
+        assert_eq!(out, "abc", "a pipe gets no escape sequences at all");
     }
 }

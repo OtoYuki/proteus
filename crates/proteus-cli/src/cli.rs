@@ -186,6 +186,27 @@ pub fn fit_table(table: &mut comfy_table::Table) {
     }
 }
 
+/// A brand role as an indicatif/console style token (`{bar:40.<token>}`), at the terminal's
+/// colour depth: `#rrggbb`, a 256-colour index, or an ANSI name. `console` turns colour off
+/// itself under `NO_COLOR` and in a pipe.
+pub fn tint(role: proteus_render::brand::Role) -> String {
+    use proteus_render::brand::{self, ColorDepth, Role};
+    let c = role.rgb(&brand::DARK);
+    match ColorDepth::detect() {
+        ColorDepth::TrueColor => brand::css(c),
+        ColorDepth::Ansi256 => brand::to_ansi256(c).to_string(),
+        _ => match role {
+            Role::Accent => "yellow",
+            Role::Warm => "yellow",
+            Role::Sea => "cyan",
+            Role::Bad => "red",
+            Role::Dim | Role::Line => "black",
+            Role::Text | Role::Muted => "white",
+        }
+        .to_string(),
+    }
+}
+
 /// `$PROTEUS_DATA_DIR` if set (containers, CI), else `~/.local/share/proteus`.
 pub fn get_default_data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("PROTEUS_DATA_DIR") {

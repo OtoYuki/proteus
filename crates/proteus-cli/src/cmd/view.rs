@@ -334,11 +334,37 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
 /// the same sequence residue for residue; otherwise yellow, since the number then describes
 /// only the paired part.
 fn superposition_summary(s: &proteus_render::SuperpositionStats) -> String {
-    let colour = if s.same_sequence() { "32" } else { "33" };
+    superposition_summary_with(s, &proteus_render::brand::ansi::Ansi::for_stdout())
+}
+
+/// The RMSD in the accent with ✓ only when the two are the same sequence residue for residue;
+/// otherwise in the warm colour with !, since the number then describes only the paired part.
+fn superposition_summary_with(
+    s: &proteus_render::SuperpositionStats,
+    a: &proteus_render::brand::ansi::Ansi,
+) -> String {
+    use proteus_render::brand::Role;
+    let (glyph, role) = if s.same_sequence() {
+        ("✓", Role::Accent)
+    } else {
+        ("!", Role::Warm)
+    };
     format!(
-        "\x1b[1mSuperposition:\x1b[0m target (tide) vs reference (clay) | \x1b[{colour}mRMSD: \
-         {:.3} Å over {} Cα pairs\x1b[0m (target {}/{}, reference {}/{} residues paired by {})",
-        s.rmsd, s.paired, s.paired, s.target_residues, s.paired, s.reference_residues, s.pairing
+        "{} {} vs {} {}  {}",
+        a.bold("superposition"),
+        a.paint_rgb(proteus_render::brand::structure::TARGET, "■ target"),
+        a.paint_rgb(proteus_render::brand::structure::REFERENCE, "■ reference"),
+        a.paint(
+            role,
+            &format!("{glyph} RMSD: {:.3} Å over {} Cα pairs", s.rmsd, s.paired)
+        ),
+        a.paint(
+            Role::Dim,
+            &format!(
+                "(target {}/{}, reference {}/{} residues paired by {})",
+                s.paired, s.target_residues, s.paired, s.reference_residues, s.pairing
+            )
+        )
     )
 }
 
@@ -573,9 +599,14 @@ mod tests {
             mismatched_names: 0,
             pairing: "residue id",
         };
-        let line = super::superposition_summary(&same);
+        use proteus_render::brand::{ansi::Ansi, ColorDepth, Role};
+        let a = Ansi::with_depth(ColorDepth::TrueColor);
+        let line = super::superposition_summary_with(&same, &a);
         assert!(
-            line.contains("\x1b[32mRMSD: 0.500 Å over 46 Cα pairs"),
+            line.contains(&format!(
+                "{}✓ RMSD: 0.500 Å over 46 Cα pairs",
+                a.fg(Role::Accent)
+            )),
             "{line}"
         );
         assert!(super::superposition_warning(&same).is_none());
@@ -585,10 +616,10 @@ mod tests {
             target_residues: 45,
             ..same
         };
-        let line = super::superposition_summary(&shorter);
+        let line = super::superposition_summary_with(&shorter, &a);
         assert!(
-            !line.contains("\x1b[32m"),
-            "differing sequences reported in green: {line}"
+            !line.contains(&a.fg(Role::Accent)) && line.contains("! RMSD"),
+            "differing sequences reported as a clean match: {line}"
         );
         assert!(line.contains("reference 45/46"), "{line}");
         let warning = super::superposition_warning(&shorter).unwrap();
