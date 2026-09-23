@@ -48,6 +48,21 @@ pub struct Args {
     executor_timeout: u64,
 }
 
+/// `--host` as users write it: an IPv4 or IPv6 literal (with or without brackets) or a name
+/// such as `localhost`, which resolves to its first address.
+fn resolve_listen_addr(host: &str, port: u16) -> Result<SocketAddr> {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if let Ok(ip) = bare.parse::<std::net::IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    use std::net::ToSocketAddrs;
+    (host, port)
+        .to_socket_addrs()
+        .with_context(|| format!("--host {host}: not an IP address or a resolvable name"))?
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("--host {host} resolves to no address"))
+}
+
 pub async fn run(
     args: Args,
     db_path: &std::path::Path,
@@ -70,7 +85,7 @@ pub async fn run(
     let pool = create_sqlite_pool(&db_path).await?;
     let repo = ProteusRepository::new(pool);
     let compute_runner = resolve_runner(runner)?;
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
+    let addr = resolve_listen_addr(&host, port)?;
 
     let tes_executor: Arc<dyn TesExecutor> = match executor {
         ExecutorMode::Container => Arc::new(
@@ -110,4 +125,30 @@ pub async fn run(
         PipelineScheduler::new(repo, compute_runner, artifacts_dir).with_tes_config(tes);
     run_server_with_options(addr, scheduler, ServerOptions { auth_token }).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod host_tests {
+    use super::resolve_listen_addr;
+
+    #[test]
+    fn host_accepts_names_and_bare_ipv6() {
+        // Reported: `--host localhost` and `--host ::1` were refused as bad socket addresses.
+        assert!(resolve_listen_addr("localhost", 8080)
+            .unwrap()
+            .ip()
+            .is_loopback());
+        assert_eq!(
+            resolve_listen_addr("::1", 8080).unwrap().to_string(),
+            "[::1]:8080"
+        );
+        assert_eq!(
+            resolve_listen_addr("[::1]", 8080).unwrap().to_string(),
+            "[::1]:8080"
+        );
+        assert_eq!(
+            resolve_listen_addr("0.0.0.0", 9).unwrap().to_string(),
+            "0.0.0.0:9"
+        );
+    }
 }

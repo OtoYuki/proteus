@@ -207,7 +207,11 @@ pub fn export_records_to_parquet<W: Write + Send>(
 /// Reject an export path whose extension is not one of the supported formats. `screen` calls
 /// this before folding anything, so a typo does not surface only after the whole run.
 pub fn check_export_path(path: &Path) -> Result<(), StorageError> {
-    match path.extension().and_then(|s| s.to_str()) {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
         Some("json") | Some("parquet") | Some("csv") => Ok(()),
         other => Err(StorageError::UnsupportedExportFormat(
             other.unwrap_or("").to_string(),
@@ -229,7 +233,11 @@ pub async fn save_screening_dataset(
         }
     }
 
-    match path.extension().and_then(|s| s.to_str()) {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    match ext.as_deref() {
         Some("json") => {
             let content =
                 export_records_to_json(records).map_err(StorageError::SerializationError)?;

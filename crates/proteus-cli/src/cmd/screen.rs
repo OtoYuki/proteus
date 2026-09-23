@@ -127,7 +127,30 @@ pub async fn run(
     let compute_runner = resolve_runner(runner)?;
     let scheduler = PipelineScheduler::new(repo.clone(), compute_runner, artifacts_dir);
 
+    // Advance the bar as each job ends, not once at the end of the batch.
+    let mut events = scheduler.subscribe();
+    let ticker = {
+        let pb = pb.clone();
+        let ours: std::collections::HashSet<Uuid> = job_ids.iter().copied().collect();
+        tokio::spawn(async move {
+            use proteus_engine::EngineEvent;
+            loop {
+                match events.recv().await {
+                    Ok(EngineEvent::JobCompleted { job_id, .. })
+                    | Ok(EngineEvent::JobFailed { job_id, .. })
+                        if ours.contains(&job_id) =>
+                    {
+                        pb.inc(1)
+                    }
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    };
     let results = scheduler.process_batch(&job_ids, workers).await;
+    ticker.abort();
+    pb.set_position(total_seqs as u64);
     pb.finish_with_message("Screening batch execution complete!");
 
     let successful_count = results.iter().filter(|r| r.is_ok()).count();
@@ -220,8 +243,12 @@ pub async fn run(
                         .as_ref()
                         .and_then(|m| m.get(&seq.id).copied())
                         .flatten();
+                    // An entry the ESM-2 scorer could not score (no mutation tag, or a tag
+                    // that does not apply) ranks after every scored one; falling back to the
+                    // 0-100 fitness would put it above every ESM-2 log-ratio.
                     let rank_key = match (scorer, esm2_score) {
-                        (esm_cmd::Scorer::Structure, _) | (_, None) => fitness,
+                        (esm_cmd::Scorer::Structure, _) => fitness,
+                        (_, None) => f64::NEG_INFINITY,
                         (esm_cmd::Scorer::Esm2, Some(e)) => e as f64,
                         (esm_cmd::Scorer::Hybrid, Some(e)) => esm_cmd::hybrid(fitness, e),
                     };
@@ -259,7 +286,7 @@ pub async fn run(
             "no candidate reached the leaderboard: {failed} of {total_seqs} jobs failed \
              (run with RUST_LOG=info to see why), {simulated_dropped} produced simulated \
              placeholders, and the remaining {} fell below --min-plddt {min_plddt:.1}",
-            successful_count - simulated_dropped
+            successful_count.saturating_sub(simulated_dropped)
         );
     }
 
@@ -302,12 +329,19 @@ pub async fn run(
     );
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
-    // Wrap inside the cells rather than letting the terminal hard-wrap mid-border.
-    table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-    if let Ok((cols, _)) = crossterm::terminal::size() {
-        if cols >= 40 {
-            table.set_width(cols);
+    // On a terminal, wrap inside the cells rather than letting the terminal hard-wrap
+    // mid-border. Into a pipe or a file, never wrap: a short job id split over two lines
+    // breaks grep and copy-paste, and there is no width to fit.
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
+        if let Ok((cols, _)) = crossterm::terminal::size() {
+            if cols >= 40 {
+                table.set_width(cols);
+            }
         }
+    } else {
+        table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
     }
     // A column of dashes says nothing, so ESM-2 only appears when something scored.
     let show_esm = candidates.iter().take(top).any(|c| c.esm2_score.is_some());
@@ -357,7 +391,9 @@ pub async fn run(
         table.add_row(row);
     }
 
-    println!("{table}");
+    if top > 0 {
+        println!("{table}");
+    }
     if scorer != esm_cmd::Scorer::Structure {
         println!(
             "Ranked by {:?} (ESM-2 {} marginals, {})",

@@ -176,6 +176,34 @@ pub fn build_router_with_options(state: AppState, options: ServerOptions) -> Rou
         .with_state(state)
 }
 
+/// Run native jobs that were queued without a worker (`proteus submit --wait=false`, or a
+/// job queued before the daemon started). Every few seconds the oldest queued jobs are handed
+/// to the scheduler, which claims each atomically, so a job the API handler or a CLI already
+/// started is skipped rather than run twice.
+fn spawn_queue_poller(scheduler: PipelineScheduler) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            tick.tick().await;
+            let ids = match scheduler.repo().queued_job_ids(16).await {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::warn!("queue poll failed: {e}");
+                    continue;
+                }
+            };
+            for id in ids {
+                let s = scheduler.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = s.process_job(id).await {
+                        tracing::warn!("queued job {id} failed: {e}");
+                    }
+                });
+            }
+        }
+    });
+}
+
 pub async fn run_server(
     addr: SocketAddr,
     scheduler: PipelineScheduler,
@@ -209,6 +237,7 @@ pub async fn run_server_with_options(
         ),
         Err(e) => tracing::error!("could not close out interrupted TES tasks: {e}"),
     }
+    spawn_queue_poller(scheduler.clone());
     let state = AppState::new(scheduler);
 
     let app = build_router_with_options(state, options);

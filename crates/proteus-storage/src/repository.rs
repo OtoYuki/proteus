@@ -115,6 +115,36 @@ impl ProteusRepository {
         Ok(())
     }
 
+    /// Move a job from Queued (or Pending) to Running, atomically. Returns whether this caller
+    /// got it: the CLI, the daemon's API and its queue poller may all try to start the same
+    /// job, and exactly one must run it.
+    pub async fn claim_job(&self, id: Uuid) -> Result<bool, StorageError> {
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'Running', started_at = ?, error_log = NULL \
+             WHERE id = ? AND status IN ('Queued', 'Pending')",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Ids of jobs waiting to run, oldest first.
+    pub async fn queued_job_ids(&self, limit: i64) -> Result<Vec<Uuid>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id FROM jobs WHERE status IN ('Queued', 'Pending') \
+             ORDER BY created_at LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| Uuid::parse_str(&r.get::<String, _>("id")).ok())
+            .collect())
+    }
+
     pub async fn update_job_status(
         &self,
         id: Uuid,

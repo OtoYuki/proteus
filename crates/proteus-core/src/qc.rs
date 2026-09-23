@@ -65,6 +65,18 @@ pub struct StructureQc {
     pub fitness: f64,
 }
 
+/// Kabsch C-alpha RMSD between two structures, normalised exactly as the full analysis does
+/// (protein residues, heavy atoms, first altloc). Errors when the C-alpha counts differ.
+pub fn ca_rmsd(model: &pdbtbx::PDB, reference: &pdbtbx::PDB) -> Result<f64, CoreError> {
+    let ca = |pdb: &pdbtbx::PDB| -> Vec<nalgebra::Vector3<f64>> {
+        crate::backbone::extract_backbone(&crate::io::protein_heavy_atoms(pdb))
+            .iter()
+            .filter_map(|r| r.ca)
+            .collect()
+    };
+    crate::metrics::compute_kabsch_rmsd(&ca(model), &ca(reference))
+}
+
 /// `name.pdb.gz` → `name`, `x.cif` → `x`, `model_0.ent` → `model_0`.
 pub fn model_name(path: &Path) -> String {
     let name = path
@@ -138,11 +150,14 @@ pub fn structure_qc(
     let loaded = crate::io::load_structure(path)?;
     let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,
-        reference,
+        None,
         Some(&loaded.header_preview),
         confidence,
     )?;
     let m = detailed.metrics;
+    // RMSD is one optional column: a model whose length differs from the reference (common
+    // across a design campaign) gets a null there instead of losing its whole row.
+    let rmsd_to_reference = reference.and_then(|r| ca_rmsd(&loaded.pdb, r).ok());
 
     let protein = crate::io::protein_heavy_atoms(&loaded.pdb);
     let backbone = crate::backbone::extract_backbone(&protein);
@@ -210,7 +225,7 @@ pub fn structure_qc(
         salt_bridge_count: net.map_or(0, |n| n.total_salt_bridges),
         pi_stacking_count: net.map_or(0, |n| n.total_pi_pi_stacks),
         cation_pi_count: net.map_or(0, |n| n.total_cation_pi),
-        rmsd_to_reference: m.rmsd_to_reference,
+        rmsd_to_reference,
         fitness: m.candidate_fitness_score.unwrap_or(0.0),
     })
 }
@@ -357,6 +372,27 @@ mod tests {
         assert!(m.ramachandran_stats.is_none());
         let f = crate::ranking::evaluate_candidate_fitness(&m, 8);
         assert_eq!(f.ramachandran_component, 85.0);
+    }
+
+    #[test]
+    fn a_reference_of_another_length_leaves_rmsd_empty_not_the_row() {
+        // Reported: `analyze a.pdb b.pdb --reference c.pdb` with c of a different length
+        // dropped every row ("0 of 2 structures analysed").
+        let reference = crate::io::open_structure(&data("1crn.pdb")).unwrap();
+        let same = structure_qc(&data("1crn.cif"), Some(&reference), None).unwrap();
+        assert!(same.rmsd_to_reference.unwrap() < 1e-3);
+        let dir = tempfile::tempdir().unwrap();
+        let short: String = std::fs::read_to_string(data("1crn.pdb"))
+            .unwrap()
+            .lines()
+            .filter(|l| !(l.starts_with("ATOM") && l[22..26].trim() == "46"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let path = dir.path().join("short.pdb");
+        std::fs::write(&path, short).unwrap();
+        let other = structure_qc(&path, Some(&reference), None).unwrap();
+        assert_eq!(other.n_residues, 45);
+        assert_eq!(other.rmsd_to_reference, None);
     }
 
     #[test]

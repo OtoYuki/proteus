@@ -86,20 +86,23 @@ pub fn generate_mutant_library(
     let end = config.window_end.unwrap_or(len);
 
     if start == 0 {
-        return Err(CoreError::InvalidFasta(
-            "Mutagenesis window_start is 1-indexed and must be >= 1".into(),
+        return Err(CoreError::InvalidWindow(
+            "positions are 1-indexed; start must be >= 1".into(),
         ));
     }
-
-    if start > end {
-        return Err(CoreError::InvalidFasta(format!(
-            "Invalid mutagenesis window: start ({start}) exceeds end ({end})"
+    if start > len {
+        return Err(CoreError::InvalidWindow(format!(
+            "start ({start}) is beyond the scaffold, which has {len} residues"
         )));
     }
-
     if end > len {
-        return Err(CoreError::InvalidFasta(format!(
-            "Invalid mutagenesis window: end ({end}) exceeds scaffold length ({len})"
+        return Err(CoreError::InvalidWindow(format!(
+            "end ({end}) exceeds scaffold length ({len})"
+        )));
+    }
+    if start > end {
+        return Err(CoreError::InvalidWindow(format!(
+            "start ({start}) exceeds end ({end})"
         )));
     }
 

@@ -278,10 +278,13 @@ impl PipelineScheduler {
             }
         };
 
+        // Claim, don't overwrite: the daemon's queue poller, its API handler and a CLI on the
+        // same data dir may all reach this for one job.
+        if !self.repo.claim_job(job_id).await? {
+            debug!("job {job_id} is not queued (already claimed or finished); skipping");
+            return Ok(());
+        }
         info!("Starting pipeline execution for job: {}", job_id);
-        self.repo
-            .update_job_status(job_id, JobStatus::Running, None)
-            .await?;
         let _ = self.events_tx.send(EngineEvent::JobStarted { job_id });
         let _ = self
             .repo

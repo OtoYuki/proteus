@@ -97,7 +97,8 @@ pub async fn run(
         print_job_inspection(&repo, job_id).await?;
     } else {
         println!(
-            "Job enqueued in background. Use 'proteus status {}' to inspect.",
+            "Job queued. A `proteus serve` running on the same data directory picks it up \
+             within a few seconds; `proteus status {}` shows its progress.",
             job_id
         );
     }
