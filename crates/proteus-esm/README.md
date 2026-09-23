@@ -38,8 +38,9 @@ This crate is aimed one step further down the pipeline: **variant effect**, not 
   A full scan of crambin (46 residues, 874 single mutants) with the 8M checkpoint takes 0.05 s
   with wild-type marginals and 1.1 s with masked marginals, end to end including model load,
   on a laptop CPU (i7-11800H).
-- **Parity checked against `transformers.EsmForMaskedLM`** on committed reference logits (the
-  8M checkpoint on every push; the 35M test is `#[ignore]`d for download size and run by hand),
+- **Parity checked against `transformers.EsmForMaskedLM`** on committed reference logits, up to
+  the full 1022-residue length (the 8M checkpoint on every push; the 35M test is `#[ignore]`d
+  for download size and run by hand),
   and accuracy reported on real data — ProteinGym v1.1 Spearman ρ, mean |ρ| 0.42 with the 35M
   checkpoint over the five smallest single-mutant assays — rather than only on synthetic checks.
 - **No `hf-hub` dependency** — a ~50-line fetcher, so the dependency tree stays small and the
@@ -52,6 +53,25 @@ ESM C and the open ESM3 weights are MIT-licensed as of mid-2026, but they are di
 architectures and this crate implements ESM-2 only.
 
 Numerical parity with `transformers.EsmForMaskedLM` (fp32) is pinned by `tests/parity.rs`
-against reference logits committed under `tests/data/*.json` (from `validate/esm_reference.py`): logits within 1e-2,
-amino-acid log-probabilities within 5e-3 (largest observed ≈ 2.5e-3) on three proteins for the
-8M and 35M checkpoints. CPU only by default; enable `candle-core/cuda` or `candle-core/metal` downstream.
+against reference values committed under `tests/data/*.json` (from `validate/esm_reference.py`),
+for the 8M and 35M checkpoints, on three short proteins and on a 1022-residue one
+(β-galactosidase): logits within 2e-4 and amino-acid log-probabilities within 1e-4. Largest
+observed: 3.6e-5 / 1.3e-5 on the short proteins, 4.6e-5 / 3.3e-5 at 1022 residues, which is
+the size of `transformers`' own fp32-vs-fp64 difference. Up to 0.6.0 the rotary frequencies
+were recomputed instead of read from the checkpoint (which stores them rounded to fp16); that
+cost 2.5e-3 in log-probability on short proteins and up to 0.1 at 1022 residues, and was
+mistaken for accumulation noise. CPU only by default; enable `candle-core/cuda` or
+`candle-core/metal` downstream.
+
+## Input rules
+
+- **Wild type**: whitespace is ignored, case does not matter, and one trailing `*` is dropped.
+  The 20 standard amino acids and ESM's own `X`, `B`, `Z`, `U`, `O` tokens are accepted (as in
+  `transformers`); any other character (`J`, digits, `-`, `.`, an inner `*`) is an error.
+  `Tokenizer::normalize` applies these rules; positions count residues of its result.
+- **Length**: at most 1022 residues, the ESM-2 training length (1024 tokens with `<cls>` and
+  `<eos>`). Score longer proteins in windows or per domain.
+- **Mutations**: `P19A`, both residues among the 20 standard amino acids, the position in plain
+  digits. A mutation at an `X`/`B`/`Z`/`U`/`O` wild-type position is refused, and `scan` leaves
+  those positions out. `MarginalScorer::score` takes one variant and refuses a position mutated
+  twice; `score_wt_marginal`/`score_masked_marginal` score independent substitutions.

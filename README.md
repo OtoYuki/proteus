@@ -287,9 +287,16 @@ proteus esm scan wildtype.fasta --export scan.csv     # 20×L matrix + a termina
 proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --export lib.parquet
 ```
 
-- **Parity**: logits within 1e-2 and amino-acid log-probabilities within 5e-3 of
-  `transformers.EsmForMaskedLM` (fp32), on three proteins × two checkpoints, against committed
-  reference values; CI runs the 8M checkpoint on every push, the 35M one is run by hand.
+- **Parity**: logits within 2e-4 and amino-acid log-probabilities within 1e-4 of
+  `transformers.EsmForMaskedLM` (fp32; largest observed 4.6e-5 / 3.3e-5), on three short
+  proteins and one of 1022 residues × two checkpoints, against committed reference values; CI
+  runs the 8M checkpoint on every push, the 35M one is run by hand. Up to 0.6.0 the rotary
+  frequencies were recomputed rather than read from the checkpoint, an error of up to 0.1 in
+  log-probability at full length that the short proteins alone had passed off as fp32 noise.
+- **Input**: at most 1022 residues (the ESM-2 training length); whitespace and a final `*` are
+  ignored; anything but amino-acid letters is an error, and substitutions must be between the
+  20 standard amino acids. `[mutation=A10G:C4S]` (ProteinGym's separator) works in library
+  headers.
 - **Accuracy on real data**: ProteinGym v1.1 Spearman ρ over the five smallest single-mutant
   assays — mean |ρ| 0.42 with `esm2_t12_35M`, 0.24 with `esm2_t6_8M`
   ([`bench/README.md`](bench/README.md)).
