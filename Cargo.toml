@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.94"
 authors = ["Sushant Hona <serotoninotonin@gmail.com>", "Proteus Contributors"]
@@ -25,13 +25,13 @@ categories = ["science::bioinformatics", "command-line-utilities", "rendering::e
 
 [workspace.dependencies]
 # Internal workspace crates
-proteus-core = { path = "crates/proteus-core", version = "0.6.0" }
-proteus-storage = { path = "crates/proteus-storage", version = "0.6.0" }
-proteus-engine = { path = "crates/proteus-engine", version = "0.6.0" }
-proteus-server = { path = "crates/proteus-server", version = "0.6.0" }
-proteus-render = { path = "crates/proteus-render", version = "0.6.0" }
-proteus-dssp = { path = "crates/proteus-dssp", version = "0.6.0" }
-proteus-esm = { path = "crates/proteus-esm", version = "0.6.0" }
+proteus-core = { path = "crates/proteus-core", version = "0.7.0" }
+proteus-storage = { path = "crates/proteus-storage", version = "0.7.0" }
+proteus-engine = { path = "crates/proteus-engine", version = "0.7.0" }
+proteus-server = { path = "crates/proteus-server", version = "0.7.0" }
+proteus-render = { path = "crates/proteus-render", version = "0.7.0" }
+proteus-dssp = { path = "crates/proteus-dssp", version = "0.7.0" }
+proteus-esm = { path = "crates/proteus-esm", version = "0.7.0" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }

@@ -36,7 +36,7 @@ prefer it:
 
 ```toml
 [dependencies]
-proteus-dssp = "0.6"
+proteus-dssp = "0.7"
 ```
 
 ```rust

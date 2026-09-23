@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-23
+
+The bug-hunt release, and a security release for anyone running `proteus serve`. Five
+independent code reviews of 0.6.0 reported 75 defects; each was reproduced before it was fixed
+and has a regression test, and a second review of the fixes found eight regressions, also fixed.
+**If you run the TES daemon, upgrade**: in 0.6.0 a client could read and write host files
+through a chosen task id, a container could overwrite host files through its stdout path, and
+any web page could submit tasks to a daemon on localhost. Also: ESM-2 now matches
+`transformers` to within 5·10⁻⁵ at every tested length (a rotary-frequency bug grew to 7·10⁻² at 1022
+residues); malformed structure files are errors, not crashes; AlphaFold models are no longer
+classed experimental by a substring match.
+
 ### Security
 A code-level bug hunt before publishing the crates (five independent reviews: engine and
 server, core science, CLI and storage, renderer, ESM-2) found the following in the TES server.
@@ -531,7 +543,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/OtoYuki/proteus/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OtoYuki/proteus/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/OtoYuki/proteus/compare/v0.3.0...v0.4.0
