@@ -70,8 +70,8 @@ ORDER BY fitness DESC;
 A file that cannot be read is named on stderr and makes the exit status non-zero, but does not
 stop the rest. pLDDT is read from the B-factor column and rescaled when a predictor wrote it on
 0–1 (ESMFold); on three AlphaFold DB models the per-structure mean matches the database's own
-`globalMetricValue` to 0.01. 1 000 models of 76–142 residues take about 44 s on one core and
-7 s on 16 threads (i7-11800H laptop, 8 cores; `-j` sets the thread count).
+`globalMetricValue` to 0.01. 1 000 models of 76–142 residues take 23 s on one thread and 3.5 s
+on 16 (i7-11800H laptop, 8 cores; `-j` sets the thread count).
 
 ## 3. Look at it, over SSH
 
