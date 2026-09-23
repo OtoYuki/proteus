@@ -554,6 +554,68 @@ mod sse_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
+    #[tokio::test]
+    async fn view_page_is_our_webgl_viewer_for_a_c_alpha_only_prediction() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let tmp = tempdir().unwrap();
+        let scheduler = PipelineScheduler::new(
+            repo.clone(),
+            Arc::new(SimulatedRunner::new()),
+            tmp.path().to_path_buf(),
+        );
+        let seq = proteus_core::models::Sequence {
+            id: uuid::Uuid::new_v4(),
+            header: "x".into(),
+            fasta: "ACDEFGHIKLMNPQRSTVWY".into(),
+            length: 20,
+            created_at: chrono::Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let job = proteus_core::models::PipelineJob {
+            id: uuid::Uuid::new_v4(),
+            sequence_id: seq.id,
+            tier: proteus_core::models::PipelineTier::FastScreening,
+            status: proteus_core::models::JobStatus::Queued,
+            priority: 1,
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error_log: None,
+        };
+        repo.insert_job(&job).await.unwrap();
+        // The simulated runner writes a C-alpha-only helix: the page must still be built.
+        scheduler.process_job(job.id).await.unwrap();
+        let app = build_router(AppState::new(scheduler));
+
+        let get = |uri: String| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                let status = response.status();
+                let body = axum::body::to_bytes(response.into_body(), 1 << 24)
+                    .await
+                    .unwrap();
+                (status, String::from_utf8(body.to_vec()).unwrap())
+            }
+        };
+        let (status, html) = get(format!("/view/{}", job.id)).await;
+        assert_eq!(status, StatusCode::OK, "{html}");
+        assert!(html.contains("getContext('webgl2'"));
+        assert!(html.contains("id=\"proteus-mesh\""));
+        assert!(
+            html.contains("SIMULATED"),
+            "the caption must say it is not a prediction"
+        );
+        assert!(!html.contains("$3Dmol"));
+
+        let (status, _) = get(format!("/view/{}", uuid::Uuid::new_v4())).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
     // ---- Regressions from the 2026-09-23 bug hunt -------------------------------------
 
     async fn test_app(dir: &std::path::Path) -> Router {

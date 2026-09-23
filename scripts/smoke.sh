@@ -98,7 +98,7 @@ check "inspect by short id" "$BIN" inspect "${JOB:0:8}"
 check "unknown short id is refused" bash -c "! '$BIN' status deadbeef 2>/dev/null"
 check "too-short prefix is refused" bash -c "! '$BIN' status ab 2>/dev/null"
 
-# --- viewers: every backend draws something; HTML export is a self-contained 3Dmol.js page
+# --- viewers: every backend draws something; HTML export is our self-contained WebGL2 page
 for backend in halfblock braille sixel kitty; do
     check "view --backend $backend" "$BIN" view "$PDB" --backend "$backend" --width 80 --height 24
     check "  frame is not blank ($backend)" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
@@ -111,7 +111,9 @@ if command -v sixel2png >/dev/null; then
 fi
 check "view --compare" "$BIN" view "$PDB" --compare "$CIF" --backend halfblock --width 80 --height 24
 check "view --html" "$BIN" view "$PDB" --html "$WORK/view.html"
-check "html embeds 3Dmol.js" grep -q "\$3Dmol\.createViewer" "$WORK/view.html"
+check "html carries our WebGL2 viewer" grep -q "getContext('webgl2'" "$WORK/view.html"
+check "  and the mesh" grep -q 'id="proteus-mesh"' "$WORK/view.html"
+check "  and nothing from the network" bash -c "! grep -qE 'https?://|src=' '$WORK/view.html'"
 check "view a job (C-alpha-only simulated model)" "$BIN" view "$JOB" --backend halfblock --width 80 --height 24
 check "  frame is not blank" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
 

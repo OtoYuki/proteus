@@ -345,7 +345,7 @@ proteus view structure.pdb --interactive --dashboard
 proteus view structure.pdb --backend halfblock --color ss --width 80 --height 36
 proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
-proteus view structure.pdb --html out.html        # a self-contained 3Dmol.js page, works offline
+proteus view structure.pdb --html out.html        # our own self-contained WebGL2 page, works offline
 ```
 
 `--compare` pairs residues by chain ID, residue number and insertion code, superposes only the

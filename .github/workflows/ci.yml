@@ -55,6 +55,17 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  viewer-js:
+    name: browser viewer (node --test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # colour and mesh-decoding parity of core.js against fixtures written by proteus-render
+      - run: node --test crates/proteus-render/assets/web/test/core.test.js
+
   supply-chain:
     name: cargo-deny + cargo-audit
     runs-on: ubuntu-latest
