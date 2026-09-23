@@ -118,7 +118,9 @@ async fn read_wildtype(arg: &str) -> Result<(String, String)> {
         tokio::io::stdin().read_to_string(&mut s).await?;
         s
     } else if std::path::Path::new(arg).exists() {
-        tokio::fs::read_to_string(arg).await?
+        tokio::fs::read_to_string(arg)
+            .await
+            .with_context(|| format!("cannot read {arg} as a FASTA file"))?
     } else {
         return Ok(("wildtype".into(), raw_residues(arg)?));
     };
@@ -206,6 +208,19 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             top,
         } => {
             let (header, wt) = read_wildtype(&wildtype).await?;
+            // Check where the scan will go before spending the forward passes on it.
+            if let Some(path) = &export {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("cannot create {}", parent.display()))?;
+                }
+                if path.is_dir() {
+                    anyhow::bail!(
+                        "--export {} is a directory; give a file name",
+                        path.display()
+                    );
+                }
+            }
             let model = load_model(&opts)?;
             warn_if_outside_known_good(&wt);
             let rows = proteus_esm::scan(&model, &wt, opts.masked)?;
@@ -230,7 +245,9 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
                     }
                     out.push('\n');
                 }
-                tokio::fs::write(path, out).await?;
+                tokio::fs::write(path, out)
+                    .await
+                    .with_context(|| format!("cannot write {}", path.display()))?;
                 eprintln!("wrote {} × 20 scan -> {}", rows.len(), path.display());
             }
             let mut all: Vec<(Mutation, f32)> = rows
