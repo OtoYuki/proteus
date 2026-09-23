@@ -176,7 +176,16 @@ mod host_tests {
         let err = lock_data_dir(&path).unwrap_err().to_string();
         assert!(err.contains("already running"), "{err}");
         drop(held);
-        assert!(lock_data_dir(&path).is_ok(), "the lock outlived its holder");
+        // Other tests in this process spawn children; between a child's fork and its exec it
+        // shares every open descriptor (close-on-exec closes it only at exec), so the released
+        // lock can look held for an instant. Retry briefly instead of asserting the first try.
+        let reacquired = (0..50).any(|_| {
+            lock_data_dir(&path).is_ok() || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                false
+            }
+        });
+        assert!(reacquired, "the lock outlived its holder");
     }
 
     #[test]
