@@ -13,27 +13,32 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-/// Rust ignores SIGPIPE, so a write to a closed pipe (`proteus analyze … | head -1`) panics
-/// with "failed printing to stdout". Restore the default, as other Unix command-line tools
-/// have it: the process ends quietly when its reader goes away.
-#[cfg(unix)]
-fn default_sigpipe() {
-    extern "C" {
-        fn signal(signum: i32, handler: usize) -> usize;
-    }
-    const SIGPIPE: i32 = 13;
-    const SIG_DFL: usize = 0;
-    // SAFETY: installing the default disposition for SIGPIPE before any thread is spawned.
-    unsafe {
-        signal(SIGPIPE, SIG_DFL);
-    }
+/// A reader that goes away (`proteus analyze … | head -1`) makes the next `println!` panic with
+/// "failed printing to stdout: Broken pipe". End quietly instead, with the status a shell gives
+/// a process killed by SIGPIPE (128 + 13).
+///
+/// Deliberately not done by restoring the default SIGPIPE disposition: that applies to every
+/// pipe and socket in the process, and `proteus serve` writes to executor stdin pipes and
+/// container-engine sockets whose far end can close — which must be an error for one task,
+/// not the end of the daemon.
+fn quiet_broken_stdout() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        if msg.starts_with("failed printing to stdout") && msg.contains("Broken pipe") {
+            std::process::exit(141);
+        }
+        previous(info);
+    }));
 }
 
-#[cfg(not(unix))]
-fn default_sigpipe() {}
-
 fn main() -> Result<()> {
-    default_sigpipe();
+    quiet_broken_stdout();
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?

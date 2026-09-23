@@ -74,8 +74,9 @@ Each has a regression test that reproduces the reported attack.
   residues, and a literal `\n` in a multi-line file was turned into a line break. A C-alpha-only
   trace scored 0 on the Ramachandran term instead of the neutral baseline. A ligand named `NAN`
   was refused as a non-finite coordinate; coordinates past 4.3e9 wrapped silently.
-- **CLI.** A closed stdout (`| head -1`) panicked, and `analyze` lost its `--export`; the
-  default SIGPIPE is restored and the export written first. `screen --scorer esm2` ranked
+- **CLI.** A closed stdout (`| head -1`) panicked, and `analyze` lost its `--export`; a closed
+  stdout now ends the process quietly (status 141) and the export is written first. SIGPIPE
+  itself stays ignored, so a closed executor pipe cannot take down `proteus serve`. `screen --scorer esm2` ranked
   unscored entries above every scored one. `analyze` walked a symlink loop 41 times, aborted on
   one unreadable subdirectory, dropped every row when `--reference` had another length, and
   checked the export target only after the work. Export extensions were case-sensitive (and
