@@ -673,7 +673,7 @@ impl PipelineScheduler {
             info!("TES task {} completed successfully", task_id);
         } else {
             let state = if written {
-                task.state.clone()
+                task.state
             } else {
                 TesState::Canceled
             };
