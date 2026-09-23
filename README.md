@@ -369,6 +369,7 @@ proteus view structure.pdb --backend halfblock --color ss --width 80 --height 36
 proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
 proteus view structure.pdb --html out.html        # our own self-contained WebGL2 page, works offline
+scripts/gallery.sh                                 # a gallery of such pages (target/gallery/)
 ```
 
 `--compare` pairs residues by chain ID, residue number and insertion code, superposes only the
