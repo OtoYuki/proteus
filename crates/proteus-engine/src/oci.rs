@@ -200,10 +200,27 @@ impl ComputeRunner for OciRunner {
             .map_err(|e| EngineError::Container(format!("Failed to create container: {e}")))?;
 
         info!("Starting OCI container: {}", container_name);
-        self.docker
+        if let Err(e) = self
+            .docker
             .start_container(&container_name, None::<StartContainerOptions>)
             .await
-            .map_err(|e| EngineError::Container(format!("Failed to start container: {e}")))?;
+        {
+            // The container exists but never ran (typically: the command is missing from the
+            // image). Remove it here, or it is left behind in `Created` state.
+            let _ = self
+                .docker
+                .remove_container(
+                    &container_name,
+                    Some(RemoveContainerOptions {
+                        force: true,
+                        ..Default::default()
+                    }),
+                )
+                .await;
+            return Err(EngineError::Container(format!(
+                "Failed to start container: {e}"
+            )));
+        }
 
         // Stream logs in background
         let mut logs = self.docker.logs(

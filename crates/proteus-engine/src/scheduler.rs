@@ -601,6 +601,47 @@ impl PipelineScheduler {
         }
     }
 
+    /// Close out TES tasks a previous daemon process left unfinished. Their workers died with
+    /// that process, so nothing will ever move them on: each becomes SYSTEM_ERROR with a log
+    /// line saying why, and the container executor removes any container still labelled with
+    /// the task. Call once at daemon start, before serving; assumes one daemon per data dir.
+    /// Host-executor processes cannot be found again and are not stopped.
+    pub async fn recover_interrupted_tes_tasks(&self) -> Result<usize, EngineError> {
+        let ids = self.repo.unfinished_tes_task_ids().await?;
+        for id in &ids {
+            let Some(record) = self.repo.get_tes_task(id).await? else {
+                continue;
+            };
+            let mut task: TesTask =
+                serde_json::from_str(&record.task_json).unwrap_or_else(|_| TesTask {
+                    id: id.clone(),
+                    ..Default::default()
+                });
+            if let Err(e) = self.tes.executor.stop_task(id).await {
+                warn!("could not remove containers of interrupted task {id}: {e}");
+            }
+            task.state = TesState::SystemError;
+            task.logs.push(TesTaskLog {
+                end_time: Some(Utc::now().to_rfc3339()),
+                system_logs: vec![format!(
+                    "the daemon restarted while this task was {}; it was not resumed",
+                    record.state
+                )],
+                ..Default::default()
+            });
+            let json = serde_json::to_string(&task)
+                .map_err(|e| EngineError::Pipeline(format!("Serialization failed: {e}")))?;
+            self.repo
+                .update_tes_task_state_unless_terminal(id, "SYSTEM_ERROR", &json)
+                .await?;
+            warn!(
+                "TES task {id} was {} when the daemon stopped; now SYSTEM_ERROR",
+                record.state
+            );
+        }
+        Ok(ids.len())
+    }
+
     /// Process a GA4GH TES task through the execution lifecycle.
     ///
     /// Owns the task's end: exactly one terminal state write (refused if a cancel got there
@@ -777,12 +818,28 @@ impl PipelineScheduler {
             }
 
             let exec_start = Utc::now().to_rfc3339();
+            // TES `stdin` names a file in the task's filesystem; its contents are piped in.
+            let stdin_bytes = match executor.stdin.as_deref() {
+                None => None,
+                Some(path) => match read_inside(&work_dir, path).await {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        task_log
+                            .system_logs
+                            .push(format!("cannot read stdin {path}: {e}"));
+                        task.state = TesState::SystemError;
+                        executor_failed = true;
+                        break;
+                    }
+                },
+            };
             let request = ExecutorRequest {
                 image: &executor.image,
                 command: &executor.command,
                 workdir: executor.workdir.as_deref(),
                 env: &executor.env,
-                stdin: executor.stdin.as_deref(),
+                stdin: stdin_bytes.as_deref(),
+                task_id,
                 work_dir: &work_dir,
                 mount_roots: &mount_roots,
                 cpu_cores: task.resources.cpu_cores,
@@ -1004,6 +1061,20 @@ async fn write_inside(
         .await?;
     f.write_all(bytes).await?;
     f.flush().await
+}
+
+/// Read `rel` (a container path) from under `work_dir`, refusing anything that resolves
+/// outside it — an earlier executor may have replaced the file with a symlink to a host file.
+async fn read_inside(work_dir: &std::path::Path, rel: &str) -> Result<Vec<u8>, std::io::Error> {
+    let root = tokio::fs::canonicalize(work_dir).await?;
+    let real = tokio::fs::canonicalize(work_dir.join(rel.trim_start_matches('/'))).await?;
+    if !real.starts_with(&root) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "path resolves outside the task work dir",
+        ));
+    }
+    tokio::fs::read(real).await
 }
 
 /// Copy `src` (file or directory) to `dst`, creating parents.
@@ -1335,6 +1406,74 @@ mod tests {
             repo.get_tes_task("t").await.unwrap().unwrap().state,
             "CANCELED"
         );
+    }
+
+    #[tokio::test]
+    async fn a_restarted_daemon_closes_out_tasks_the_old_process_left_running() {
+        // Reported: after a restart, tasks stayed RUNNING forever.
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        for (id, state) in [("a", "RUNNING"), ("b", "QUEUED"), ("c", "COMPLETE")] {
+            let t = TesTask {
+                id: id.into(),
+                ..Default::default()
+            };
+            repo.insert_tes_task(id, state, None, None, &serde_json::to_string(&t).unwrap())
+                .await
+                .unwrap();
+        }
+        assert_eq!(scheduler.recover_interrupted_tes_tasks().await.unwrap(), 2);
+        for (id, want) in [
+            ("a", "SYSTEM_ERROR"),
+            ("b", "SYSTEM_ERROR"),
+            ("c", "COMPLETE"),
+        ] {
+            let rec = repo.get_tes_task(id).await.unwrap().unwrap();
+            assert_eq!(rec.state, want, "{id}");
+        }
+        let a: TesTask =
+            serde_json::from_str(&repo.get_tes_task("a").await.unwrap().unwrap().task_json)
+                .unwrap();
+        assert_eq!(a.state, TesState::SystemError);
+        assert!(a.logs[0].system_logs[0].contains("daemon restarted"));
+    }
+
+    #[tokio::test]
+    async fn stdin_is_the_file_contents_not_its_path() {
+        // Reported: `stdin: /data/in.txt` piped the string "/data/in.txt" into the command.
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mut task = sh_task("", "cat");
+        task.executors[0].stdin = Some("/data/in.txt".into());
+        task.inputs.push(proteus_core::tes::TesInput {
+            name: None,
+            description: None,
+            url: None,
+            path: "/data/in.txt".into(),
+            type_: proteus_core::tes::TesFileType::File,
+            content: Some("file body".into()),
+        });
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        assert_eq!(done.state, TesState::Complete, "{:?}", done.logs);
+        assert_eq!(done.logs[0].logs[0].stdout.as_deref(), Some("file body"));
+    }
+
+    #[tokio::test]
+    async fn executor_output_is_capped_and_says_so() {
+        // Reported: 200 MB of stdout took the daemon to 859 MB RSS and a 200 MB DB row.
+        let tmp = tempdir().unwrap();
+        let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
+        let mb = crate::tes_exec::MAX_CAPTURED_BYTES / (1024 * 1024) + 2;
+        let task = sh_task("", &format!("head -c {}M /dev/zero | tr '\\0' x", mb));
+        let id = scheduler.submit_tes_task(task).await.unwrap();
+        let done = finished(&repo, &id).await;
+        let out = done.logs[0].logs[0].stdout.as_deref().unwrap();
+        assert_eq!(out.len(), crate::tes_exec::MAX_CAPTURED_BYTES);
+        assert!(done.logs[0]
+            .system_logs
+            .iter()
+            .any(|l| l.contains("stdout truncated")));
     }
 
     fn file_input(url: &str) -> proteus_core::tes::TesInput {

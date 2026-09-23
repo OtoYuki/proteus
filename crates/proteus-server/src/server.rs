@@ -202,6 +202,13 @@ pub async fn run_server_with_options(
         }
     }
     tracing::info!("TES executor backend: {executor_kind}");
+    match scheduler.recover_interrupted_tes_tasks().await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            "{n} TES task(s) left unfinished by the previous run are now SYSTEM_ERROR"
+        ),
+        Err(e) => tracing::error!("could not close out interrupted TES tasks: {e}"),
+    }
     let state = AppState::new(scheduler);
 
     let app = build_router_with_options(state, options);
