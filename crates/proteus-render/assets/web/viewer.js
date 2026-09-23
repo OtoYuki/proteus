@@ -7,10 +7,16 @@
   const C = window.ProteusCore;
   const $ = (id) => document.getElementById(id);
   const meta = JSON.parse($('proteus-meta').textContent);
+  // The brand roles, read from the CSS variables the page declares (brand::css_vars).
+  const css = getComputedStyle(document.documentElement);
+  const role = (name) => css.getPropertyValue('--' + name).trim();
 
   // ---------------------------------------------------------------- panels (no WebGL needed)
-  $('title').textContent = meta.title;
-  $('caption').textContent = meta.caption + ' · ' + meta.residues + ' residues';
+  // The brand already names the product: the heading is the structure, and the line under it
+  // says what kind of file it is.
+  $('title').textContent = meta.caption || meta.title;
+  $('caption').textContent = meta.residues + ' residues · ' +
+    (meta.predicted ? 'predicted model' : 'experimental structure');
   // The tab and a saved PNG are named after the structure, not the generic page title.
   const subject = meta.caption.split(' · ')[0] || meta.title;
   document.title = subject + ' — Proteus';
@@ -331,7 +337,8 @@
       gl.uniform1f(post.u.uZ, zRange);
       gl.uniform1f(post.u.uStep, Math.max(1, Math.min(W, H) / 400));
       gl.uniform1i(post.u.uFx, state.fx ? 1 : 0);
-      gl.uniform3f(post.u.uBg, 10 / 255, 13 / 255, 18 / 255);
+      const bg = meta.palette.ground; // brand::DARK.ground
+      gl.uniform3f(post.u.uBg, bg[0] / 255, bg[1] / 255, bg[2] / 255);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
@@ -362,7 +369,9 @@
       render();
     }
     function request() { if (!queued) { queued = true; requestAnimationFrame(frame); } }
-    new ResizeObserver(request).observe(canvas);
+    new ResizeObserver(() => { hideTip(); request(); }).observe(canvas);
+    // Fade in once the first frame is drawn (the stylesheet skips it for reduced motion).
+    requestAnimationFrame(() => requestAnimationFrame(() => canvas.classList.add('ready')));
     request();
 
     function recolor() {
@@ -462,8 +471,9 @@
     tip.textContent = '';
     const head = document.createElement('b');
     head.textContent = L.name[i] + ' ' + L.chain[i] + L.number[i] + L.icode[i];
-    tip.append(head, document.createElement('br'),
-      document.createTextNode((SS8[meta.dssp[i]] || 'coil') + ' (' + (meta.dssp[i] || '-') + ')' + (conf ? ' · ' + conf : '')));
+    const rest = document.createElement('span');
+    rest.textContent = (SS8[meta.dssp[i]] || 'coil') + ' · ' + (meta.dssp[i] || '-') + (conf ? ' · ' + conf : '');
+    tip.append(head, document.createElement('br'), rest);
     tip.hidden = false;
     tip.style.left = Math.min(x + 14, window.innerWidth - tip.offsetWidth - 8) + 'px';
     tip.style.top = Math.min(y + 14, window.innerHeight - tip.offsetHeight - 8) + 'px';
@@ -484,24 +494,30 @@
     el.textContent = '';
     const name = document.createElement('b');
     if (scheme === 'plddt') {
-      name.textContent = meta.predicted ? 'pLDDT' : 'B-factor column (not a confidence)';
+      name.textContent = meta.predicted ? '(plddt · AlphaFold colours)' : '(b-factor on the pLDDT scale)';
       el.append(name, swatch(C.plddtColor(95), '>90'), swatch(C.plddtColor(80), '70–90'),
         swatch(C.plddtColor(60), '50–70'), swatch(C.plddtColor(25), '<50'));
+      if (!meta.predicted) {
+        const w = document.createElement('span');
+        w.className = 'warn';
+        w.textContent = '! not a confidence';
+        el.append(w);
+      }
     } else if (scheme === 'rainbow') {
-      name.textContent = 'Sequence position';
+      name.textContent = '(sequence position)';
       el.append(name, swatch(C.rainbowColor(0, 4), 'N-terminus'), swatch(C.rainbowColor(2, 4), 'middle'),
         swatch(C.rainbowColor(4, 4), 'C-terminus'));
     } else {
-      name.textContent = 'Secondary structure (DSSP)';
+      name.textContent = '(secondary structure · dssp)';
       el.append(name, swatch(C.ssColor(0), 'helix'), swatch(C.ssColor(1), 'strand'), swatch(C.ssColor(2), 'coil'));
     }
   }
 
   function buildPanel() {
     const panel = $('panel');
-    const h = (text) => { const e = document.createElement('h2'); e.textContent = text; panel.append(e); };
+    const h = (text) => { const e = document.createElement('h2'); e.textContent = '(' + text + ')'; panel.append(e); };
     if (meta.metrics.length) {
-      h('Measurements');
+      h('measurements');
       const dl = document.createElement('dl');
       for (const [k, v] of meta.metrics) {
         const dt = document.createElement('dt'); dt.textContent = k;
@@ -511,52 +527,85 @@
       panel.append(dl);
     }
     if (meta.rama.length) {
-      h('Ramachandran (φ, ψ)');
+      h('ramachandran φ, ψ');
       panel.append(ramaPlot());
+      // Each region has its own shape, so the plot reads without colour.
+      const key = document.createElement('div');
+      key.className = 'key';
+      for (const [shape, word, r] of [['●', 'favoured', 'accent'], ['○', 'allowed', 'warm'], ['▲', 'outlier', 'bad']]) {
+        const s = document.createElement('span');
+        const g = document.createElement('span');
+        g.style.color = role(r);
+        g.textContent = shape + ' ';
+        s.append(g, document.createTextNode(word));
+        key.append(s);
+      }
+      panel.append(key);
     }
     if (meta.perResidue.length) {
-      h(meta.predicted ? 'pLDDT along the chain' : 'B-factor along the chain');
+      h(meta.predicted ? 'plddt along the chain' : 'b-factor along the chain');
       panel.append(residueStrip());
+      if (!meta.predicted) {
+        const w = document.createElement('p');
+        w.className = 'note warn';
+        w.textContent = '! An experimental B-factor measures motion and disorder, not confidence.';
+        panel.append(w);
+      }
     }
     const note = document.createElement('p');
     note.className = 'note';
-    note.textContent = 'Drawn by Proteus from its own ribbon geometry and DSSP; nothing is fetched from the network.';
+    note.textContent = 'Drawn by Proteus from its own ribbon geometry and DSSP. Nothing is fetched from the network.';
     panel.append(note);
   }
 
   function ramaPlot() {
     const c = document.createElement('canvas');
-    const px = 260, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const px = 268, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = px * dpr; c.height = px * dpr; c.className = 'rama';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
-    g.fillStyle = '#10151c'; g.fillRect(0, 0, px, px);
-    g.strokeStyle = '#2a3340'; g.lineWidth = 1;
+    g.fillStyle = role('ground'); g.fillRect(0, 0, px, px);
+    g.strokeStyle = role('line'); g.lineWidth = 1;
+    g.strokeRect(0.5, 0.5, px - 1, px - 1);
     const to = (a) => (a + 180) / 360 * px;
-    for (const a of [-90, 0, 90]) {
+    g.setLineDash([2, 3]);
+    for (const a of [-90, 90]) {
       g.beginPath(); g.moveTo(to(a), 0); g.lineTo(to(a), px); g.stroke();
       g.beginPath(); g.moveTo(0, px - to(a)); g.lineTo(px, px - to(a)); g.stroke();
     }
-    const col = ['#84cc16', '#f59e0b', '#ef4444'];
-    for (const [phi, psi, r] of meta.rama) {
-      g.fillStyle = col[r] || col[2];
-      g.beginPath(); g.arc(to(phi), px - to(psi), r === 2 ? 2.6 : 1.8, 0, 2 * Math.PI); g.fill();
+    g.setLineDash([]);
+    g.beginPath(); g.moveTo(to(0), 0); g.lineTo(to(0), px); g.moveTo(0, px - to(0)); g.lineTo(px, px - to(0)); g.stroke();
+    // Favoured first, outliers last, so an outlier is never hidden under a favoured point.
+    const colour = [role('accent'), role('warm'), role('bad')];
+    const pts = [...meta.rama].sort((a, b) => a[2] - b[2]);
+    for (const [phi, psi, r] of pts) {
+      const x = to(phi), y = px - to(psi);
+      g.fillStyle = g.strokeStyle = colour[r] || colour[2];
+      g.beginPath();
+      if (r === 2) { g.moveTo(x, y - 3.4); g.lineTo(x + 3, y + 2); g.lineTo(x - 3, y + 2); g.closePath(); g.fill(); }
+      else if (r === 1) { g.lineWidth = 1.2; g.arc(x, y, 2.4, 0, 2 * Math.PI); g.stroke(); }
+      else { g.arc(x, y, 1.9, 0, 2 * Math.PI); g.fill(); }
     }
-    g.fillStyle = '#8b98a8'; g.font = '10px ui-monospace, monospace';
-    g.fillText('φ →', px - 26, px - 4); g.fillText('ψ ↑', 4, 12);
+    g.fillStyle = role('dim'); g.font = "10px 'Geist Mono', ui-monospace, monospace";
+    g.fillText('φ →', px - 28, px - 6); g.fillText('ψ ↑', 6, 14);
     return c;
   }
 
   function residueStrip() {
     const c = document.createElement('canvas');
-    const n = meta.perResidue.length, w = 260, h = 18, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const n = meta.perResidue.length, w = 268, h = 16, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = w * dpr; c.height = h * dpr; c.className = 'strip';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
-    const max = Math.max(...meta.perResidue, 1);
+    let lo = Infinity, hi = -Infinity;
+    for (const v of meta.perResidue) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    // B-factors: a neutral ramp over the structure's own range, from the line colour to muted.
+    const hex = (s) => [1, 3, 5].map((k) => parseInt(s.slice(k, k + 2), 16));
+    const [a, b] = [hex(role('line')), hex(role('muted'))];
     for (let i = 0; i < n; i++) {
       const v = meta.perResidue[i];
-      const rgb = meta.predicted ? C.plddtColor(v) : [0, 0, 0].map(() => Math.round(60 + 170 * v / max));
+      const t = hi > lo ? (v - lo) / (hi - lo) : 0.5;
+      const rgb = meta.predicted ? C.plddtColor(v) : a.map((x, k) => Math.round(x + (b[k] - x) * t));
       g.fillStyle = 'rgb(' + rgb.join(',') + ')';
       g.fillRect(i / n * w, 0, Math.max(w / n, 1), h);
     }

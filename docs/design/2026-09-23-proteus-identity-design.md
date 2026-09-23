@@ -211,6 +211,40 @@ Freigeist and Goga licences are confirmed, swapping them in is a one-line change
 | `TERM=xterm` | ANSI 3, 8 and 11 only, ground not painted |
 | `NO_COLOR` | none |
 
+## The browser viewer, as built (sub-project 4)
+
+**Colours and type:**
+- Every colour on the page comes from `brand::css_vars`, declared on `:root` when the page is
+  built. `viewer.css` names no colour of its own.
+- The fonts are embedded as WOFF2 data URIs: Geist Mono and Figtree, latin subsets from Google
+  Fonts, 20 KB and 23 KB. Both are SIL OFL 1.1, confirmed from the upstream repositories; the
+  licences are in `assets/web/fonts/`. The 1CRN page grows from 72 KB to 157 KB.
+
+**Layout:**
+- **Header:** the mark and the dot-matrix wordmark, inline SVG. There is no `xmlns`, because the
+  self-containment test forbids any URL in the page. Then the structure's name as the heading,
+  and "N residues · predicted model / experimental structure" under it.
+- **Panel:**
+  - `(named)` hairline sections.
+  - Ramachandran with a shape per region (● ○ ▲) and a key.
+  - For an experimental file, a note that a B-factor measures motion and disorder, not
+    confidence.
+- **Legend:** swatch + word. The pLDDT legend names the AlphaFold colours, or says "! not a
+  confidence" on an experimental file.
+- **Loading:** the canvas fades in over 0.45 s once drawn. There is no fade under
+  `prefers-reduced-motion`.
+
+**Verified in Chromium and Firefox** (local Playwright): WebGL2, both fonts loaded, the legend
+follows `c`, picking, and the forced no-WebGL2 fallback. WebKit could not be launched with the
+installed Playwright build, so Safari is not verified.
+
+**Found and fixed:**
+- The panel code read the colour roles before they were declared (a temporal-dead-zone error)
+  and the page never started. No automated test runs `viewer.js` (only `core.js`), so the
+  browser check caught it.
+- A tooltip left over from before a resize was squeezed into one column; it is now kept on one
+  line and hidden on resize.
+
 ## Non-goals
 
 A new logo for s1re.sh itself; changing the pLDDT convention; any font that cannot be embedded

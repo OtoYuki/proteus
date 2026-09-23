@@ -33,6 +33,13 @@ All notable changes to this project are documented here. The format follows
 
   The viewer's status bar shows a legend for the current colours. On an experimental file it
   says the pLDDT scheme is the B-factor column, not a confidence.
+- The browser viewer page wears the identity:
+  - The mark and dot-matrix wordmark in the header.
+  - The structure's name as the heading.
+  - `(named)` hairline panels.
+  - Ramachandran points with a shape per region.
+  - A legend that names the AlphaFold colours, or says a B-factor is not a confidence.
+  - Geist Mono and Figtree embedded (SIL OFL 1.1), so it looks the same offline.
 - The dashboard's pLDDT strip uses the AlphaFold colours. It had four colours of its own, so
   the strip and the ribbon beside it disagreed. Without colour, the strip shows the bands as
   shade density.

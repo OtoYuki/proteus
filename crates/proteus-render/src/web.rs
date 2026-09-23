@@ -19,6 +19,39 @@ use std::io::Write;
 const CORE_JS: &str = include_str!("../assets/web/core.js");
 const VIEWER_JS: &str = include_str!("../assets/web/viewer.js");
 const VIEWER_CSS: &str = include_str!("../assets/web/viewer.css");
+/// SIL OFL 1.1 fonts, embedded so the page looks the same offline (assets/web/fonts/README.md).
+const GEIST_MONO: &[u8] = include_bytes!("../assets/web/fonts/GeistMono-latin.woff2");
+const FIGTREE: &[u8] = include_bytes!("../assets/web/fonts/Figtree-latin.woff2");
+
+/// The page's head styles: the embedded fonts, the brand's colour roles, then viewer.css.
+fn page_css() -> String {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    format!(
+        "@font-face{{font-family:'Geist Mono';font-weight:100 900;font-display:swap;src:url(data:font/woff2;base64,{})format('woff2')}}\
+         @font-face{{font-family:'Figtree';font-weight:300 900;font-display:swap;src:url(data:font/woff2;base64,{})format('woff2')}}\
+         :root{{{}}}{}",
+        b64(GEIST_MONO),
+        b64(FIGTREE),
+        crate::brand::css_vars(&crate::brand::DARK),
+        VIEWER_CSS
+    )
+}
+
+/// The mark and the dot-matrix wordmark, inline (no `xmlns`: inline SVG in HTML needs none,
+/// and the page must not name a URL).
+fn brand_header() -> String {
+    use crate::brand::{assets, matrix, DARK};
+    let mark = assets::mark_svg(&DARK, true).replace(r#" xmlns="http://www.w3.org/2000/svg""#, "");
+    let (w, h, _) = matrix::bitmap("proteus");
+    let pitch = 3.0;
+    format!(
+        r#"<div id="brand" role="img" aria-label="Proteus">{mark}<svg class="word" viewBox="0 0 {vw} {vh}" aria-hidden="true"><g fill="currentColor">{dots}</g></svg></div>"#,
+        vw = w as f32 * pitch,
+        vh = h as f32 * pitch,
+        dots = matrix::svg_dots("proteus", pitch, pitch * 0.38),
+    )
+}
 
 /// Magic bytes and version of the mesh blob. Bump the digit when the layout changes; the page
 /// refuses a blob it does not know.
@@ -224,6 +257,7 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         },
         "dssp": s.dssp,
         "palette": {
+            "ground": [crate::brand::DARK.ground.r, crate::brand::DARK.ground.g, crate::brand::DARK.ground.b],
             "disulfide": [
                 crate::brand::structure::DISULFIDE.r,
                 crate::brand::structure::DISULFIDE.g,
@@ -269,11 +303,11 @@ impl WebPage<'_> {
 </head>
 <body>
 <canvas id="view" tabindex="0" aria-label="3D structure"></canvas>
-<header id="head"><h1 id="title"></h1><p id="caption"></p></header>
+<header id="head">{brand}<div id="subject"><h1 id="title"></h1><p id="caption"></p></div></header>
 <aside id="panel" aria-label="structure details"></aside>
 <div id="legend" aria-live="polite"></div>
 <div id="tip" role="tooltip" hidden></div>
-<footer id="keys">drag rotate · wheel zoom · right-drag pan · <kbd>c</kbd> colour · <kbd>o</kbd> effects · <kbd>d</kbd> disulfides · <kbd>space</kbd> spin · <kbd>r</kbd> reset · <kbd>s</kbd> save PNG</footer>
+<footer id="keys"><span><kbd>drag</kbd> rotate</span><span><kbd>wheel</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
@@ -284,7 +318,9 @@ impl WebPage<'_> {
 "#,
             version = env!("CARGO_PKG_VERSION"),
             title = escape_html(self.title),
-            css = VIEWER_CSS,
+            css = page_css(),
+            brand = brand_header(),
+            signature = crate::brand::SIGNATURE,
             meta = meta,
             mesh = mesh_b64,
             core = CORE_JS,
