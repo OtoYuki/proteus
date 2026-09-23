@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-23
+
+The structure-QC release. `proteus analyze` takes a folder of models and writes one row per
+structure, which is the first command that serves someone who already has models from another
+tool. Every claim in the README and in the two standalone crates was re-checked against a fresh
+measurement or its source before this release: 11 were wrong and 12 overstated, and all are
+corrected below. Also new since 0.5.0: a Sixel backend, a carbonyl-oriented ribbon, PLIP as a
+reference for salt bridges and π interactions (which found and fixed a 5× π–π over-count), and a
+53-file validation corpus.
+
 ### Added
 - **`proteus analyze` takes many structures.** Files and directories (searched recursively
   for `.pdb`, `.ent`, `.cif`, `.mmcif`, optionally gzipped) are analysed in parallel (`-j`) into
@@ -16,95 +26,6 @@ All notable changes to this project are documented here. The format follows
   `--json` prints JSON Lines. An unreadable file is reported and makes the exit status
   non-zero without stopping the others. One file with neither flag still prints the full
   report; `--pdb` still works.
-
-### Fixed
-- **Claims corrected after a line-by-line fact audit** (every number re-measured, external
-  facts re-checked at the source):
-  - `proteus-dssp`: agreement with mdtraj was stated as "≥ 98 % on eight states"; the 98 %
-    floor is for three states. Now: 99.6 % of 30 335 residues on eight states, 99.96 % on three,
-    worst non-exempt file 97.8 %, one documented exemption. The docs said π-helices only fill
-    unassigned residues; they may overwrite α (prefer-π, as mdtraj), which is what the code does.
-  - `proteus-esm`: loading "any" `facebook/esm2_*` checkpoint from the Hub was wrong for 3B and
-    15B, which publish no safetensors. "ESM-3 weights are non-commercial" is out of date — the
-    open ESM3 and ESM C weights are MIT since mid-2026. The unsourced "weak on long multi-domain
-    sequences" claim is replaced by ProteinGym's per-taxon numbers (human 0.457, virus 0.261).
-    Parity is checked in CI for the 8M checkpoint only; the README had said both.
-  - README: Kabsch RMSD was listed as validated against mdtraj (it is unit-tested only); corpus
-    is 53 files / 48 entries; `make validate` installs ~650 MB of Python tools, not ~50 MB;
-    crambin full profile is ~9 ms; the lateral π-offset test is PLIP's criterion, not
-    McGaughey's; H-bonds use heavy-atom criteria compared against Baker–Hubbard rather than
-    being Baker–Hubbard; Sixel's 6–21× is against Proteus's uncompressed kitty output; other
-    terminal viewers do infer secondary structure, so that is no longer claimed as a difference.
-  - Both crates now ship `LICENSE-MIT` and `LICENSE-APACHE` in the package.
-- `view --html` and `--web` were described as a Mol\* page in `--help`, the README and the
-  smoke test; the page moved to 3Dmol.js after 0.5.0 (unreleased). The smoke assertion kept
-  passing only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now
-  checks for the page's own viewer call.
-
-### Changed
-- **Positioning corrected against a proper landscape search.** Three "only in Rust" claims were
-  wrong, and are now stated accurately with the neighbours named and linked in the README:
-  - [`molex`](https://github.com/foldit-org/molex) implements Kabsch–Sander DSSP in Rust.
-    `proteus-dssp` is the 8-state one, standalone and dependency-free, and the one validated
-    against mdtraj on real structures — not the only one.
-  - [`esm-rs`](https://github.com/tcztzy/esm-rs) runs ESM on candle with CUDA/MLX backends.
-    `proteus-esm` is aimed at variant-effect scoring rather than embeddings — not the only one.
-  - [`planetary`](https://github.com/stjude-rust-labs/planetary) serves GA4GH TES from Rust on
-    Kubernetes. Proteus is the single-binary, local-container-socket deployment — a different
-    model, not a better one.
-  Also: mdtraj validates its own DSSP against stored `mkdssp` references, so our harness is
-  *unusually thorough*, not categorically different. The phrasing everywhere now reflects that.
-
-### Fixed
-- **Secondary structure in the render is now pinned to the coordinates, not the file's
-  annotations.** Predicted structures carry no `HELIX`/`SHEET` records — an ESMFold response has
-  none — so a viewer that reads them has nothing to read for exactly the files this tool exists
-  to look at. Proteus already ran DSSP, but nothing stopped that regressing; a test now strips
-  the annotations and asserts the per-class vertex counts are unchanged. Measured head-to-head,
-  another terminal viewer's β-strand coverage nearly halves on the same pair of files where ours
-  does not move at all, and on an ESMFold prediction of protein G it renders helix where the
-  four-stranded sheet is.
-- **The cartoon ribbon's flat face now follows the backbone instead of an arbitrary axis.**
-  Frames came from pure parallel transport seeded on a fixed reference vector, so the ribbon
-  was smooth and twist-free but its wide face bore no relation to the peptide planes — β-strands
-  did not lie flat in their sheet and did not show the sheet's real twist. The wide axis is now
-  the backbone carbonyl, flip-corrected per residue (Carson & Bugg 1986, the construction PyMOL,
-  Mol\* and Chimera use), falling back to parallel transport for Cα-only traces that have no
-  carbonyl. Checked against the **interaction network** rather than against the ribbon's own
-  inputs: residues that are H-bond partners across a β-sheet should present near-parallel
-  faces, and now do at a consistent **21–31°** across the corpus (the sheet's genuine twist),
-  where parallel transport gave an erratic 25–84° depending on where its seed landed.
-- **`proteus view` says when the viewport cannot resolve what you asked for.** Rendering 8 015
-  residues into 80×24 cells gives 3.4 Å per pixel while consecutive Cα atoms are 3.8 Å apart —
-  the picture is the fold's outline and nothing per-residue survives, and nothing said so. It
-  now prints the Å-per-pixel and points at a larger terminal or a finer backend, and a test
-  pins that the advice is true (braille really does resolve more than half-block at the same
-  cell count, kitty more than braille).
-- **Errors name the mistake instead of the symptom.** Handing a FASTA to a structure command
-  produced pdbtbx's "No Atoms in the given PDB struct while validating", which tells a
-  first-time user neither what they did nor what to do. It now says the file looks like a FASTA
-  and points at `proteus submit`/`screen`; a file with no coordinates at all says so; and the
-  mirror mistake — a PDB handed to a sequence command — points at `proteus analyze --pdb`.
-  Both directions are tested.
-- `proteus esm` prints, once, where zero-shot ESM-2 scores are known to be weak (long
-  multi-domain sequences), because the published benchmarks say so and a reader should not have
-  to find that in a paper after acting on a ranking. The README and the crate README carry the
-  viral-protein caveat and state why ESM-2 rather than ESM-3 (ESM-3's weights are
-  non-commercial; ESM C 300M is MIT and is the natural next checkpoint).
-- **π–π stacking and cation–π were over-reported, and the counts change.** Neither test included
-  a lateral-offset term, so two aromatic rings that were parallel and within the distance cutoff
-  but slid sideways past each other counted as stacked, and a cation beyond the ring edge counted
-  as sitting over its face. Measured against PLIP across 15 structures that was **20 % precision
-  on π–π** (55 reported where PLIP finds 11) and 33 % on cation–π. Both now apply the McGaughey
-  (1998) 2.0 Å offset criterion that PLIP uses: **π–π precision 20 % → 81.8 %** (11 reported,
-  matching PLIP's 11) and **cation–π 33.3 % → 73.9 %** (51 → 23). Found by adopting the reference,
-  not by inspection.
-  **This changes reported counts, the non-covalent network density and therefore fitness scores**
-  for structures with aromatics — 1CRN's network density goes 121.7 → 119.6 contacts/100 res.
-  A unit test that asserted crambin has ≥ 1 aromatic interaction was itself wrong: PLIP finds
-  none there, and the assertion now requires agreement with the reference.
-
-### Added
 - **A Sixel backend** (`--backend sixel`). Sixel reaches terminals the kitty protocol does not —
   xterm (`-ti vt340`), mlterm, foot, contour, WezTerm, Windows Terminal — and on several of them
   it is the only true-pixel path there is. It is also **6–21× cheaper on the wire** than kitty
@@ -160,6 +81,18 @@ All notable changes to this project are documented here. The format follows
   headline feature against `transformers` on every push instead of trusting committed JSON.
 
 ### Changed
+- **Positioning corrected against a proper landscape search.** Three "only in Rust" claims were
+  wrong, and are now stated accurately with the neighbours named and linked in the README:
+  - [`molex`](https://github.com/foldit-org/molex) implements Kabsch–Sander DSSP in Rust.
+    `proteus-dssp` is the 8-state one, standalone and dependency-free, and the one validated
+    against mdtraj on real structures — not the only one.
+  - [`esm-rs`](https://github.com/tcztzy/esm-rs) runs ESM on candle with CUDA/MLX backends.
+    `proteus-esm` is aimed at variant-effect scoring rather than embeddings — not the only one.
+  - [`planetary`](https://github.com/stjude-rust-labs/planetary) serves GA4GH TES from Rust on
+    Kubernetes. Proteus is the single-binary, local-container-socket deployment — a different
+    model, not a better one.
+  Also: mdtraj validates its own DSSP against stored `mkdssp` references, so our harness is
+  *unusually thorough*, not categorically different. The phrasing everywhere now reflects that.
 - `proteus-cli` is one module per subcommand. `main.rs` was 1 654 lines with a 1 067-line
   `main()` holding every command body in one `match`; it is now 31 lines that parse and
   dispatch. Each subcommand owns its clap `Args` struct and its `run` in `src/cmd/<name>.rs`,
@@ -180,6 +113,76 @@ All notable changes to this project are documented here. The format follows
   the viewer's built-in guess: on 1CRN the browser now shows the assignment that agrees with
   `mdtraj.compute_dssp` on 46/46 residues, where 3Dmol.js's heuristic misses the 3₁₀ helix at
   42–44. The web page can no longer disagree with `analyze`, the terminal viewer or the export.
+
+### Fixed
+- **Claims corrected after a line-by-line fact audit** (every number re-measured, external
+  facts re-checked at the source):
+  - `proteus-dssp`: agreement with mdtraj was stated as "≥ 98 % on eight states"; the 98 %
+    floor is for three states. Now: 99.6 % of 30 335 residues on eight states, 99.96 % on three,
+    worst non-exempt file 97.8 %, one documented exemption. The docs said π-helices only fill
+    unassigned residues; they may overwrite α (prefer-π, as mdtraj), which is what the code does.
+  - `proteus-esm`: loading "any" `facebook/esm2_*` checkpoint from the Hub was wrong for 3B and
+    15B, which publish no safetensors. "ESM-3 weights are non-commercial" is out of date — the
+    open ESM3 and ESM C weights are MIT since mid-2026. The unsourced "weak on long multi-domain
+    sequences" claim is replaced by ProteinGym's per-taxon numbers (human 0.457, virus 0.261).
+    Parity is checked in CI for the 8M checkpoint only; the README had said both.
+  - README: Kabsch RMSD was listed as validated against mdtraj (it is unit-tested only); corpus
+    is 53 files / 48 entries; `make validate` installs ~650 MB of Python tools, not ~50 MB;
+    crambin full profile is ~9 ms; the lateral π-offset test is PLIP's criterion, not
+    McGaughey's; H-bonds use heavy-atom criteria compared against Baker–Hubbard rather than
+    being Baker–Hubbard; Sixel's 6–21× is against Proteus's uncompressed kitty output; other
+    terminal viewers do infer secondary structure, so that is no longer claimed as a difference.
+  - Both crates now ship `LICENSE-MIT` and `LICENSE-APACHE` in the package.
+- `view --html` and `--web` were described as a Mol\* page in `--help`, the README and the
+  smoke test; the page moved to 3Dmol.js after 0.5.0 (unreleased). The smoke assertion kept
+  passing only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now
+  checks for the page's own viewer call.
+- **Secondary structure in the render is now pinned to the coordinates, not the file's
+  annotations.** Predicted structures carry no `HELIX`/`SHEET` records — an ESMFold response has
+  none — so a viewer that reads them has nothing to read for exactly the files this tool exists
+  to look at. Proteus already ran DSSP, but nothing stopped that regressing; a test now strips
+  the annotations and asserts the per-class vertex counts are unchanged. Measured head-to-head,
+  another terminal viewer's β-strand coverage nearly halves on the same pair of files where ours
+  does not move at all, and on an ESMFold prediction of protein G it renders helix where the
+  four-stranded sheet is.
+- **The cartoon ribbon's flat face now follows the backbone instead of an arbitrary axis.**
+  Frames came from pure parallel transport seeded on a fixed reference vector, so the ribbon
+  was smooth and twist-free but its wide face bore no relation to the peptide planes — β-strands
+  did not lie flat in their sheet and did not show the sheet's real twist. The wide axis is now
+  the backbone carbonyl, flip-corrected per residue (Carson & Bugg 1986, the construction PyMOL,
+  Mol\* and Chimera use), falling back to parallel transport for Cα-only traces that have no
+  carbonyl. Checked against the **interaction network** rather than against the ribbon's own
+  inputs: residues that are H-bond partners across a β-sheet should present near-parallel
+  faces, and now do at a consistent **21–31°** across the corpus (the sheet's genuine twist),
+  where parallel transport gave an erratic 25–84° depending on where its seed landed.
+- **`proteus view` says when the viewport cannot resolve what you asked for.** Rendering 8 015
+  residues into 80×24 cells gives 3.4 Å per pixel while consecutive Cα atoms are 3.8 Å apart —
+  the picture is the fold's outline and nothing per-residue survives, and nothing said so. It
+  now prints the Å-per-pixel and points at a larger terminal or a finer backend, and a test
+  pins that the advice is true (braille really does resolve more than half-block at the same
+  cell count, kitty more than braille).
+- **Errors name the mistake instead of the symptom.** Handing a FASTA to a structure command
+  produced pdbtbx's "No Atoms in the given PDB struct while validating", which tells a
+  first-time user neither what they did nor what to do. It now says the file looks like a FASTA
+  and points at `proteus submit`/`screen`; a file with no coordinates at all says so; and the
+  mirror mistake — a PDB handed to a sequence command — points at `proteus analyze`.
+  Both directions are tested; the message no longer carries a run of stray spaces.
+- `proteus esm` suggests, once, scoring known domains separately when a sequence runs past 400
+  residues. The README and the crate README carry ProteinGym's own per-taxon numbers for ESM-2
+  650M (Spearman ρ 0.457 on human assays, 0.261 on viral ones), so the weak spot is stated with
+  its source rather than discovered after acting on a ranking.
+- **π–π stacking and cation–π were over-reported, and the counts change.** Neither test included
+  a lateral-offset term, so two aromatic rings that were parallel and within the distance cutoff
+  but slid sideways past each other counted as stacked, and a cation beyond the ring edge counted
+  as sitting over its face. Measured against PLIP across 15 structures that was **20 % precision
+  on π–π** (55 reported where PLIP finds 11) and 33 % on cation–π. Both now apply PLIP's 2.0 Å
+  lateral-offset criterion (benzene radius + 0.5 Å): **π–π precision 20 % → 81.8 %** (11 reported,
+  matching PLIP's 11) and **cation–π 33.3 % → 73.9 %** (51 → 23). Found by adopting the reference,
+  not by inspection.
+  **This changes reported counts, the non-covalent network density and therefore fitness scores**
+  for structures with aromatics — 1CRN's network density goes 121.7 → 119.6 contacts/100 res.
+  A unit test that asserted crambin has ≥ 1 aromatic interaction was itself wrong: PLIP finds
+  none there, and the assertion now requires agreement with the reference.
 
 ## [0.5.0] — 2026-09-22
 
@@ -382,7 +385,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/OtoYuki/proteus/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/OtoYuki/proteus/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/OtoYuki/proteus/compare/v0.1.0-thesis...v0.3.0
