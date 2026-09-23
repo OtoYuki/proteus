@@ -110,6 +110,8 @@ jobs:
       - run: cargo build --release -p proteus-cli
       - name: Pre-pull alpine (anonymous Docker Hub pulls are rate-limited on hosted runners)
         run: docker pull docker.io/library/alpine:3.20
+      # tmux: smoke.sh closes a terminal under the interactive viewer and the home screen
+      - run: command -v tmux || (sudo apt-get update && sudo apt-get install -y tmux)
       - run: scripts/smoke.sh --tes docker.io/library/alpine:3.20
       - name: Container-executor unit tests (need the Docker socket)
         run: PROTEUS_TEST_OCI=1 cargo test -p proteus-engine --lib -- --ignored container_executor
