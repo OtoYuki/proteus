@@ -317,7 +317,7 @@ pub fn run_interactive_viewer(
             // Render disulfide bridges if present and enabled
             if show_disulfides {
                 if let Some(ref ds_mesh) = config.disulfide_mesh {
-                    let gold = ColorRGB::new(251, 191, 36);
+                    let gold = crate::brand::structure::DISULFIDE;
                     rasterizer.rasterize_mesh(ds_mesh, &camera, &mut fb, ColorScheme::Solid(gold));
                 }
             }

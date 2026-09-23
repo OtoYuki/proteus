@@ -58,7 +58,8 @@ From the sources:
     - outlines where a 4-neighbour depth step exceeds 4 Å (colour × 0.35)
     - SSAO from 8 depth samples at 2–3 px, occlusion ≤ 45 %, floor 0.5
 - **Colours:** the AlphaFold pLDDT ramp (#FF7D45 → #FFDB13 → #65CBF3 → #0053D6 with linear
-  interpolation), secondary structure (helix #D946EF, strand #F59E0B, coil #06B6D4), and a rainbow
+  interpolation), secondary structure (helix #D946EF, strand #F59E0B, coil #06B6D4; replaced on
+  2026-09-23 by the identity colours, see the identity design note), and a rainbow
   HSV hue from 240° to 0° at s 0.85, v 0.95.
 
 ## Design
