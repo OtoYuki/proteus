@@ -2643,6 +2643,7 @@ dependencies = [
  "proteus-server",
  "proteus-storage",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2723,6 +2724,7 @@ dependencies = [
  "pdbtbx",
  "proteus-core",
  "thiserror 2.0.20",
+ "unicode-width",
  "uuid",
 ]
 
@@ -2732,6 +2734,7 @@ version = "0.6.0"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "blake3",
  "chrono",
  "form_urlencoded",
  "glob",

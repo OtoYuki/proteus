@@ -49,6 +49,8 @@ impl TriangleMesh {
 /// `guides` is the ribbon's wide axis per residue, taken from the backbone carbonyl and
 /// flip-corrected (Carson & Bugg 1986) — the same construction PyMOL, Mol* and Chimera use. It
 /// is what makes a β-strand's flat face lie in the sheet and show the strand's real twist.
+/// Between residues the axis is interpolated from one guide to the next, so the face twists
+/// smoothly along the spline instead of turning all at once at each residue boundary.
 /// `None` for a residue whose C or O is absent (a C-alpha-only trace, which the offline
 /// simulator and coarse-grained models produce); those fall back to parallel transport, which
 /// is smooth and twist-free but carries no physical meaning.
@@ -98,7 +100,7 @@ pub fn generate_cartoon_mesh(
         let res_idx = s_pt.residue_index.min(n_res - 1);
         // Prefer the carbonyl-derived axis, made perpendicular to the tangent. Falls back to
         // the parallel-transported frame when this residue has no backbone O.
-        let (axis_wide, axis_thin) = match guides.get(res_idx).copied().flatten() {
+        let (axis_wide, axis_thin) = match interpolated_guide(guides, res_idx, s_pt.parameter) {
             Some(g) => {
                 let t = s_pt.tangent.normalize();
                 let perp = g - t * g.dot(&t);
@@ -222,6 +224,42 @@ pub fn generate_cartoon_mesh(
     }
 
     mesh
+}
+
+/// The ribbon's wide axis at fraction `u` of the way from C-alpha `i` to C-alpha `i + 1`.
+///
+/// Using residue `i`'s guide unchanged over the whole span held the face still inside a
+/// residue and then turned it by the full guide-to-guide angle at the boundary: on 1UBQ a
+/// median 29–64° turn between consecutive rings across a boundary against 5–7° within one.
+/// Residue `i`'s carbonyl belongs to the peptide between C-alphas `i` and `i + 1`, so its guide
+/// is placed mid-span and blended (normalised linear interpolation) towards the neighbouring
+/// peptide's on either side; that brings the boundary turns down to 13–29°, the rest being the
+/// spline's own curvature at the C-alpha. The guides are flip-corrected upstream, so neighbours
+/// agree in sign; should they not (an uncorrected caller), blending would pass near zero, and
+/// residue `i`'s guide is used as before.
+fn interpolated_guide(guides: &[Option<Vector3<f64>>], i: usize, u: f64) -> Option<Vector3<f64>> {
+    let own = guides.get(i).copied().flatten()?;
+    let at = |j: Option<usize>| j.and_then(|j| guides.get(j).copied().flatten());
+    // Residue i's carbonyl belongs to the peptide between C-alpha i and i+1, so its guide is
+    // anchored mid-span (u = 0.5) and blended towards the neighbouring peptide's on each side.
+    let u = u.clamp(0.0, 1.0);
+    let (other, t) = if u < 0.5 {
+        (at(i.checked_sub(1)), 0.5 - u)
+    } else {
+        (at(Some(i + 1)), u - 0.5)
+    };
+    let Some(other) = other else {
+        return Some(own);
+    };
+    if own.dot(&other) <= 0.0 {
+        return Some(own);
+    }
+    let g = own * (1.0 - t) + other * t;
+    if g.norm() > 1e-9 {
+        Some(g.normalize())
+    } else {
+        Some(own)
+    }
 }
 
 /// Generate a 3D cylindrical stick mesh connecting p1 to p2.

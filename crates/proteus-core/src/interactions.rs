@@ -208,8 +208,11 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                 atom_map.insert(name, Vector3::new(atom.x(), atom.y(), atom.z()));
             }
 
-            // 1. Backbone Donor & Acceptor
-            if let (Some(&n_pos), Some(&ca_pos)) = (atom_map.get("N"), atom_map.get("CA")) {
+            // 1. Backbone Donor & Acceptor. Proline's N carries no hydrogen and cannot donate
+            // (DSSP excludes it for the same reason).
+            if let (Some(&n_pos), Some(&ca_pos), false) =
+                (atom_map.get("N"), atom_map.get("CA"), res_name == "PRO")
+            {
                 donors.push(ExtractedAtom {
                     chain: chain_idx,
                     chain_id: chain_id.clone(),
@@ -680,6 +683,17 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
             }
         }
     }
+
+    // Serine, threonine and tyrosine hydroxyls are both donor and acceptor, so one O–H···O
+    // contact between two of them is found once in each direction. A hydroxyl has one
+    // hydrogen: keep the first direction found, drop the mirror image.
+    let mut seen = std::collections::HashSet::new();
+    hbonds.retain(|h| {
+        let a = (h.donor_res_idx, h.donor_atom_name.clone());
+        let b = (h.acceptor_res_idx, h.acceptor_atom_name.clone());
+        let key = if a <= b { (a, b) } else { (b, a) };
+        seen.insert(key)
+    });
 
     // --- 2. Evaluate Salt Bridges ---
     let mut candidate_salt_bridges: Vec<SaltBridge> = Vec::new();
@@ -1184,5 +1198,23 @@ END
         assert_eq!(cpi.ring_res_name, "PHE");
         assert!((cpi.distance_to_centroid - 4.0).abs() < 1e-2);
         assert!(cpi.angle_to_normal_deg < 5.0);
+    }
+    #[test]
+    fn proline_does_not_donate_and_a_hydroxyl_pair_is_one_bond() {
+        // Reported: `PRO10:N -> ALA1:O` was listed as a hydrogen bond (proline's N has no H),
+        // and SER OG / THR OG1 within range were counted as two bonds, one each way.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/edge");
+        let pro = crate::io::open_structure(&dir.join("pro_donor_sp.pdb")).unwrap();
+        let net = compute_interaction_network(&crate::io::protein_heavy_atoms(&pro));
+        assert!(
+            net.hbonds
+                .iter()
+                .all(|h| h.donor_res_name != "PRO" || h.donor_atom_name != "N"),
+            "{:?}",
+            net.hbonds
+        );
+        let st = crate::io::open_structure(&dir.join("ser_thr_sp.pdb")).unwrap();
+        let net = compute_interaction_network(&crate::io::protein_heavy_atoms(&st));
+        assert_eq!(net.summary.total_hbonds, 1, "{:?}", net.hbonds);
     }
 }

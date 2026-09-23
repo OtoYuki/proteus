@@ -182,7 +182,11 @@ pub fn save_qc_table(rows: &[StructureQc], path: &Path) -> Result<(), StorageErr
             std::fs::create_dir_all(parent)?;
         }
     }
-    let bytes = match path.extension().and_then(|s| s.to_str()) {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase);
+    let bytes = match ext.as_deref() {
         Some("parquet") => {
             let mut buf = Vec::new();
             export_qc_to_parquet(rows, &mut buf)?;

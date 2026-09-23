@@ -97,9 +97,13 @@ pub fn sniff_format(text: &str, hint: Option<&str>) -> StructureFormat {
 /// (SEQRES, SEQADV, DBREF, HELIX, SHEET, SITE, LINK, …) are dropped before parsing: they carry
 /// nothing Proteus uses, and pdbtbx's lexer rejects legitimate deposited files on malformed
 /// ones (e.g. blank sequence numbers in the SEQADV deletion records of 1TIM).
+/// Records handed to pdbtbx. Bond records (SSBOND, CONECT) and the MASTER checksum are left
+/// out: nothing here reads them (disulfides are found from geometry), and in a trimmed or
+/// edited file a bond record naming a residue that is no longer there makes pdbtbx refuse the
+/// whole file.
 const COORDINATE_RECORDS: &[&str] = &[
     "HEADER", "REMARK", "CRYST1", "SCALE", "ORIGX", "MTRIX", "MODEL", "ATOM", "HETATM", "ANISOU",
-    "TER", "ENDMDL", "END", "SSBOND", "CONECT", "MASTER",
+    "TER", "ENDMDL", "END",
 ];
 
 fn coordinate_records_only(text: &str) -> String {
@@ -107,6 +111,11 @@ fn coordinate_records_only(text: &str) -> String {
     for line in text.lines() {
         if COORDINATE_RECORDS.iter().any(|r| line.starts_with(r)) {
             out.push_str(line);
+            // Many tools stop an atom record after the B-factor (column 66) or the segment id
+            // (72); pdbtbx refuses such lines as too short. The missing columns are optional.
+            if (line.starts_with("ATOM") || line.starts_with("HETATM")) && line.len() < 80 {
+                out.extend(std::iter::repeat_n(' ', 80 - line.len()));
+            }
             out.push('\n');
         }
     }
@@ -115,16 +124,37 @@ fn coordinate_records_only(text: &str) -> String {
 
 /// pdbtbx panics (rather than erroring) on a coordinate that does not parse as a finite
 /// number, and predictors do emit `nan` for failed atoms. Reject such rows up front with a
-/// proper error. PDB: columns 31–54 of ATOM/HETATM records; mmCIF: every whitespace token of
-/// ATOM/HETATM rows (a column layout is not fixed there, and `nan`/`inf` are never legitimate).
+/// proper error. PDB: columns 31–54 of ATOM/HETATM records; mmCIF: the `Cartn_x/y/z` columns
+/// of the `_atom_site` loop (other columns legitimately hold text such as a ligand named
+/// `NAN` or a chain `INF`).
 fn reject_non_finite_coordinates(text: &str, is_cif: bool) -> Result<(), CoreError> {
     let non_finite = |tok: &str| tok.parse::<f64>().is_ok_and(|v| !v.is_finite());
+    // Column positions of the coordinates in the `_atom_site` loop, in tag order.
+    let cartn: Vec<usize> = if is_cif {
+        text.lines()
+            .filter(|l| l.starts_with("_atom_site."))
+            .enumerate()
+            .filter(|(_, l)| {
+                let tag = l.split_whitespace().next().unwrap_or("");
+                matches!(
+                    tag,
+                    "_atom_site.Cartn_x" | "_atom_site.Cartn_y" | "_atom_site.Cartn_z"
+                )
+            })
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        Vec::new()
+    };
     for (n, line) in text.lines().enumerate() {
         if !(line.starts_with("ATOM") || line.starts_with("HETATM")) {
             continue;
         }
         let bad = if is_cif {
-            line.split_whitespace().any(non_finite)
+            let toks: Vec<&str> = line.split_whitespace().collect();
+            cartn
+                .iter()
+                .any(|&i| toks.get(i).is_some_and(|t| non_finite(t)))
         } else {
             line.get(30..54)
                 .map(|cols| cols.split_whitespace().any(non_finite))
@@ -138,6 +168,116 @@ fn reject_non_finite_coordinates(text: &str, is_cif: bool) -> Result<(), CoreErr
         }
     }
     Ok(())
+}
+
+/// Largest coordinate magnitude accepted, in Å.
+const MAX_COORDINATE: f64 = 1.0e5;
+
+/// The machine-readable provenance records wherever they sit in the file: `EXPDTA` and
+/// `CRYST1` (PDB), `_exptl.method` with the rows of its loop, and the first ModelCIF
+/// `_ma_qa_metric` line (mmCIF). In deposited mmCIF `_exptl` usually comes 70–210 KB in, far
+/// past [`HEADER_PREVIEW_BYTES`], so confidence detection needs them collected explicitly.
+fn provenance_lines(text: &str) -> String {
+    let mut out = String::new();
+    let mut take_next = 0;
+    let mut seen_ma = false;
+    for line in text.lines() {
+        if take_next > 0 {
+            take_next -= 1;
+            out.push_str(line);
+            out.push('\n');
+            if line.starts_with('#') || line.starts_with("loop_") {
+                take_next = 0;
+            }
+            continue;
+        }
+        if line.starts_with("EXPDTA") || line.starts_with("CRYST1") {
+            out.push_str(line);
+            out.push('\n');
+        } else if line.starts_with("_exptl.method") {
+            out.push_str(line);
+            out.push('\n');
+            // In a loop the value is on a later row; also covers a value wrapped onto the
+            // next line.
+            take_next = 4;
+        } else if !seen_ma && line.starts_with("_ma_qa_metric") {
+            seen_ma = true;
+            out.push_str(line);
+            out.push('\n');
+        } else if line.starts_with("ATOM") || line.starts_with("_atom_site.") {
+            // Provenance precedes the coordinates in both formats; stop scanning there.
+            break;
+        }
+    }
+    if out.is_empty() {
+        out
+    } else {
+        format!("\n{out}")
+    }
+}
+
+/// PDB is a fixed-column ASCII format, and pdbtbx slices record lines by byte offset: a
+/// multi-byte UTF-8 character in a record it reads panics inside the lexer ("byte index is
+/// not a char boundary"). In an atom record that shifts every later column, so the file is
+/// refused with the line named; in free-text records (REMARK, HEADER, …) each such character
+/// becomes `?`, which keeps the columns and loses nothing the analysis reads.
+fn ascii_records(coordinates: String) -> Result<String, CoreError> {
+    if coordinates.is_ascii() {
+        return Ok(coordinates);
+    }
+    let mut out = String::with_capacity(coordinates.len());
+    for (n, line) in coordinates.lines().enumerate() {
+        if !line.is_ascii() {
+            if ["ATOM", "HETATM", "ANISOU"]
+                .iter()
+                .any(|r| line.starts_with(r))
+            {
+                return Err(CoreError::StructureParseError(format!(
+                    "PDB atom record {} contains non-ASCII characters, so its columns cannot \
+                     be read; PDB is a fixed-column ASCII format",
+                    n + 1
+                )));
+            }
+            out.extend(line.chars().map(|c| if c.is_ascii() { c } else { '?' }));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+thread_local! {
+    /// Set while this thread runs pdbtbx under [`parse_guarded`]; the panic hook stays quiet.
+    static PARSING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run a pdbtbx parse, turning a panic inside it into an ordinary parse error. pdbtbx asserts
+/// rather than errors on several malformed inputs (an mmCIF `?` where a coordinate, element
+/// or atom id is required, among others); a structure file from anywhere must not be able to
+/// take down a batch run or the daemon. The default panic message is suppressed for these
+/// parses only — the hook is installed once and defers to the previous hook otherwise.
+fn parse_guarded<T>(kind: &str, parse: impl FnOnce() -> T) -> Result<T, CoreError> {
+    static HOOK: std::sync::Once = std::sync::Once::new();
+    HOOK.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !PARSING.with(|p| p.get()) {
+                previous(info);
+            }
+        }));
+    });
+    PARSING.with(|p| p.set(true));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(parse));
+    PARSING.with(|p| p.set(false));
+    result.map_err(|payload| {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "malformed input".into());
+        CoreError::StructureParseError(format!("{kind}: {msg}"))
+    })
 }
 
 /// Open a structure file by path. Extension decides the format when recognised
@@ -193,26 +333,31 @@ pub fn load_structure_bytes(
         bytes
     };
     let text = std::str::from_utf8(bytes).map_err(|e| parse_err("utf-8", e))?;
-    let header_preview = text
+    let mut header_preview = text
         .char_indices()
         .take_while(|(i, _)| *i < HEADER_PREVIEW_BYTES)
         .map(|(_, c)| c)
         .collect::<String>();
+    header_preview.push_str(&provenance_lines(text));
     let is_cif = looks_like_cif(text, hint);
     reject_non_finite_coordinates(text, is_cif)?;
-    let result = if is_cif {
-        pdbtbx::ReadOptions::default()
-            .set_format(pdbtbx::Format::Mmcif)
-            .set_level(StrictnessLevel::Loose)
-            .read_raw(std::io::BufReader::new(text.as_bytes()))
-    } else {
-        let coordinates = coordinate_records_only(text);
-        pdbtbx::ReadOptions::default()
-            .set_format(pdbtbx::Format::Pdb)
-            .set_level(StrictnessLevel::Loose)
-            .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
-    };
     let kind = if is_cif { "mmCIF" } else { "PDB" };
+    let result = if is_cif {
+        parse_guarded(kind, || {
+            pdbtbx::ReadOptions::default()
+                .set_format(pdbtbx::Format::Mmcif)
+                .set_level(StrictnessLevel::Loose)
+                .read_raw(std::io::BufReader::new(text.as_bytes()))
+        })?
+    } else {
+        let coordinates = ascii_records(coordinate_records_only(text))?;
+        parse_guarded(kind, || {
+            pdbtbx::ReadOptions::default()
+                .set_format(pdbtbx::Format::Pdb)
+                .set_level(StrictnessLevel::Loose)
+                .read_raw(std::io::BufReader::new(coordinates.as_bytes()))
+        })?
+    };
     let (mut pdb, _warnings) = result.map_err(|e| {
         // A file with no coordinates at all is a user mistake, not a malformed structure, and
         // deserves a message that names the mistake.
@@ -228,6 +373,22 @@ pub fn load_structure_bytes(
     // NMR ensembles and multi-model files: analyse the first model only, as DSSP/MolProbity do.
     if pdb.model_count() > 1 {
         pdb.remove_models_except(&[0]);
+    }
+    // pdbtbx's mmCIF number lexer keeps the integer part in a u32, so a coordinate beyond
+    // ~4.3e9 wraps silently instead of failing; nothing physical is anywhere near that. Reject
+    // coordinates no macromolecule can have (PDB format itself stops at ±9999.999 Å).
+    if let Some(a) = pdb.atoms().find(|a| {
+        [a.x(), a.y(), a.z()]
+            .iter()
+            .any(|v| !v.is_finite() || v.abs() > MAX_COORDINATE)
+    }) {
+        return Err(CoreError::StructureParseError(format!(
+            "{kind}: atom {} has an implausible coordinate ({:.3e}, {:.3e}, {:.3e} Å)",
+            a.serial_number(),
+            a.x(),
+            a.y(),
+            a.z()
+        )));
     }
     Ok(LoadedStructure {
         pdb,
@@ -250,10 +411,57 @@ pub fn element_symbol(atom: &pdbtbx::Atom) -> String {
 /// True when the residue looks like an amino acid: it has a `CA` atom whose element is carbon
 /// (calcium ions are also named `CA`, with element Ca). C-alpha-only traces therefore count;
 /// waters, ions and ligands do not. Modified residues (MSE, SEP, …) pass automatically.
+///
+/// A file with a blank element column leaves the element to pdbtbx, which reads the atom
+/// name ` CA ` as calcium. A `CA` that sits with a backbone `N` or `C` in the same residue is a
+/// C-alpha whatever the element column says; a calcium ion is a residue of one atom.
 pub fn is_protein_residue(residue: &pdbtbx::Residue) -> bool {
-    residue
-        .atoms()
-        .any(|a| a.name().trim() == "CA" && element_symbol(a).eq_ignore_ascii_case("C"))
+    let has = |name: &str| residue.atoms().any(|a| a.name().trim() == name);
+    residue.atoms().any(|a| {
+        a.name().trim() == "CA"
+            && (element_symbol(a).eq_ignore_ascii_case("C") || has("N") || has("C"))
+    }) || (has("CA") && is_standard_amino_acid(residue.name().unwrap_or("")))
+}
+
+fn is_standard_amino_acid(name: &str) -> bool {
+    matches!(
+        name.trim(),
+        "ALA"
+            | "ARG"
+            | "ASN"
+            | "ASP"
+            | "CYS"
+            | "GLN"
+            | "GLU"
+            | "GLY"
+            | "HIS"
+            | "ILE"
+            | "LEU"
+            | "LYS"
+            | "MET"
+            | "PHE"
+            | "PRO"
+            | "SER"
+            | "THR"
+            | "TRP"
+            | "TYR"
+            | "VAL"
+            | "MSE"
+            | "SEC"
+            | "PYL"
+    )
+}
+
+/// Elements an atom of a standard amino acid can be. Anything else there (Ca for ` CA `, Cd for
+/// `CD1`, Hg for `HG`, Ne for `NE`, …) came from reading the atom name as an element symbol,
+/// and the first letter of the name is the real element. Only standard residues are corrected:
+/// modified ones legitimately carry mercury (CMH), bromine, chlorine and the like.
+const PROTEIN_ELEMENTS: &[&str] = &["C", "N", "O", "S", "SE", "H", "D"];
+
+/// Hydrogen or deuterium, including deuterium that pdbtbx leaves without an element.
+fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
+    let e = element_symbol(atom);
+    e.eq_ignore_ascii_case("H") || e.eq_ignore_ascii_case("D")
 }
 
 /// A copy of the structure restricted to protein residues, heavy atoms and the first
@@ -262,7 +470,21 @@ pub fn is_protein_residue(residue: &pdbtbx::Residue) -> bool {
 pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
     let mut out = pdb.clone();
     out.remove_residues_by(|r| !is_protein_residue(r));
-    out.remove_atoms_by(|a| element_symbol(a).eq_ignore_ascii_case("H"));
+    for residue in out.residues_mut() {
+        if !is_standard_amino_acid(residue.name().unwrap_or("")) {
+            continue;
+        }
+        for atom in residue.atoms_mut() {
+            let e = element_symbol(atom).to_ascii_uppercase();
+            if !PROTEIN_ELEMENTS.contains(&e.as_str()) {
+                let first = atom.name().trim().chars().next().unwrap_or('C').to_string();
+                if let Some(fixed) = pdbtbx::Element::from_symbol(&first) {
+                    atom.set_element(fixed);
+                }
+            }
+        }
+    }
+    out.remove_atoms_by(is_hydrogen);
     // Alternate conformations: keep the first (highest-occupancy by PDB convention), as
     // mdtraj, DSSP and MolProbity do. Duplicated altloc atoms would otherwise inflate SASA.
     for residue in out.residues_mut() {
@@ -428,5 +650,150 @@ END\n";
         assert_eq!(p.residue_count(), 1);
         assert_eq!(p.atom_count(), 4);
         assert!(crate::backbone::extract_backbone(&p).len() == 1);
+    }
+    #[test]
+    fn malformed_files_are_errors_not_panics() {
+        // Reported: an mmCIF with `?` in a required field, and PDB lines with multi-byte
+        // characters, panicked inside pdbtbx and took the whole process down.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/edge");
+        for name in [
+            "q_x.cif",
+            "q_type.cif",
+            "q_id.cif",
+            "q_comp.cif",
+            "nonascii.pdb",
+            "nonascii2.pdb",
+            "nonascii3.pdb",
+            "nonascii4.pdb",
+        ] {
+            let path = dir.join(name);
+            let outcome = std::panic::catch_unwind(|| load_structure(&path));
+            assert!(outcome.is_ok(), "{name} panicked");
+        }
+        let err = load_structure(&dir.join("nonascii4.pdb"))
+            .err()
+            .expect("non-ASCII atom");
+        assert!(err.to_string().contains("non-ASCII"), "{err}");
+        // Non-ASCII text in REMARKs is not a reason to refuse the coordinates.
+        assert_eq!(
+            load_structure(&dir.join("nonascii3.pdb"))
+                .unwrap()
+                .pdb
+                .atom_count(),
+            1
+        );
+        let err = load_structure(&dir.join("q_x.cif"))
+            .err()
+            .expect("missing coordinate");
+        assert!(
+            err.to_string().starts_with("Structure parse error: mmCIF"),
+            "{err}"
+        );
+    }
+    #[test]
+    fn a_blank_element_column_does_not_turn_c_alpha_into_calcium() {
+        // Reported: with the element column blank, pdbtbx reads ` CA ` as calcium, every
+        // residue was dropped and analysis failed with "No C-alpha atoms found".
+        let pdb = "ATOM      1  N   ALA A   1      -1.200   1.000   0.000  1.00 10.00\n\
+                   ATOM      2  CA  ALA A   1       0.000   0.000   0.000  1.00 10.00\n\
+                   ATOM      3  C   ALA A   1       1.300   0.600   0.000  1.00 10.00\n\
+                   ATOM      4  N   ALA A   2       2.400  -0.100   0.000  1.00 10.00\n\
+                   ATOM      5  CA  ALA A   2       3.700   0.500   0.000  1.00 10.00\n\
+                   ATOM      6  C   ALA A   2       4.900  -0.300   0.000  1.00 10.00\n\
+                   HETATM    7 CA    CA A 101      20.000  20.000  20.000  1.00 10.00          CA\n";
+        let loaded = load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        let protein = protein_heavy_atoms(&loaded.pdb);
+        assert_eq!(protein.residue_count(), 2, "the calcium ion stays out");
+        for a in protein.atoms().filter(|a| a.name().trim() == "CA") {
+            assert_eq!(element_symbol(a), "C");
+        }
+    }
+
+    #[test]
+    fn deuterium_is_removed_with_hydrogen() {
+        // Reported: pdbtbx leaves element D unset, so deuterium survived the heavy-atom filter
+        // and distorted SASA and overlap counts on neutron structures.
+        let pdb = "ATOM      1  N   GLY A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+                   ATOM      2  CA  GLY A   1       1.450   0.000   0.000  1.00 10.00           C\n\
+                   ATOM      3  D   GLY A   1      -0.500   0.800   0.000  1.00 10.00           D\n\
+                   ATOM      4  DA2 GLY A   1       1.800   0.600   0.800  1.00 10.00           D\n";
+        let loaded = load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(protein_heavy_atoms(&loaded.pdb).atom_count(), 2);
+    }
+
+    #[test]
+    fn atom_records_cut_short_after_the_b_factor_still_parse() {
+        let pdb = "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00 10.00\n\
+                   ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00 10.00\n";
+        let loaded = load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(protein_heavy_atoms(&loaded.pdb).residue_count(), 2);
+    }
+
+    #[test]
+    fn text_that_spells_nan_is_not_a_coordinate() {
+        // Reported: a ligand named NAN in an mmCIF was refused as a non-finite coordinate.
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/edge/ligand_nan.cif");
+        assert!(load_structure(&path).is_ok());
+        // A real `nan` coordinate is still refused.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let broken = text.replacen(" 9.0 ", " nan ", 1);
+        assert_ne!(broken, text, "fixture changed: no coordinate to break");
+        let err = load_structure_bytes(broken.as_bytes(), Some("x.cif"))
+            .err()
+            .expect("a nan coordinate is refused");
+        assert!(err.to_string().contains("non-finite"), "{err}");
+    }
+
+    #[test]
+    fn implausible_coordinates_are_refused() {
+        let pdb =
+            "ATOM      1  CA  ALA A   1    9999.999   0.000   0.000  1.00 10.00           C\n";
+        assert!(load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).is_ok());
+        let cif = "data_x\nloop_\n_atom_site.group_PDB\n_atom_site.id\n_atom_site.type_symbol\n\
+                   _atom_site.label_atom_id\n_atom_site.label_comp_id\n_atom_site.label_asym_id\n\
+                   _atom_site.label_seq_id\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n\
+                   _atom_site.Cartn_z\n_atom_site.occupancy\n_atom_site.B_iso_or_equiv\n\
+                   ATOM 1 C CA ALA A 1 1e20 0.0 0.0 1.0 10.0\n";
+        let r = std::panic::catch_unwind(|| load_structure_bytes(cif.as_bytes(), Some("x.cif")));
+        assert!(
+            matches!(r, Ok(Err(_))),
+            "must be an error, not a panic or a wrapped value"
+        );
+    }
+    #[test]
+    fn a_bond_record_naming_a_missing_residue_does_not_sink_the_file() {
+        // Found while testing `view --compare`: 1CRN with its chain relabelled kept SSBOND
+        // records for chain A, and pdbtbx refused the file.
+        let text = std::fs::read_to_string(data("1crn.pdb")).unwrap();
+        let relabelled: String = text
+            .lines()
+            .map(|l| {
+                if l.starts_with("ATOM") {
+                    format!("{}B{}\n", &l[..21], &l[22..])
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
+        let loaded = load_structure_bytes(relabelled.as_bytes(), Some("x.pdb")).unwrap();
+        assert_eq!(protein_heavy_atoms(&loaded.pdb).residue_count(), 46);
+    }
+
+    #[test]
+    fn declared_elements_in_modified_residues_are_kept() {
+        // Regression review: the element correction for blank columns also rewrote correct
+        // ones, turning mercury in CMH into hydrogen (then removed) and Br into boron.
+        let pdb = "ATOM      1  N   CMH A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+                   ATOM      2  CA  CMH A   1       1.450   0.000   0.000  1.00 10.00           C\n\
+                   ATOM      3  C   CMH A   1       2.000   1.400   0.000  1.00 10.00           C\n\
+                   ATOM      4 HG   CMH A   1       3.000   3.000   1.000  1.00 10.00          HG\n";
+        let loaded = load_structure_bytes(pdb.as_bytes(), Some("x.pdb")).unwrap();
+        let protein = protein_heavy_atoms(&loaded.pdb);
+        let hg = protein
+            .atoms()
+            .find(|a| a.name().trim() == "HG")
+            .expect("Hg removed");
+        assert!(element_symbol(hg).eq_ignore_ascii_case("Hg"));
     }
 }

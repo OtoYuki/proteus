@@ -7,10 +7,17 @@ use proteus_storage::repository::ProteusRepository;
 use uuid::Uuid;
 
 pub async fn print_job_inspection(repo: &ProteusRepository, job_id: Uuid) -> Result<()> {
-    let pred = repo
-        .get_prediction_by_job(job_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("Prediction for job {} not found", job_id))?;
+    let Some(pred) = repo.get_prediction_by_job(job_id).await? else {
+        // No prediction yet: say where the job is, and why it stopped if it failed.
+        return match repo.get_job(job_id).await? {
+            Some(job) => Err(anyhow::anyhow!(
+                "job {job_id} has no prediction to inspect: it is {:?}{}",
+                job.status,
+                job.error_log.map(|e| format!(" ({e})")).unwrap_or_default()
+            )),
+            None => Err(anyhow::anyhow!("no job {job_id}")),
+        };
+    };
 
     let metrics = repo
         .get_metrics_by_prediction(pred.id)

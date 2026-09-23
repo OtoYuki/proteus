@@ -187,9 +187,26 @@ pub fn dssp_by_residue(pdb: &pdbtbx::PDB) -> Vec<(String, isize, SecondaryStruct
         .collect()
 }
 
-/// Escape a string used inside a double-quoted JS string literal.
+/// Escape a string for a double-quoted JS string literal inside an inline `<script>`.
+///
+/// Quoting alone is not enough there: the HTML parser ends the script at the first `</script`
+/// whatever the JS quoting says, so a chain id such as `</script><svg onload=…>` (mmCIF chain
+/// ids are free text) would run as markup. Everything outside a small safe set is written as a
+/// `\uXXXX` escape, which also covers `<`, `>`, `&`, `/`, quotes, control characters and the
+/// U+2028/U+2029 line separators.
 fn escape_js(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | ',' | ':') {
+            out.push(c);
+        } else {
+            let mut units = [0u16; 2];
+            for u in c.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{:04x}", u));
+            }
+        }
+    }
+    out
 }
 
 /// Escape text interpolated into the page. The structure itself is base64, never inlined raw.
@@ -222,6 +239,31 @@ mod tests {
             secondary_structure: &[],
         }
         .render()
+    }
+
+    #[test]
+    fn a_hostile_chain_id_cannot_leave_the_script() {
+        // Reported: an mmCIF chain id of `</script><script>document.title=…</script>` ran as
+        // markup in `view --html`/`--web` and on the daemon's `/view/{job}`.
+        let payload = "</SCRIPT><svg/onload=alert(1)>\u{2028}'\"\\";
+        let ss = [(payload.to_string(), 1, SecondaryStructure::Helix)];
+        let html = WebViewPage {
+            title: "x",
+            caption: "y",
+            structure: "ATOM\n",
+            format: StructureFormat::Pdb,
+            color: WebColorScheme::SecondaryStructure,
+            secondary_structure: &ss,
+        }
+        .render();
+        let ours = html.replace(VIEWER_JS, "");
+        let lower = ours.to_ascii_lowercase();
+        // The template has exactly two script elements; the payload must not add a closer.
+        assert_eq!(lower.matches("</script").count(), 2, "{ours}");
+        assert!(!ours.contains("<svg"), "{ours}");
+        assert!(!ours.contains('\u{2028}'));
+        // Escaped, it still decodes to the same key the viewer looks up.
+        assert!(ours.contains("\\u003c\\u002fSCRIPT\\u003e"), "{ours}");
     }
 
     #[test]

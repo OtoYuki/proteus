@@ -16,6 +16,10 @@ pub enum TesState {
     ExecutorError,
     SystemError,
     Canceled,
+    /// TES 1.1: the task was stopped by the backend (e.g. a spot instance reclaimed).
+    Preempted,
+    /// TES 1.1: a cancel was requested and is being carried out.
+    Canceling,
 }
 
 impl std::fmt::Display for TesState {
@@ -30,6 +34,8 @@ impl std::fmt::Display for TesState {
             Self::ExecutorError => write!(f, "EXECUTOR_ERROR"),
             Self::SystemError => write!(f, "SYSTEM_ERROR"),
             Self::Canceled => write!(f, "CANCELED"),
+            Self::Preempted => write!(f, "PREEMPTED"),
+            Self::Canceling => write!(f, "CANCELING"),
         }
     }
 }
@@ -226,9 +232,11 @@ pub struct TesTask {
     pub inputs: Vec<TesInput>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<TesOutput>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "TesResources::is_unset")]
     pub resources: TesResources,
-    #[serde(default)]
+    // Required in a submitted task; omitted only from a MINIMAL projection, which carries
+    // nothing but `id` and `state`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub executors: Vec<TesExecutor>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<String>,
@@ -252,6 +260,10 @@ impl TesTask {
             TesTaskView::Basic => {
                 // Basic view includes all metadata, inputs, outputs, executors, but excludes executor logs stdout/stderr
                 let mut basic = self.clone();
+                // TES 1.1: BASIC omits `inputs[].content`, which may be large.
+                for input in &mut basic.inputs {
+                    input.content = None;
+                }
                 for log in &mut basic.logs {
                     for exec_log in &mut log.logs {
                         exec_log.stdout = None;
@@ -263,6 +275,13 @@ impl TesTask {
             }
             TesTaskView::Full => self.clone(),
         }
+    }
+}
+
+impl TesResources {
+    /// No resource was requested; such a block is left out of responses.
+    pub fn is_unset(&self) -> bool {
+        *self == TesResources::default()
     }
 }
 

@@ -65,6 +65,18 @@ pub struct StructureQc {
     pub fitness: f64,
 }
 
+/// Kabsch C-alpha RMSD between two structures, normalised exactly as the full analysis does
+/// (protein residues, heavy atoms, first altloc). Errors when the C-alpha counts differ.
+pub fn ca_rmsd(model: &pdbtbx::PDB, reference: &pdbtbx::PDB) -> Result<f64, CoreError> {
+    let ca = |pdb: &pdbtbx::PDB| -> Vec<nalgebra::Vector3<f64>> {
+        crate::backbone::extract_backbone(&crate::io::protein_heavy_atoms(pdb))
+            .iter()
+            .filter_map(|r| r.ca)
+            .collect()
+    };
+    crate::metrics::compute_kabsch_rmsd(&ca(model), &ca(reference))
+}
+
 /// `name.pdb.gz` → `name`, `x.cif` → `x`, `model_0.ent` → `model_0`.
 pub fn model_name(path: &Path) -> String {
     let name = path
@@ -136,20 +148,16 @@ pub fn structure_qc(
     confidence: Option<ConfidenceSource>,
 ) -> Result<StructureQc, CoreError> {
     let loaded = crate::io::load_structure(path)?;
-    let detailed = crate::metrics::analyze_pdb_detailed_with_header(
+    let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,
-        reference,
+        None,
         Some(&loaded.header_preview),
+        confidence,
     )?;
-    let mut m = detailed.metrics;
-    if let Some(src) = confidence {
-        if src != m.confidence_source {
-            m.confidence_source = src;
-            let n = detailed.plddts.len();
-            m.candidate_fitness_score =
-                Some(crate::ranking::evaluate_candidate_fitness(&m, n).total_score);
-        }
-    }
+    let m = detailed.metrics;
+    // RMSD is one optional column: a model whose length differs from the reference (common
+    // across a design campaign) gets a null there instead of losing its whole row.
+    let rmsd_to_reference = reference.and_then(|r| ca_rmsd(&loaded.pdb, r).ok());
 
     let protein = crate::io::protein_heavy_atoms(&loaded.pdb);
     let backbone = crate::backbone::extract_backbone(&protein);
@@ -217,7 +225,7 @@ pub fn structure_qc(
         salt_bridge_count: net.map_or(0, |n| n.total_salt_bridges),
         pi_stacking_count: net.map_or(0, |n| n.total_pi_pi_stacks),
         cation_pi_count: net.map_or(0, |n| n.total_cation_pi),
-        rmsd_to_reference: m.rmsd_to_reference,
+        rmsd_to_reference,
         fitness: m.candidate_fitness_score.unwrap_or(0.0),
     })
 }
@@ -293,6 +301,98 @@ mod tests {
             forced.fitness, auto.fitness,
             "pLDDT weight enters the score"
         );
+    }
+
+    #[test]
+    fn a_declared_prediction_gets_the_same_rescaling_as_a_detected_one() {
+        // Reported: forcing `predicted` on an ESMFold-style 0-1 file skipped the 0-1 -> 0-100
+        // rescale, reporting pLDDT 0.25 and scoring the model as if it were near zero.
+        let path = data("edge/esm01_low.pdb");
+        let forced = structure_qc(&path, None, Some(ConfidenceSource::Predicted)).unwrap();
+        let detected = structure_qc(&path, None, None).unwrap();
+        assert_eq!(detected.confidence_source, "predicted");
+        assert!(
+            (forced.plddt_mean.unwrap() - 25.0).abs() < 1e-9,
+            "{forced:?}"
+        );
+        assert_eq!(forced.plddt_mean, detected.plddt_mean);
+        assert_eq!(forced.fitness, detected.fitness);
+    }
+
+    #[test]
+    fn a_method_declared_late_in_an_mmcif_still_counts() {
+        // Reported: `_exptl.method 'X-RAY DIFFRACTION'` beyond the first 16 KiB was never
+        // read, so an X-ray entry with B-factors of 40-80 was reported as pLDDT.
+        let qc = structure_qc(&data("edge/xray_late_exptl.cif"), None, None).unwrap();
+        assert_eq!(qc.confidence_source, "experimental");
+        assert_eq!(qc.plddt_mean, None);
+    }
+
+    #[test]
+    fn median_plddt_of_an_even_count_is_the_mean_of_the_middle_two() {
+        // Reported: B-factors 50/60/90/95 gave a median of 90, not 75.
+        let mut text = String::from("TITLE     ALPHAFOLD PREDICTION\n");
+        for (i, b) in [50.0, 60.0, 90.0, 95.0].iter().enumerate() {
+            text.push_str(&format!(
+                "ATOM  {:>5}  CA  GLY A{:>4}    {:>8.3}{:>8.3}{:>8.3}  1.00{:>6.2}           C\n",
+                i + 1,
+                i + 1,
+                3.8 * i as f64,
+                0.0,
+                0.0,
+                b
+            ));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.pdb");
+        std::fs::write(&path, text).unwrap();
+        let qc = structure_qc(&path, None, None).unwrap();
+        assert_eq!(qc.plddt_median, Some(75.0));
+    }
+
+    #[test]
+    fn a_c_alpha_only_trace_is_not_scored_as_all_outliers() {
+        // Reported: C-alpha-only models always scored 0 on the Ramachandran term (every
+        // residue unevaluated read as nothing favoured), so the documented baseline was dead.
+        let mut text = String::from("TITLE     ALPHAFOLD PREDICTION\n");
+        for i in 0..8 {
+            text.push_str(&format!(
+                "ATOM  {:>5}  CA  ALA A{:>4}    {:>8.3}{:>8.3}{:>8.3}  1.00 90.00           C\n",
+                i + 1,
+                i + 1,
+                2.3 * (i as f64 * 1.745).cos(),
+                2.3 * (i as f64 * 1.745).sin(),
+                1.5 * i as f64
+            ));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.pdb");
+        std::fs::write(&path, text).unwrap();
+        let m = crate::metrics::analyze_pdb_file(&path, None).unwrap();
+        assert!(m.ramachandran_stats.is_none());
+        let f = crate::ranking::evaluate_candidate_fitness(&m, 8);
+        assert_eq!(f.ramachandran_component, 85.0);
+    }
+
+    #[test]
+    fn a_reference_of_another_length_leaves_rmsd_empty_not_the_row() {
+        // Reported: `analyze a.pdb b.pdb --reference c.pdb` with c of a different length
+        // dropped every row ("0 of 2 structures analysed").
+        let reference = crate::io::open_structure(&data("1crn.pdb")).unwrap();
+        let same = structure_qc(&data("1crn.cif"), Some(&reference), None).unwrap();
+        assert!(same.rmsd_to_reference.unwrap() < 1e-3);
+        let dir = tempfile::tempdir().unwrap();
+        let short: String = std::fs::read_to_string(data("1crn.pdb"))
+            .unwrap()
+            .lines()
+            .filter(|l| !(l.starts_with("ATOM") && l[22..26].trim() == "46"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let path = dir.path().join("short.pdb");
+        std::fs::write(&path, short).unwrap();
+        let other = structure_qc(&path, Some(&reference), None).unwrap();
+        assert_eq!(other.n_residues, 45);
+        assert_eq!(other.rmsd_to_reference, None);
     }
 
     #[test]

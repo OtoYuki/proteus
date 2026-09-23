@@ -5,6 +5,9 @@ pub enum CoreError {
     #[error("Invalid FASTA: {0}")]
     InvalidFasta(String),
 
+    #[error("Invalid mutagenesis window: {0}")]
+    InvalidWindow(String),
+
     #[error("Structure parse error: {0}")]
     StructureParseError(String),
 

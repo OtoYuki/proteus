@@ -48,6 +48,9 @@ pub fn evaluate_candidate_fitness(
     };
 
     // 3. Ramachandran Stereochemistry Component (weight: 0.15)
+    // `None` means a C-alpha-only trace, which has no φ/ψ to judge (see
+    // `analyze_pdb_detailed_with_source`). A full-atom model whose peptide bonds are all
+    // broken still has stats, with nothing favoured, and scores 0 here as it should.
     let ramachandran_component = if let Some(ref rama) = metrics.ramachandran_stats {
         (rama.favored_fraction * 100.0 + rama.allowed_fraction * 50.0).clamp(0.0, 100.0)
     } else {

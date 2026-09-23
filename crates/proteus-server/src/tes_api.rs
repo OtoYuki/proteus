@@ -1,5 +1,5 @@
 use crate::server::AppState;
-use axum::extract::{Path, Query, RawQuery, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -11,9 +11,36 @@ use proteus_engine::CancelOutcome;
 use serde::Deserialize;
 use std::sync::atomic::Ordering;
 
-#[derive(Debug, Deserialize, Default)]
-pub struct GetTaskQuery {
-    pub view: Option<TesTaskView>,
+/// `view` as TES clients send it: `MINIMAL`, `BASIC` or `FULL`, in any case.
+fn parse_view(v: &str) -> Result<TesTaskView, String> {
+    match v.to_ascii_uppercase().as_str() {
+        "MINIMAL" => Ok(TesTaskView::Minimal),
+        "BASIC" => Ok(TesTaskView::Basic),
+        "FULL" => Ok(TesTaskView::Full),
+        other => Err(format!("unknown view '{other}' (MINIMAL, BASIC or FULL)")),
+    }
+}
+
+/// The TES 1.1 task states a `state` filter may name.
+const TES_STATES: &[&str] = &[
+    "UNKNOWN",
+    "QUEUED",
+    "INITIALIZING",
+    "RUNNING",
+    "PAUSED",
+    "COMPLETE",
+    "EXECUTOR_ERROR",
+    "SYSTEM_ERROR",
+    "CANCELED",
+    "PREEMPTED",
+    "CANCELING",
+];
+
+fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg.into() })),
+    )
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -42,15 +69,13 @@ impl ListTasksQuery {
                     q.page_size = Some(v.parse().map_err(|_| "page_size must be an integer")?)
                 }
                 "page_token" => q.page_token = Some(v.into_owned()),
-                "state" => q.state = Some(v.into_owned()),
-                "view" => {
-                    q.view = Some(match v.to_ascii_uppercase().as_str() {
-                        "MINIMAL" => TesTaskView::Minimal,
-                        "BASIC" => TesTaskView::Basic,
-                        "FULL" => TesTaskView::Full,
-                        other => return Err(format!("unknown view '{other}'")),
-                    })
+                "state" => {
+                    if !TES_STATES.contains(&v.as_ref()) {
+                        return Err(format!("unknown state '{v}'"));
+                    }
+                    q.state = Some(v.into_owned())
                 }
+                "view" => q.view = Some(parse_view(&v)?),
                 "tag_key" => q.tag_key.push(v.into_owned()),
                 "tag_value" => q.tag_value.push(v.into_owned()),
                 _ => {}
@@ -82,9 +107,11 @@ fn decode_page_token(token: &str) -> Result<usize, String> {
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(token)
         .map_err(|_| "invalid page_token")?;
+    // Offsets go to SQL as i64; anything past that is not a token this server issued.
     std::str::from_utf8(&bytes)
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| i64::try_from(n).is_ok())
         .ok_or_else(|| "invalid page_token".to_string())
 }
 
@@ -117,14 +144,19 @@ pub async fn create_task(
 pub async fn get_task(
     State(state): State<AppState>,
     Path(id): Path<String>,
-    Query(query): Query<GetTaskQuery>,
+    RawQuery(raw): RawQuery,
 ) -> Result<Json<TesTask>, (StatusCode, Json<serde_json::Value>)> {
     state
         .telemetry
         .http_requests_total
         .fetch_add(1, Ordering::Relaxed);
 
-    let view = query.view.unwrap_or(TesTaskView::Basic);
+    let mut view = TesTaskView::Basic;
+    for (k, v) in form_urlencoded::parse(raw.as_deref().unwrap_or("").as_bytes()) {
+        if k == "view" {
+            view = parse_view(&v).map_err(bad_request)?;
+        }
+    }
 
     match state.scheduler.repo().get_tes_task(&id).await {
         Ok(Some(record)) => match serde_json::from_str::<TesTask>(&record.task_json) {
@@ -236,7 +268,25 @@ pub async fn list_tasks(
     }))
 }
 
-/// POST /v1/tasks/{id}:cancel, /v1/tasks/{id}/cancel, and /ga4gh/tes/v1/tasks/{id}:cancel
+/// POST /v1/tasks/{id}:cancel and /ga4gh/tes/v1/tasks/{id}:cancel. The router matches
+/// `{id}:cancel` as a single path segment; a POST to `/v1/tasks/{id}` without the suffix is
+/// not a TES operation and must not cancel anything.
+pub async fn cancel_task_colon(
+    state: State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<TesCancelTaskResponse>), (StatusCode, Json<serde_json::Value>)> {
+    if !id.ends_with(":cancel") {
+        return Err((
+            StatusCode::METHOD_NOT_ALLOWED,
+            Json(serde_json::json!({
+                "error": "POST is only defined on /tasks/{id}:cancel"
+            })),
+        ));
+    }
+    cancel_task(state, Path(id)).await
+}
+
+/// POST /v1/tasks/{id}/cancel (and the `:cancel` form, via [`cancel_task_colon`]).
 pub async fn cancel_task(
     State(state): State<AppState>,
     Path(id): Path<String>,

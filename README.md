@@ -80,7 +80,7 @@ on 16 (i7-11800H laptop, 8 cores; `-j` sets the thread count).
 ```bash
 proteus view <job> --interactive --dashboard        # or a .pdb / .cif / .cif.gz path
 proteus view structure.pdb --backend sixel          # a still, for a CI log
-proteus view mutant.pdb --compare wildtype.pdb      # superposed, with Kabsch RMSD
+proteus view mutant.pdb --compare wildtype.pdb      # superposed; Kabsch RMSD over shared residues
 ```
 
 A software rasteriser, a cartoon ribbon and a telemetry dashboard, in the terminal. No X11
@@ -132,7 +132,7 @@ This runs on every push (`.github/workflows/validate.yml`). Tolerances are the c
 | Kabsch–Sander DSSP (`proteus-dssp`) | mdtraj | 99.6 % of 30 335 residues on eight states, 99.96 % on three; worst non-exempt file 97.8 % |
 | MolProbity Ramachandran (Top8000 contours) | cctbx `ramalyze` | 100 % label agreement (collagen 1CAG has no reference: cctbx classifies none of its residues) |
 | Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii), two documented exceptions |
-| hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–76 % — heavy-atom criteria over-detect by 1.3–1.7× |
+| hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–79 % — heavy-atom criteria over-detect by 1.3–1.7× |
 | salt bridges, π–π stacking, cation–π | PLIP, intra-chain, 15 structures | salt bridges **97.7 %** precision / 72 % recall; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %** |
 | heavy-atom steric overlap | none exists with these definitions | labelled as ours, not compared |
 | Kabsch RMSD, contact density, burial, triage score | none | unit-tested only; the score is checked against decoys (40/40), not against experiment |
@@ -287,9 +287,16 @@ proteus esm scan wildtype.fasta --export scan.csv     # 20×L matrix + a termina
 proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --export lib.parquet
 ```
 
-- **Parity**: logits within 1e-2 and amino-acid log-probabilities within 5e-3 of
-  `transformers.EsmForMaskedLM` (fp32), on three proteins × two checkpoints, against committed
-  reference values; CI runs the 8M checkpoint on every push, the 35M one is run by hand.
+- **Parity**: logits within 2e-4 and amino-acid log-probabilities within 1e-4 of
+  `transformers.EsmForMaskedLM` (fp32; largest observed 4.6e-5 / 3.3e-5), on three short
+  proteins and one of 1022 residues × two checkpoints, against committed reference values; CI
+  runs the 8M checkpoint on every push, the 35M one is run by hand. Up to 0.6.0 the rotary
+  frequencies were recomputed rather than read from the checkpoint, an error of up to 0.1 in
+  log-probability at full length that the short proteins alone had passed off as fp32 noise.
+- **Input**: at most 1022 residues (the ESM-2 training length); whitespace and a final `*` are
+  ignored; anything but amino-acid letters is an error, and substitutions must be between the
+  20 standard amino acids. `[mutation=A10G:C4S]` (ProteinGym's separator) works in library
+  headers.
 - **Accuracy on real data**: ProteinGym v1.1 Spearman ρ over the five smallest single-mutant
   assays — mean |ρ| 0.42 with `esm2_t12_35M`, 0.24 with `esm2_t6_8M`
   ([`bench/README.md`](bench/README.md)).
@@ -340,6 +347,10 @@ proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
 proteus view structure.pdb --html out.html        # a self-contained 3Dmol.js page, works offline
 ```
+
+`--compare` pairs residues by chain ID, residue number and insertion code, superposes only the
+ones both structures have, and reports how many that was; the RMSD is printed in yellow with a
+warning when the sequences differ.
 
 ### `proteus analyze` — one structure in full, or a table over many
 

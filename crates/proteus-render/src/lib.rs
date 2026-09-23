@@ -130,9 +130,16 @@ struct Trace {
     breaks: Vec<bool>,
     /// Ribbon wide-axis per residue, from the backbone carbonyl (see `ribbon_guides`).
     guides: Vec<Option<Vector3<f64>>>,
+    /// Residue identity per entry: chain ID, residue number, insertion code.
+    ids: Vec<ResidueId>,
+    /// Three-letter residue name per entry.
+    names: Vec<String>,
     protein: pdbtbx::PDB,
     plddt_scale: f64,
 }
+
+/// Chain ID, residue number and insertion code: what identifies a residue across two files.
+type ResidueId = (String, isize, Option<String>);
 
 fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
     let protein = proteus_core::io::protein_heavy_atoms(pdb);
@@ -142,6 +149,8 @@ fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
         plddts: Vec::with_capacity(backbone.len()),
         breaks: Vec::with_capacity(backbone.len()),
         guides: Vec::with_capacity(backbone.len()),
+        ids: Vec::with_capacity(backbone.len()),
+        names: Vec::with_capacity(backbone.len()),
         protein,
         plddt_scale: 1.0,
     };
@@ -150,6 +159,9 @@ fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
             t.ca.push(ca);
             t.plddts.push(r.b_factor);
             t.breaks.push(r.chain_break_before);
+            t.ids
+                .push((r.chain_id.clone(), r.seq_num, r.insertion_code.clone()));
+            t.names.push(r.name.clone());
             t.guides.push(match (r.c, r.o) {
                 (Some(c), Some(o)) if (o - c).norm() > 1e-6 => Some((o - c).normalize()),
                 _ => None,
@@ -317,8 +329,10 @@ impl StructureRenderData {
     /// What one rendered pixel covers, in Ångströms, for a terminal viewport of `cols` × `rows`
     /// cells on `backend`. See [`OrbitCamera::angstroms_per_pixel`].
     pub fn angstroms_per_pixel(&self, cols: usize, rows: usize, backend: TerminalBackend) -> f64 {
-        let (w, h) = framebuffer_size(cols, rows, backend);
-        self.camera.angstroms_per_pixel(w, h)
+        match viewport_pixels(cols, rows, backend) {
+            Ok((w, h)) => self.camera.angstroms_per_pixel(w, h),
+            Err(_) => f64::NAN,
+        }
     }
 
     /// A one-line caveat when the viewport cannot resolve what the structure contains, or
@@ -350,18 +364,48 @@ impl StructureRenderData {
     }
 }
 
-/// Framebuffer pixels behind one terminal cell, per backend: half-block packs 1×2 per cell,
-/// Braille 2×4, and the kitty protocol blits true pixels.
-pub(crate) fn framebuffer_size(
+/// Largest viewport side accepted, in terminal cells. Well past any real terminal.
+pub const MAX_VIEWPORT_CELLS: usize = 4096;
+
+/// Largest framebuffer accepted, in pixels (2²⁵: a 4096 × 4096-cell half-block frame). At 7
+/// bytes a pixel (colour and depth) that is ~235 MB; a true-pixel backend reaches it at a far
+/// smaller cell count, since each cell is 8 × 16 pixels.
+pub const MAX_FRAMEBUFFER_PIXELS: usize = 1 << 25;
+
+/// Framebuffer pixels behind a `cols` × `rows`-cell viewport on `backend`, or an error when
+/// the viewport is empty or too large to allocate. Half-block packs 1×2 pixels per cell,
+/// Braille 2×4, and kitty/Sixel blit true pixels (8×16 per cell).
+///
+/// Without this a `--width 100000 --height 100000` aborted the process on allocation, and a
+/// width near `usize::MAX / 8` overflowed to an empty kitty image printed with exit status 0.
+pub fn viewport_pixels(
     cols: usize,
     rows: usize,
     backend: TerminalBackend,
-) -> (usize, usize) {
-    match backend {
-        TerminalBackend::HalfBlock => (cols, rows * 2),
-        TerminalBackend::Braille => (cols * 2, rows * 4),
+) -> Result<(usize, usize), RenderError> {
+    if cols == 0 || rows == 0 {
+        return Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells is empty; width and height must be at least 1"
+        )));
+    }
+    if cols > MAX_VIEWPORT_CELLS || rows > MAX_VIEWPORT_CELLS {
+        return Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells exceeds the maximum of {MAX_VIEWPORT_CELLS} per side"
+        )));
+    }
+    let (px_w, px_h) = match backend {
+        TerminalBackend::HalfBlock => (1, 2),
+        TerminalBackend::Braille => (2, 4),
         // Sixel and kitty both blit true pixels, so both get a full cell's worth.
-        TerminalBackend::Kitty | TerminalBackend::Sixel => (cols * 8, rows * 16),
+        TerminalBackend::Kitty | TerminalBackend::Sixel => (8, 16),
+    };
+    let (w, h) = (cols * px_w, rows * px_h);
+    match w.checked_mul(h) {
+        Some(n) if n <= MAX_FRAMEBUFFER_PIXELS => Ok((w, h)),
+        _ => Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells is {w}×{h} pixels on this backend, over the \
+             {MAX_FRAMEBUFFER_PIXELS}-pixel limit; use a smaller --width/--height"
+        ))),
     }
 }
 
@@ -386,7 +430,7 @@ pub fn render_structure_snapshot(
     scheme: ColorScheme,
 ) -> Result<String, RenderError> {
     // Pixel dimensions based on backend
-    let (px_width, px_height) = framebuffer_size(width, height, backend);
+    let (px_width, px_height) = viewport_pixels(width, height, backend)?;
     let mut fb = Framebuffer::new(px_width, px_height);
     fb.clear(ColorRGB::BLACK);
 
@@ -423,9 +467,142 @@ pub struct SuperpositionRenderData {
     pub ref_mesh: TriangleMesh,
     pub camera: OrbitCamera,
     pub rmsd: f64,
+    /// How the residues were paired, which the RMSD is only meaningful alongside.
+    pub stats: SuperpositionStats,
 }
 
-/// Parse and superimpose two PDB structures using Kabsch optimal alignment.
+/// What a superposition compared: residues are paired by identity (chain ID, residue number,
+/// insertion code), and the RMSD covers the paired C-alphas only.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SuperpositionStats {
+    /// C-alpha RMSD after Kabsch superposition of the paired residues, in Å.
+    pub rmsd: f64,
+    /// Residues present in both structures.
+    pub paired: usize,
+    pub target_residues: usize,
+    pub reference_residues: usize,
+    /// Paired residues whose amino acid differs between the two structures.
+    pub mismatched_names: usize,
+    /// How residues were paired: `"residue id"` (chain, number, insertion code), `"residue
+    /// number"` (single-chain files with different chain ids), or `"sequence alignment"`
+    /// (renumbered or differently numbered files).
+    pub pairing: &'static str,
+}
+
+impl SuperpositionStats {
+    /// True when every residue of each structure has a partner with the same amino acid, so
+    /// the RMSD compares two conformations of one sequence.
+    pub fn same_sequence(&self) -> bool {
+        self.mismatched_names == 0
+            && self.paired == self.target_residues
+            && self.paired == self.reference_residues
+    }
+}
+
+/// Fewest shared residues a superposition is attempted on: three points fix a rotation.
+pub const MIN_SUPERPOSITION_PAIRS: usize = 3;
+
+/// Index pairs `(target, reference)` of residues with the same identity, in target order. A
+/// duplicated identity (which a well-formed file does not have) pairs its first occurrence.
+fn pair_residues(target: &[ResidueId], reference: &[ResidueId]) -> Vec<(usize, usize)> {
+    let mut by_id: std::collections::HashMap<&ResidueId, usize> =
+        std::collections::HashMap::with_capacity(reference.len());
+    for (j, id) in reference.iter().enumerate() {
+        by_id.entry(id).or_insert(j);
+    }
+    let mut used = vec![false; reference.len()];
+    let mut pairs = Vec::new();
+    for (i, id) in target.iter().enumerate() {
+        if let Some(&j) = by_id.get(id) {
+            if !used[j] {
+                used[j] = true;
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
+/// Global alignment (Needleman–Wunsch) of two residue-name sequences; returns the aligned
+/// index pairs. Match +2, mismatch −1, gap −1: identical stretches dominate, a point mutation
+/// stays aligned rather than opening two gaps.
+fn align_by_sequence(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
+    let (n, m) = (a.len(), b.len());
+    let mut score = vec![vec![0i32; m + 1]; n + 1];
+    for (i, row) in score.iter_mut().enumerate() {
+        row[0] = -(i as i32);
+    }
+    for (j, cell) in score[0].iter_mut().enumerate() {
+        *cell = -(j as i32);
+    }
+    for i in 1..=n {
+        for j in 1..=m {
+            let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
+            score[i][j] = (score[i - 1][j - 1] + s)
+                .max(score[i - 1][j] - 1)
+                .max(score[i][j - 1] - 1);
+        }
+    }
+    let (mut i, mut j, mut pairs) = (n, m, Vec::new());
+    while i > 0 && j > 0 {
+        let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
+        if score[i][j] == score[i - 1][j - 1] + s {
+            pairs.push((i - 1, j - 1));
+            i -= 1;
+            j -= 1;
+        } else if score[i][j] == score[i - 1][j] - 1 {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    pairs.reverse();
+    pairs
+}
+
+/// Pair residues of two traces the way a reader would: by identity when the files share a
+/// numbering, by residue number when each is a single chain with a different chain id (a
+/// predicted model against a deposited entry), and by sequence alignment when the numbering
+/// differs altogether. The pairing that matches the most identical amino acids wins; ties go
+/// to the more literal method.
+fn pair_best(tgt: &Trace, refr: &Trace) -> (Vec<(usize, usize)>, &'static str) {
+    let matching = |pairs: &[(usize, usize)]| {
+        pairs
+            .iter()
+            .filter(|&&(i, j)| tgt.names[i] == refr.names[j])
+            .count()
+    };
+    let mut best = (pair_residues(&tgt.ids, &refr.ids), "residue id");
+    let single_chain = |ids: &[ResidueId]| ids.windows(2).all(|w| w[0].0 == w[1].0);
+    if single_chain(&tgt.ids) && single_chain(&refr.ids) {
+        let strip = |ids: &[ResidueId]| -> Vec<ResidueId> {
+            ids.iter()
+                .map(|(_, n, ic)| (String::new(), *n, ic.clone()))
+                .collect()
+        };
+        let by_number = pair_residues(&strip(&tgt.ids), &strip(&refr.ids));
+        if matching(&by_number) > matching(&best.0) {
+            best = (by_number, "residue number");
+        }
+    }
+    // The alignment table is n×m; beyond ~4000×4000 residues it is not worth the memory.
+    if tgt.names.len() * refr.names.len() <= 16_000_000 {
+        let aligned = align_by_sequence(&tgt.names, &refr.names);
+        if matching(&aligned) > matching(&best.0) {
+            best = (aligned, "sequence alignment");
+        }
+    }
+    best
+}
+
+/// Parse and superimpose two structures using Kabsch optimal alignment.
+///
+/// Residues are paired by chain ID, residue number and insertion code, and only residues
+/// present in both are superposed. Pairing by position — the i-th C-alpha of one file with
+/// the i-th of the other — silently compared the wrong residues as soon as one file had a
+/// residue the other lacked (1UBQ against itself minus its first residue gave 3.77 Å instead
+/// of 0), and truncated the longer structure without saying so. Both structures are still drawn
+/// whole.
 pub fn prepare_superposition_for_rendering(
     target_pdb: &str,
     reference_pdb: &str,
@@ -437,24 +614,41 @@ pub fn prepare_superposition_for_rendering(
 
     let tgt = trace_of(&tgt_pdb);
     let refr = trace_of(&ref_pdb);
-    let (tgt_ca, tgt_plddts) = (tgt.ca, tgt.plddts);
-    let (ref_ca, ref_plddts) = (refr.ca, refr.plddts);
 
-    let common_len = tgt_ca.len().min(ref_ca.len());
-    if common_len < 2 {
-        return Err(RenderError::PdbParse(
-            "Both structures must contain at least 2 C-alpha atoms for superposition".into(),
-        ));
+    let (pairs, pairing) = pair_best(&tgt, &refr);
+    if pairs.len() < MIN_SUPERPOSITION_PAIRS {
+        return Err(RenderError::Geometry(format!(
+            "only {} residue(s) could be paired between the structures (target {}, reference \
+             {} residues; tried residue ids, residue numbers and a sequence alignment), and \
+             at least {MIN_SUPERPOSITION_PAIRS} are needed to superpose",
+            pairs.len(),
+            tgt.ca.len(),
+            refr.ca.len()
+        )));
     }
+    let paired_tgt: Vec<Vector3<f64>> = pairs.iter().map(|&(i, _)| tgt.ca[i]).collect();
+    let paired_ref: Vec<Vector3<f64>> = pairs.iter().map(|&(_, j)| refr.ca[j]).collect();
+    let mismatched_names = pairs
+        .iter()
+        .filter(|&&(i, j)| tgt.names[i] != refr.names[j])
+        .count();
 
     // Align target onto reference frame using Kabsch algorithm
-    let sup = proteus_core::metrics::compute_kabsch_superposition(
-        &tgt_ca[..common_len],
-        &ref_ca[..common_len],
-    )
-    .map_err(|e| RenderError::Geometry(e.to_string()))?;
+    let sup = proteus_core::metrics::compute_kabsch_superposition(&paired_tgt, &paired_ref)
+        .map_err(|e| RenderError::Geometry(e.to_string()))?;
 
-    let aligned_tgt_ca = sup.aligned_coords;
+    // The whole target moves with the transform fitted on the pairs, carbonyl guides included
+    // (they are directions, so they rotate but do not translate).
+    let aligned_tgt_ca: Vec<Vector3<f64>> = tgt
+        .ca
+        .iter()
+        .map(|p| sup.rotation * p + sup.translation)
+        .collect();
+    let aligned_tgt_guides: Vec<Option<Vector3<f64>>> = tgt
+        .guides
+        .iter()
+        .map(|g| g.map(|g| sup.rotation * g))
+        .collect();
     // Secondary structure is invariant under rigid superposition: assign on the originals.
     let tgt_ss =
         assign_secondary_structure(&proteus_core::backbone::extract_backbone(&tgt.protein));
@@ -463,45 +657,52 @@ pub fn prepare_superposition_for_rendering(
 
     let target_mesh = segmented_cartoon_mesh(
         &aligned_tgt_ca,
-        &tgt_ss.assignment[..common_len],
-        &tgt_plddts[..common_len],
-        &tgt.breaks[..common_len],
-        &tgt.guides[..common_len],
+        &tgt_ss.assignment,
+        &tgt.plddts,
+        &tgt.breaks,
+        &aligned_tgt_guides,
     );
     let ref_mesh = segmented_cartoon_mesh(
-        &ref_ca[..common_len],
-        &ref_ss.assignment[..common_len],
-        &ref_plddts[..common_len],
-        &refr.breaks[..common_len],
-        &refr.guides[..common_len],
+        &refr.ca,
+        &ref_ss.assignment,
+        &refr.plddts,
+        &refr.breaks,
+        &refr.guides,
     );
 
-    // Compute bounding center and radius over the combined structures
-    let n = common_len as f64;
-    let sum_pos: Vector3<f64> = ref_ca[..common_len].iter().sum();
-    let center_f64 = sum_pos / n;
+    // Frame both structures: centre and radius over every drawn C-alpha.
+    let all: Vec<Vector3<f64>> = refr.ca.iter().chain(&aligned_tgt_ca).copied().collect();
+    let center_f64 = all.iter().sum::<Vector3<f64>>() / all.len() as f64;
     let center = Vector3::new(
         center_f64.x as f32,
         center_f64.y as f32,
         center_f64.z as f32,
     );
 
-    let max_radius = ref_ca[..common_len]
+    let max_radius = all
         .iter()
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let ref_f32: Vec<Vector3<f32>> = ref_ca[..common_len]
+    let all_f32: Vec<Vector3<f32>> = all
         .iter()
         .map(|p| Vector3::new(p.x as f32, p.y as f32, p.z as f32))
         .collect();
-    let camera = OrbitCamera::oriented(center, max_radius * 1.15, &ref_f32);
+    let camera = OrbitCamera::oriented(center, max_radius * 1.15, &all_f32);
 
     Ok(SuperpositionRenderData {
         target_mesh,
         ref_mesh,
         camera,
         rmsd: sup.rmsd,
+        stats: SuperpositionStats {
+            rmsd: sup.rmsd,
+            paired: pairs.len(),
+            target_residues: tgt.ca.len(),
+            reference_residues: refr.ca.len(),
+            mismatched_names,
+            pairing,
+        },
     })
 }
 
@@ -513,14 +714,9 @@ pub fn render_superposition_snapshot(
     width: usize,
     height: usize,
     backend: TerminalBackend,
-) -> Result<(String, f64), RenderError> {
+) -> Result<(String, SuperpositionStats), RenderError> {
+    let (px_width, px_height) = viewport_pixels(width, height, backend)?;
     let data = prepare_superposition_for_rendering(target_pdb, reference_pdb)?;
-
-    let (px_width, px_height) = match backend {
-        TerminalBackend::HalfBlock => (width, height * 2),
-        TerminalBackend::Braille => (width * 2, height * 4),
-        TerminalBackend::Kitty | TerminalBackend::Sixel => (width * 8, height * 16),
-    };
 
     let mut fb = Framebuffer::new(px_width, px_height);
     fb.clear(ColorRGB::BLACK);
@@ -558,7 +754,7 @@ pub fn render_superposition_snapshot(
         }
     };
 
-    Ok((output_str, data.rmsd))
+    Ok((output_str, data.stats))
 }
 
 #[cfg(test)]
@@ -717,6 +913,66 @@ mod tests {
              β-sheet should be near-coplanar (observed 21–31° across the corpus). This is what \
              an arbitrary frame orientation looks like.",
             angles.len()
+        );
+    }
+
+    /// The ribbon face must twist smoothly through a residue boundary, not snap there.
+    ///
+    /// With one fixed carbonyl guide per residue, the wide axis held still across a residue
+    /// and then turned by the whole guide-to-guide angle between the last ring of one residue
+    /// and the first of the next. Measured as the angle between the wide axes (vertex 0 minus
+    /// vertex 4) of consecutive 8-vertex rings of the same secondary structure, each boundary
+    /// step is compared with the step right after it, inside the next residue: both straddle
+    /// the same C-alpha knot, where the spline tangent turns fastest, so the tangent's share
+    /// largely cancels and what is left is the snap. On 1CRN the difference was a median 9.7°,
+    /// p90 61.6° and max 76.8° with one guide per residue; guides anchored mid-peptide and
+    /// interpolated give 6.3°, 12.4° and 16.5°.
+    #[test]
+    fn ribbon_face_twists_smoothly_across_residue_boundaries() {
+        let data = parse_pdb_structure(CRAMBIN_PDB).unwrap();
+        let v = &data.ribbon_mesh.vertices;
+        // Wide-axis turn from ring k-1 to ring k, or None across a segment or SS change.
+        let step = |k: usize| -> Option<(f32, bool)> {
+            let (a0, a4, b0, b4) = (v[8 * (k - 1)], v[8 * (k - 1) + 4], v[8 * k], v[8 * k + 4]);
+            let (wa, wb) = (a0.position - a4.position, b0.position - b4.position);
+            let centre_step = ((a0.position + a4.position) - (b0.position + b4.position)) * 0.5;
+            if wa.norm() < 1e-3
+                || wb.norm() < 1e-3
+                || centre_step.norm() > 3.0
+                || a0.secondary_structure != b0.secondary_structure
+            {
+                return None;
+            }
+            let angle = wa
+                .normalize()
+                .dot(&wb.normalize())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            Some((angle, a0.residue_index != b0.residue_index))
+        };
+        // Only full rings: the two cap-centre vertices sit after the last ring.
+        let rings = v.len() / 8;
+        let mut excess: Vec<f32> = Vec::new();
+        for k in 1..rings - 1 {
+            if let (Some((across, true)), Some((next, false))) = (step(k), step(k + 1)) {
+                excess.push((across - next).abs());
+            }
+        }
+        assert!(
+            excess.len() > 25,
+            "only {} boundaries measured",
+            excess.len()
+        );
+        excess.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = excess[excess.len() / 2];
+        let p90 = excess[excess.len() * 9 / 10];
+        let max = excess[excess.len() - 1];
+        assert!(
+            median < 8.0 && p90 < 20.0 && max < 30.0,
+            "at a residue boundary the ribbon face turns differently from one ring later by a \
+             median {median:.1}° (p90 {p90:.1}°, max {max:.1}°) — it snaps at each residue \
+             instead of twisting"
         );
     }
 
@@ -887,6 +1143,40 @@ mod tests {
         );
     }
 
+    /// A viewport too large to allocate, or empty, is refused with an error rather than
+    /// aborting on allocation, overflowing, or printing nothing with success.
+    #[test]
+    fn oversized_or_empty_viewports_are_refused() {
+        use TerminalBackend::*;
+        let data = parse_pdb_structure(CRAMBIN_PDB).unwrap();
+        let scheme = ColorScheme::SecondaryStructure;
+        for (w, h, backend) in [
+            (100_000, 100_000, HalfBlock),
+            (100_000, 100_000, Kitty),
+            (usize::MAX / 8 + 1, 1, Kitty), // w * 8 wraps to 0
+            (usize::MAX, usize::MAX, Braille),
+            (0, 10, Kitty),
+            (10, 0, HalfBlock),
+            (MAX_VIEWPORT_CELLS + 1, 10, HalfBlock),
+            (MAX_VIEWPORT_CELLS, MAX_VIEWPORT_CELLS, Sixel), // within cells, over pixels
+        ] {
+            let err = render_structure_snapshot(&data, w, h, backend, scheme)
+                .expect_err(&format!("{w}x{h} {backend:?} was accepted"));
+            assert!(
+                matches!(err, RenderError::InvalidViewport(_)),
+                "{w}x{h} {backend:?}: {err}"
+            );
+            let err = render_superposition_snapshot(CRAMBIN_PDB, CRAMBIN_PDB, w, h, backend)
+                .expect_err(&format!("superposition {w}x{h} {backend:?} was accepted"));
+            assert!(matches!(err, RenderError::InvalidViewport(_)), "{err}");
+            // The resolution advice must not panic on the same input either.
+            assert!(data.resolution_note(w, h, backend).is_none());
+        }
+        // The limits themselves are usable.
+        assert!(render_structure_snapshot(&data, MAX_VIEWPORT_CELLS, 2, HalfBlock, scheme).is_ok());
+        assert!(viewport_pixels(MAX_VIEWPORT_CELLS, MAX_VIEWPORT_CELLS, HalfBlock).is_ok());
+    }
+
     #[test]
     fn ribbon_does_not_bridge_chains() {
         let data = parse_pdb_structure(&two_chains_far_apart()).unwrap();
@@ -989,7 +1279,7 @@ mod tests {
 
     #[test]
     fn test_render_superposition_snapshot() {
-        let (snapshot, rmsd) = render_superposition_snapshot(
+        let (snapshot, stats) = render_superposition_snapshot(
             CRAMBIN_PDB,
             CRAMBIN_PDB,
             80,
@@ -999,7 +1289,115 @@ mod tests {
         .expect("Failed to render superposition snapshot");
 
         assert!(!snapshot.is_empty());
-        assert!(rmsd < 1e-6); // Identical structures have 0.0 RMSD
+        assert!(stats.rmsd < 1e-6); // Identical structures have 0.0 RMSD
+        assert!(stats.same_sequence());
+        assert_eq!(stats.paired, 46);
+    }
+
+    /// Keep `ATOM` records of crambin for which `keep(resSeq)` holds, with `edit` applied.
+    fn crambin_where(keep: impl Fn(i32) -> bool, edit: impl Fn(&str) -> String) -> String {
+        let mut out = String::new();
+        for line in CRAMBIN_PDB.lines().filter(|l| l.starts_with("ATOM")) {
+            if keep(line[22..26].trim().parse().unwrap()) {
+                out.push_str(&edit(line));
+                out.push('\n');
+            }
+        }
+        out.push_str("END\n");
+        out
+    }
+
+    /// `--compare` must pair residues by identity, not by position. Removing one residue from
+    /// the front of a structure shifted every later pairing by one: the same coordinates
+    /// superposed at 3.77 Å (1UBQ). A longer reference was silently truncated, and nothing
+    /// said how many residues the RMSD covered or that the sequences differed.
+    #[test]
+    fn superposition_falls_back_when_chain_ids_or_numbering_differ() {
+        // Reported: a predicted model (chain A, 1..N) against a deposited entry with another
+        // chain id or numbering found 0 shared residues and refused to superpose.
+        let chain_b = crambin_where(|_| true, |l| format!("{}B{}", &l[..21], &l[22..]));
+        let s = prepare_superposition_for_rendering(&chain_b, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert!(s.rmsd < 1e-6 && s.paired == 46, "{s:?}");
+        assert_eq!(s.pairing, "residue number");
+        assert!(s.same_sequence());
+
+        let renumbered = crambin_where(
+            |_| true,
+            |l| {
+                let n: isize = l[22..26].trim().parse().unwrap();
+                format!("{}{:>4}{}", &l[..22], n + 100, &l[26..])
+            },
+        );
+        let s = prepare_superposition_for_rendering(&renumbered, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert!(s.rmsd < 1e-6 && s.paired == 46, "{s:?}");
+        assert_eq!(s.pairing, "sequence alignment");
+    }
+
+    #[test]
+    fn superposition_pairs_residues_by_identity() {
+        let same = |l: &str| l.to_string();
+        // One residue fewer at the N-terminus: 45 pairs, the same coordinates, RMSD 0.
+        let shorter = crambin_where(|n| n != 1, same);
+        let s = prepare_superposition_for_rendering(&shorter, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert!(
+            s.rmsd < 1e-6,
+            "positional pairing is back: RMSD {:.3}",
+            s.rmsd
+        );
+        assert_eq!(
+            (s.paired, s.target_residues, s.reference_residues),
+            (45, 45, 46)
+        );
+        assert!(!s.same_sequence(), "an unpaired residue went unreported");
+
+        // A second chain in the reference has no partner and must not be superposed.
+        let s = prepare_superposition_for_rendering(CRAMBIN_PDB, &two_chains_far_apart())
+            .unwrap()
+            .stats;
+        assert!(s.rmsd < 1e-6, "RMSD {:.3}", s.rmsd);
+        assert_eq!((s.paired, s.reference_residues), (46, 92));
+
+        // A point mutation pairs every residue but is reported as a sequence difference.
+        let mutant = crambin_where(
+            |_| true,
+            |l| {
+                if &l[22..26] == "  10" {
+                    format!("{}ALA{}", &l[..17], &l[20..])
+                } else {
+                    l.to_string()
+                }
+            },
+        );
+        let s = prepare_superposition_for_rendering(&mutant, CRAMBIN_PDB)
+            .unwrap()
+            .stats;
+        assert_eq!((s.paired, s.mismatched_names), (46, 1));
+        assert!(!s.same_sequence());
+
+        // The PDB and mmCIF of one entry pair completely.
+        let cif = include_str!("../../proteus-core/tests/data/1crn.cif");
+        let s = prepare_superposition_for_rendering(CRAMBIN_PDB, cif)
+            .unwrap()
+            .stats;
+        assert!(s.same_sequence(), "{s:?}");
+        assert!(s.rmsd < 1e-6);
+
+        // Nothing in common — another chain and no residue name in common — is refused, not
+        // superposed on nothing. (Another chain with the same sequence pairs by number; see
+        // `superposition_falls_back_when_chain_ids_or_numbering_differ`.)
+        let other_chain = crambin_where(|_| true, |l| format!("{}UNK B{}", &l[..17], &l[22..]));
+        let err = prepare_superposition_for_rendering(&other_chain, CRAMBIN_PDB)
+            .err()
+            .expect("structures with no residue in common were superposed");
+        assert!(err.to_string().contains("at least 3"), "{err}");
+        let two = crambin_where(|n| n <= 2, same);
+        assert!(prepare_superposition_for_rendering(&two, CRAMBIN_PDB).is_err());
     }
 
     #[test]

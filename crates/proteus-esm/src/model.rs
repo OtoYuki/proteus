@@ -35,6 +35,9 @@ pub struct EsmConfig {
     pub position_embedding_type: String,
 }
 
+/// Token length of the ESM-2 training crops, `<cls>` and `<eos>` included.
+const TRAINED_TOKENS: usize = 1024;
+
 fn default_eps() -> f64 {
     1e-5
 }
@@ -56,9 +59,9 @@ fn default_rotary() -> String {
 
 impl EsmConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)?;
-        let cfg: EsmConfig =
-            serde_json::from_str(&text).map_err(|e| EsmError::Config(e.to_string()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| crate::io_at(path, e))?;
+        let cfg: EsmConfig = serde_json::from_str(&text)
+            .map_err(|e| EsmError::Config(format!("{}: {e}", path.display())))?;
         if cfg.position_embedding_type != "rotary" {
             return Err(EsmError::Config(format!(
                 "only rotary position embeddings are supported (config has '{}')",
@@ -80,9 +83,17 @@ impl EsmConfig {
         Ok(cfg)
     }
 
-    /// Longest residue sequence the model accepts (`<cls>` and `<eos>` take two positions).
+    /// Longest residue sequence the model accepts: 1022.
+    ///
+    /// ESM-2 was trained on crops of 1024 tokens, and `<cls>` and `<eos>` take two of them.
+    /// `max_position_embeddings` (1026 in every ESM-2 config) is a leftover of ESM-1b's learned
+    /// positions and is not a trained length; rotary embeddings would run past 1022, but on
+    /// positions the model never saw. The ESM authors and ProteinGym score longer proteins in
+    /// windows of 1022 residues.
     pub fn max_residues(&self) -> usize {
-        self.max_position_embeddings.saturating_sub(2)
+        self.max_position_embeddings
+            .min(TRAINED_TOKENS)
+            .saturating_sub(2)
     }
 }
 
@@ -170,6 +181,36 @@ impl Layer {
     }
 }
 
+const INV_FREQ: &str = "encoder.layer.0.attention.self.rotary_embeddings.inv_freq";
+const QUERY: &str = "attention.self.query.weight";
+
+/// Rotary inverse frequencies, `[head_dim / 2]`.
+///
+/// Taken from the checkpoint, not recomputed: the published ESM-2 weights store the buffer
+/// rounded to fp16 (0.316162109375 where 1/10000^(2/16) is 0.316227766), the model was trained
+/// with those values, and `transformers` loads them. The exact formula drifts from the stored
+/// one by up to 0.1 in log-probability at 1022 residues. It is only the fallback for a
+/// checkpoint that omits the buffer.
+fn rotary_inv_freq(esm: &VarBuilder, head_dim: usize, device: &Device) -> Result<Tensor> {
+    let half = head_dim / 2;
+    if esm.contains_tensor(INV_FREQ) {
+        let t = esm.get_unchecked(INV_FREQ)?;
+        if t.dims() != [half] {
+            return Err(EsmError::Config(format!(
+                "{INV_FREQ} has shape {:?}, but num_attention_heads and hidden_size give a \
+                 head dimension of {head_dim} (expected [{half}]); config.json does not match \
+                 the weights",
+                t.dims()
+            )));
+        }
+        return Ok(t.to_dtype(DType::F32)?);
+    }
+    let inv: Vec<f32> = (0..half)
+        .map(|i| 1.0 / 10000f32.powf((2 * i) as f32 / head_dim as f32))
+        .collect();
+    Ok(Tensor::from_vec(inv, half, device)?)
+}
+
 /// ESM-2 masked language model.
 pub struct Esm2 {
     cfg: EsmConfig,
@@ -190,8 +231,14 @@ impl Esm2 {
     /// Load from a `config.json` and a `.safetensors` file.
     pub fn from_files(config: &Path, weights: &Path, device: &Device) -> Result<Self> {
         let cfg = EsmConfig::from_file(config)?;
-        let data = std::fs::read(weights)?;
-        let vb = VarBuilder::from_buffered_safetensors(data, DType::F32, device)?;
+        let data = std::fs::read(weights).map_err(|e| crate::io_at(weights, e))?;
+        let vb = VarBuilder::from_buffered_safetensors(data, DType::F32, device).map_err(|e| {
+            EsmError::Config(format!(
+                "{}: not a readable safetensors file ({e}); if it is a cached download, delete \
+                 it to fetch it again",
+                weights.display()
+            ))
+        })?;
         Self::load(cfg, vb, device.clone())
     }
 
@@ -212,6 +259,17 @@ impl Esm2 {
         let h = cfg.hidden_size;
         let esm = vb.pp("esm");
         let embeddings = embedding(cfg.vocab_size, h, esm.pp("embeddings.word_embeddings"))?;
+        // A config that names fewer layers than the weights hold would otherwise load and run
+        // a truncated network without complaint.
+        let n = cfg.num_hidden_layers;
+        let has_layer = |i: usize| esm.contains_tensor(&format!("encoder.layer.{i}.{QUERY}"));
+        if n == 0 || !has_layer(n - 1) || has_layer(n) {
+            let found = (0..).take_while(|&i| has_layer(i)).count();
+            return Err(EsmError::Config(format!(
+                "config.json says num_hidden_layers = {n}, but the weights hold {found} encoder \
+                 layers; config.json does not match the weights"
+            )));
+        }
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
             layers.push(Layer::load(esm.pp(format!("encoder.layer.{i}")), &cfg)?);
@@ -232,11 +290,7 @@ impl Esm2 {
         };
         let decoder_bias = head.get(cfg.vocab_size, "bias")?;
         let head_dim = h / cfg.num_attention_heads;
-        // inv_freq = 1 / 10000^(2i/d); the checkpoint stores it too but it is a pure function of d.
-        let inv: Vec<f32> = (0..head_dim / 2)
-            .map(|i| 1.0 / 10000f32.powf((2 * i) as f32 / head_dim as f32))
-            .collect();
-        let inv_freq = Tensor::from_vec(inv, head_dim / 2, &device)?;
+        let inv_freq = rotary_inv_freq(&esm, head_dim, &device)?;
         Ok(Self {
             cfg,
             device,
@@ -278,11 +332,12 @@ impl Esm2 {
         self.forward_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let len = tokens.len();
-        if len > self.cfg.max_position_embeddings {
+        if len > self.cfg.max_residues() + 2 {
             // Report the limit the caller can act on: residues, not tokens. The two differ by
             // the <cls>/<eos> pair, which the caller never wrote.
             return Err(EsmError::Sequence(format!(
-                "sequence is too long for this checkpoint: {} residues, limit {}",
+                "sequence is too long: {} residues; ESM-2 was trained on at most {} (1024 tokens \
+                 with <cls> and <eos>). Score a window or a single domain of at most that length",
                 len.saturating_sub(2),
                 self.cfg.max_residues()
             )));
@@ -337,7 +392,7 @@ impl Esm2 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn config_with(extra: &str) -> Result<EsmConfig> {
@@ -352,6 +407,161 @@ mod tests {
         )
         .unwrap();
         EsmConfig::from_file(&p)
+    }
+
+    /// A structurally complete ESM-2 with hidden size 4, two heads (head_dim 2) and `layers`
+    /// encoder layers; weights are arbitrary.
+    pub(crate) fn tiny(
+        layers: usize,
+        inv_freq: Option<&[f32]>,
+    ) -> std::collections::HashMap<String, Tensor> {
+        let dev = Device::Cpu;
+        let mut w = std::collections::HashMap::new();
+        let mut put = |name: String, shape: &[usize]| {
+            let n: usize = shape.iter().product();
+            let v: Vec<f32> = (0..n).map(|i| ((i * 7 % 13) as f32 - 6.0) / 20.0).collect();
+            w.insert(name, Tensor::from_vec(v, shape, &dev).unwrap());
+        };
+        put("esm.embeddings.word_embeddings.weight".into(), &[33, 4]);
+        for i in 0..layers {
+            let p = format!("esm.encoder.layer.{i}");
+            for m in [
+                "attention.self.query",
+                "attention.self.key",
+                "attention.self.value",
+            ] {
+                put(format!("{p}.{m}.weight"), &[4, 4]);
+                put(format!("{p}.{m}.bias"), &[4]);
+            }
+            put(format!("{p}.attention.output.dense.weight"), &[4, 4]);
+            put(format!("{p}.attention.output.dense.bias"), &[4]);
+            for ln in ["attention.LayerNorm", "LayerNorm"] {
+                put(format!("{p}.{ln}.weight"), &[4]);
+                put(format!("{p}.{ln}.bias"), &[4]);
+            }
+            put(format!("{p}.intermediate.dense.weight"), &[8, 4]);
+            put(format!("{p}.intermediate.dense.bias"), &[8]);
+            put(format!("{p}.output.dense.weight"), &[4, 8]);
+            put(format!("{p}.output.dense.bias"), &[4]);
+        }
+        for ln in ["esm.encoder.emb_layer_norm_after", "lm_head.layer_norm"] {
+            put(format!("{ln}.weight"), &[4]);
+            put(format!("{ln}.bias"), &[4]);
+        }
+        put("lm_head.dense.weight".into(), &[4, 4]);
+        put("lm_head.dense.bias".into(), &[4]);
+        put("lm_head.bias".into(), &[33]);
+        if let Some(f) = inv_freq {
+            w.insert(
+                format!("esm.{INV_FREQ}"),
+                Tensor::from_slice(f, f.len(), &dev).unwrap(),
+            );
+        }
+        w
+    }
+
+    pub(crate) fn tiny_config(layers: usize, heads: usize) -> EsmConfig {
+        serde_json::from_str(&format!(
+            r#"{{"hidden_size":4,"num_hidden_layers":{layers},"num_attention_heads":{heads},
+            "intermediate_size":8,"vocab_size":33}}"#
+        ))
+        .unwrap()
+    }
+
+    pub(crate) fn load_tiny(
+        cfg: EsmConfig,
+        w: std::collections::HashMap<String, Tensor>,
+    ) -> Result<Esm2> {
+        let vb = VarBuilder::from_tensors(w, DType::F32, &Device::Cpu);
+        Esm2::load(cfg, vb, Device::Cpu)
+    }
+
+    /// Two layers, one head of 4: enough for position-dependent outputs in scoring tests.
+    pub(crate) fn tiny_model() -> Esm2 {
+        load_tiny(tiny_config(2, 1), tiny(2, None)).unwrap()
+    }
+
+    #[test]
+    fn rotary_frequencies_come_from_the_checkpoint() {
+        // The published checkpoints store inv_freq rounded to fp16; the model has to use those
+        // values, not the exact formula. One head of 4: the formula gives [1, 0.01].
+        let stored = [1.0f32, 0.0125];
+        let m = load_tiny(tiny_config(1, 1), tiny(1, Some(&stored))).unwrap();
+        assert_eq!(m.inv_freq.to_vec1::<f32>().unwrap(), stored);
+        // Absent from the weights: computed, 1 / 10000^(2i/d) with d = 4.
+        let m = load_tiny(tiny_config(1, 1), tiny(1, None)).unwrap();
+        assert_eq!(m.inv_freq.to_vec1::<f32>().unwrap(), [1.0, 0.01]);
+        assert!(m.logits(&[0, 5, 6, 2]).is_ok());
+    }
+
+    #[test]
+    fn config_that_disagrees_with_the_weights_is_refused() {
+        // Fewer layers in config.json than in the weights used to load a truncated model.
+        let err = load_tiny(tiny_config(1, 2), tiny(2, None))
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("num_hidden_layers = 1"), "{err}");
+        assert!(err.to_string().contains("hold 2"), "{err}");
+        assert!(load_tiny(tiny_config(3, 2), tiny(2, None)).is_err());
+        assert!(load_tiny(tiny_config(2, 2), tiny(2, None)).is_ok());
+        // Wrong head count: the head dimension no longer matches the stored rotary buffer
+        // (one head of 4 → inv_freq of length 2, but the checkpoint has 1).
+        let err = load_tiny(tiny_config(1, 1), tiny(1, Some(&[1.0])))
+            .err()
+            .expect("refused");
+        assert!(err.to_string().contains("head dimension"), "{err}");
+        assert!(load_tiny(tiny_config(1, 2), tiny(1, Some(&[1.0]))).is_ok());
+    }
+
+    #[test]
+    fn missing_or_broken_local_files_are_named() {
+        // Used to be a bare "io: No such file or directory (os error 2)".
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.json");
+        let weights = dir.path().join("model.safetensors");
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&config.display().to_string()), "{err}");
+        std::fs::write(
+            &config,
+            r#"{"hidden_size":4,"num_hidden_layers":1,"num_attention_heads":1,
+            "intermediate_size":8,"vocab_size":33}"#,
+        )
+        .unwrap();
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&weights.display().to_string()), "{err}");
+        // An HTML error page cached under the weights' name.
+        std::fs::write(&weights, b"<html>login required</html>").unwrap();
+        let err = Esm2::from_files(&config, &weights, &Device::Cpu)
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(err.contains(&weights.display().to_string()), "{err}");
+        assert!(err.contains("delete"), "{err}");
+    }
+
+    #[test]
+    fn sequences_longer_than_the_training_length_are_refused() {
+        // config.json says max_position_embeddings = 1026, but ESM-2 was trained on 1024-token
+        // crops: 1022 residues. 1023 and 1024 used to be accepted.
+        let m = load_tiny(tiny_config(1, 1), tiny(1, None)).unwrap();
+        assert_eq!(m.config().max_position_embeddings, 1026);
+        assert_eq!(m.config().max_residues(), 1022);
+        let tokens = |residues: usize| {
+            let mut t = vec![5u32; residues + 2];
+            t[0] = 0;
+            t[residues + 1] = 2;
+            t
+        };
+        assert!(m.logits(&tokens(1022)).is_ok());
+        let err = m.logits(&tokens(1023)).expect_err("refused");
+        assert!(err.to_string().contains("1023 residues"), "{err}");
+        assert!(err.to_string().contains("at most 1022"), "{err}");
     }
 
     #[test]

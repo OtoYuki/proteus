@@ -21,7 +21,7 @@ pub use scoring::{
     parse_mutation, scan, score_masked_marginal, score_wt_marginal, MarginalScorer, Mutation,
     ScanRow,
 };
-pub use tokenizer::{Tokenizer, AMINO_ACIDS, MASK_ID, VOCAB};
+pub use tokenizer::{Tokenizer, AMINO_ACIDS, MASK_ID, NON_CANONICAL, VOCAB};
 
 /// Errors from loading or running a model.
 #[derive(Debug, thiserror::Error)]
@@ -41,3 +41,11 @@ pub enum EsmError {
 }
 
 pub type Result<T> = std::result::Result<T, EsmError>;
+
+/// An I/O error that names the path it happened on (`std::io::Error` does not).
+pub(crate) fn io_at(path: &std::path::Path, e: std::io::Error) -> EsmError {
+    EsmError::Io(std::io::Error::new(
+        e.kind(),
+        format!("{}: {e}", path.display()),
+    ))
+}

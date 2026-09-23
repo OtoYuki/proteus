@@ -45,7 +45,8 @@ pub struct MutagenesisConfig {
     pub window_start: Option<usize>,
     /// Optional 1-indexed end position (inclusive). Defaults to sequence length.
     pub window_end: Option<usize>,
-    /// Optional upper bound limit on total generated variants.
+    /// Optional upper bound on the number of mutants generated. The wild type, when
+    /// included, does not count against it.
     pub max_variants: Option<usize>,
     /// Whether to include the unmutated wildtype scaffold as candidate #0.
     pub include_wildtype: bool,
@@ -85,20 +86,23 @@ pub fn generate_mutant_library(
     let end = config.window_end.unwrap_or(len);
 
     if start == 0 {
-        return Err(CoreError::InvalidFasta(
-            "Mutagenesis window_start is 1-indexed and must be >= 1".into(),
+        return Err(CoreError::InvalidWindow(
+            "positions are 1-indexed; start must be >= 1".into(),
         ));
     }
-
-    if start > end {
-        return Err(CoreError::InvalidFasta(format!(
-            "Invalid mutagenesis window: start ({start}) exceeds end ({end})"
+    if start > len {
+        return Err(CoreError::InvalidWindow(format!(
+            "start ({start}) is beyond the scaffold, which has {len} residues"
         )));
     }
-
     if end > len {
-        return Err(CoreError::InvalidFasta(format!(
-            "Invalid mutagenesis window: end ({end}) exceeds scaffold length ({len})"
+        return Err(CoreError::InvalidWindow(format!(
+            "end ({end}) exceeds scaffold length ({len})"
+        )));
+    }
+    if start > end {
+        return Err(CoreError::InvalidWindow(format!(
+            "start ({start}) exceeds end ({end})"
         )));
     }
 
@@ -119,6 +123,11 @@ pub fn generate_mutant_library(
             created_at: Utc::now(),
         });
     }
+
+    // `max_variants` counts mutants only; the wild type sits in front of them.
+    let cap = config
+        .max_variants
+        .map(|limit| limit + usize::from(config.include_wildtype));
 
     // Zero-indexed bounds [start - 1, end - 1]
     let zero_start = start - 1;
@@ -146,10 +155,8 @@ pub fn generate_mutant_library(
                     created_at: Utc::now(),
                 });
 
-                if let Some(limit) = config.max_variants {
-                    if library.len() >= limit {
-                        break;
-                    }
+                if cap.is_some_and(|c| library.len() >= c) {
+                    break;
                 }
             }
             MutagenesisMode::Saturation => {
@@ -173,22 +180,23 @@ pub fn generate_mutant_library(
                         created_at: Utc::now(),
                     });
 
-                    if let Some(limit) = config.max_variants {
-                        if library.len() >= limit {
-                            return Ok(library);
-                        }
+                    if cap.is_some_and(|c| library.len() >= c) {
+                        break;
                     }
                 }
             }
         }
 
-        if let Some(limit) = config.max_variants {
-            if library.len() >= limit {
-                break;
-            }
+        if cap.is_some_and(|c| library.len() >= c) {
+            break;
         }
     }
 
+    // The checks above run after a push; a cap of 0 (or one hit mid-position) is enforced
+    // here.
+    if let Some(c) = cap {
+        library.truncate(c);
+    }
     Ok(library)
 }
 
@@ -285,5 +293,26 @@ mod tests {
 
         let library = generate_mutant_library(&scaffold, &config).unwrap();
         assert_eq!(library.len(), 5);
+    }
+    #[test]
+    fn max_variants_counts_mutants_and_is_exact() {
+        // Reported: `max_variants = 0` still returned 1-2 sequences, and 1 with the wild type
+        // included returned 2.
+        let scaffold = sample_scaffold();
+        for (limit, wt, expected) in [(0, false, 0), (0, true, 1), (1, true, 2), (3, false, 3)] {
+            for mode in [
+                MutagenesisMode::AlanineScanning,
+                MutagenesisMode::Saturation,
+            ] {
+                let config = MutagenesisConfig {
+                    mode,
+                    max_variants: Some(limit),
+                    include_wildtype: wt,
+                    ..Default::default()
+                };
+                let lib = generate_mutant_library(&scaffold, &config).unwrap();
+                assert_eq!(lib.len(), expected, "{mode:?} limit {limit} wt {wt}");
+            }
+        }
     }
 }

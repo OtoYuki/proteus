@@ -115,6 +115,35 @@ impl ProteusRepository {
         Ok(())
     }
 
+    /// Move a job from Queued (or Pending) to Running, atomically. Returns whether this caller
+    /// got it: the CLI, the daemon's API and its queue poller may all try to start the same
+    /// job, and exactly one must run it.
+    pub async fn claim_job(&self, id: Uuid) -> Result<bool, StorageError> {
+        let result = sqlx::query(
+            "UPDATE jobs SET status = 'Running', started_at = ?, error_log = NULL \
+             WHERE id = ? AND status IN ('Queued', 'Pending')",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Ids of jobs handed to the daemon (status Pending), oldest first. Queued jobs belong to
+    /// the process that inserted them and are not listed.
+    pub async fn pending_job_ids(&self, limit: i64) -> Result<Vec<Uuid>, StorageError> {
+        let rows =
+            sqlx::query("SELECT id FROM jobs WHERE status = 'Pending' ORDER BY created_at LIMIT ?")
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| Uuid::parse_str(&r.get::<String, _>("id")).ok())
+            .collect())
+    }
+
     pub async fn update_job_status(
         &self,
         id: Uuid,
@@ -579,6 +608,42 @@ impl ProteusRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    /// As [`update_tes_task_state`](Self::update_tes_task_state), but refused once the task is
+    /// in any terminal state (COMPLETE, EXECUTOR_ERROR, SYSTEM_ERROR, CANCELED). A cancel and a
+    /// finishing worker race for the same row; whichever writes a terminal state first wins and
+    /// the other is told so (`false`).
+    pub async fn update_tes_task_state_unless_terminal(
+        &self,
+        id: &str,
+        state: &str,
+        task_json: &str,
+    ) -> Result<bool, StorageError> {
+        let now = Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE tes_tasks SET state = ?, task_json = ?, updated_at = ? WHERE id = ? \
+             AND state NOT IN ('COMPLETE', 'EXECUTOR_ERROR', 'SYSTEM_ERROR', 'CANCELED', 'PREEMPTED')",
+        )
+        .bind(state)
+        .bind(task_json)
+        .bind(now)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// Ids of TES tasks that are not in a terminal state (queued, initializing, running,
+    /// paused). At daemon start these are tasks whose worker died with the previous process.
+    pub async fn unfinished_tes_task_ids(&self) -> Result<Vec<String>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT id FROM tes_tasks WHERE state NOT IN \
+             ('COMPLETE', 'EXECUTOR_ERROR', 'SYSTEM_ERROR', 'CANCELED', 'PREEMPTED')",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(|r| r.get::<String, _>("id")).collect())
+    }
+
     pub async fn get_tes_task(&self, id: &str) -> Result<Option<TesTaskRecord>, StorageError> {
         let row = sqlx::query(
             "SELECT id, state, name, description, task_json, created_at, updated_at FROM tes_tasks WHERE id = ?"
@@ -1023,5 +1088,39 @@ mod tests {
                 .len(),
             1
         );
+    }
+    #[tokio::test]
+    async fn only_pending_jobs_are_offered_to_the_daemon_and_each_is_claimed_once() {
+        // Regression review: the daemon's queue poller took Queued jobs belonging to a running
+        // `screen` in another process.
+        let repo = ProteusRepository::new(crate::pool::create_in_memory_pool().await.unwrap());
+        let seq = Sequence {
+            id: Uuid::new_v4(),
+            header: "x".into(),
+            fasta: "ACDE".into(),
+            length: 4,
+            created_at: Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let mut ids = Vec::new();
+        for status in [JobStatus::Queued, JobStatus::Pending] {
+            let job = PipelineJob {
+                id: Uuid::new_v4(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status,
+                priority: 1,
+                created_at: Utc::now(),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            };
+            repo.insert_job(&job).await.unwrap();
+            ids.push(job.id);
+        }
+        assert_eq!(repo.pending_job_ids(10).await.unwrap(), vec![ids[1]]);
+        assert!(repo.claim_job(ids[1]).await.unwrap());
+        assert!(!repo.claim_job(ids[1]).await.unwrap(), "claimed twice");
+        assert!(repo.pending_job_ids(10).await.unwrap().is_empty());
     }
 }

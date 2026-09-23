@@ -51,29 +51,50 @@ pub struct Args {
 }
 
 /// Expand directories into the structure files beneath them, sorted, keeping explicit file
-/// arguments in the order given. An explicit file is taken whatever its extension.
-fn collect_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-        let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-            .with_context(|| format!("cannot read directory {}", dir.display()))?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .collect();
+/// arguments in the order given. An explicit file is taken whatever its extension. Each
+/// directory is walked once by its canonical path, so a symlink loop (`models/loop -> ..`)
+/// or a directory reachable twice does not repeat files, and each file is listed once however
+/// it was reached. A subdirectory that cannot be read is reported, not fatal.
+/// A path that could not be analysed, and why.
+type Failure = (PathBuf, String);
+
+fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
+    use std::collections::HashSet;
+    fn walk(
+        dir: &Path,
+        out: &mut Vec<PathBuf>,
+        unreadable: &mut Vec<Failure>,
+        seen_dirs: &mut HashSet<PathBuf>,
+    ) {
+        if let Ok(real) = dir.canonicalize() {
+            if !seen_dirs.insert(real) {
+                return;
+            }
+        }
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+            Err(e) => {
+                unreadable.push((dir.to_path_buf(), format!("cannot read directory: {e}")));
+                return;
+            }
+        };
         entries.sort();
         for p in entries {
             if p.is_dir() {
-                walk(&p, out)?;
+                walk(&p, out, unreadable, seen_dirs);
             } else if is_structure_file_name(&p) {
                 out.push(p);
             }
         }
-        Ok(())
     }
     let mut out = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut seen_dirs = HashSet::new();
     for p in paths {
         if p.is_dir() {
             let before = out.len();
-            walk(p, &mut out)?;
-            if out.len() == before {
+            walk(p, &mut out, &mut unreadable, &mut seen_dirs);
+            if out.len() == before && unreadable.is_empty() {
                 bail!(
                     "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under {}",
                     p.display()
@@ -85,7 +106,36 @@ fn collect_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
             bail!("no such file or directory: {}", p.display());
         }
     }
-    Ok(out)
+    let mut seen_files = HashSet::new();
+    out.retain(|p| seen_files.insert(p.canonicalize().unwrap_or_else(|_| p.clone())));
+    Ok((out, unreadable))
+}
+
+/// Refuse an export target that cannot be written before any structure is analysed: an
+/// unsupported extension, an existing directory, or a parent that is a file.
+fn check_export_target(out: &Path) -> Result<()> {
+    proteus_storage::export::check_export_path(out)?;
+    if out.is_dir() {
+        bail!(
+            "--export {} is a directory; give a file name",
+            out.display()
+        );
+    }
+    let mut parent = out.parent();
+    while let Some(p) = parent.filter(|p| !p.as_os_str().is_empty()) {
+        if p.exists() {
+            if !p.is_dir() {
+                bail!(
+                    "--export {}: {} is not a directory",
+                    out.display(),
+                    p.display()
+                );
+            }
+            break;
+        }
+        parent = p.parent();
+    }
+    Ok(())
 }
 
 fn forced_source(arg: ConfidenceSourceArg) -> Option<ConfidenceSource> {
@@ -139,7 +189,7 @@ fn opt(v: Option<f64>, prec: usize) -> String {
         .unwrap_or_else(|| "–".into())
 }
 
-fn print_summary(rows: &[StructureQc], top: usize) {
+fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
     if top == 0 || rows.is_empty() {
         return;
     }
@@ -182,11 +232,12 @@ fn print_summary(rows: &[StructureQc], top: usize) {
     }
     println!("{table}");
     if rows.len() > top {
-        println!(
-            "{} more not shown (--top {}); the export has every row.",
-            rows.len() - top,
-            top
-        );
+        let hint = if exported {
+            "the export has every row"
+        } else {
+            "--export writes every row"
+        };
+        println!("{} more not shown (--top {top}); {hint}.", rows.len() - top);
     }
 }
 
@@ -206,10 +257,11 @@ pub async fn run(args: Args) -> Result<()> {
         bail!("give at least one structure file or directory, e.g. `proteus analyze model.pdb`");
     }
     if let Some(ref out) = export {
-        proteus_storage::export::check_export_path(out)?;
+        check_export_target(out)?;
     }
-    let inputs = collect_inputs(&paths)?;
-    let single_report = inputs.len() == 1 && paths[0].is_file() && export.is_none() && !json;
+    let (inputs, unreadable) = collect_inputs(&paths)?;
+    let single_report =
+        inputs.len() == 1 && paths.len() == 1 && paths[0].is_file() && export.is_none() && !json;
     if single_report {
         return print_report(&inputs[0], reference.as_deref(), confidence_source);
     }
@@ -234,24 +286,26 @@ pub async fn run(args: Args) -> Result<()> {
     let elapsed = started.elapsed();
 
     let mut rows = Vec::with_capacity(results.len());
-    let mut failures = Vec::new();
+    let mut failures: Vec<Failure> = unreadable;
     for (path, r) in inputs.iter().zip(results) {
         match r {
             Ok(row) => rows.push(row),
-            Err(e) => failures.push((path, e)),
+            Err(e) => failures.push((path.clone(), e)),
         }
     }
 
+    // The export is written before anything goes to stdout: a reader that stops early
+    // (`| head -1`) ends the process on its next write, and must not cost the file.
+    if let Some(ref out) = export {
+        proteus_storage::save_qc_table(&rows, out)
+            .with_context(|| format!("cannot write {}", out.display()))?;
+    }
     if json {
         for r in &rows {
             println!("{}", serde_json::to_string(r)?);
         }
     } else {
-        print_summary(&rows, top);
-    }
-    if let Some(ref out) = export {
-        proteus_storage::save_qc_table(&rows, out)
-            .with_context(|| format!("cannot write {}", out.display()))?;
+        print_summary(&rows, top, export.is_some());
     }
     eprintln!(
         "{} of {} structures analysed in {:.2} s{}",
@@ -270,7 +324,7 @@ pub async fn run(args: Args) -> Result<()> {
         bail!(
             "{} of {} structures could not be analysed",
             failures.len(),
-            inputs.len()
+            rows.len() + failures.len()
         );
     }
     Ok(())
@@ -283,17 +337,19 @@ fn print_report(
     confidence_source: ConfidenceSourceArg,
 ) -> Result<()> {
     println!("Analyzing structure file: {:?}", pdb);
-    let mut metrics = analyze_pdb_file(pdb, reference).context("Biophysical analysis failed")?;
-    if let Some(src) = forced_source(confidence_source) {
-        metrics.confidence_source = src;
-        let residues = metrics
-            .secondary_structure_summary
-            .as_ref()
-            .map(|s| s.assignment.len())
-            .unwrap_or(1);
-        metrics.candidate_fitness_score =
-            Some(evaluate_candidate_fitness(&metrics, residues).total_score);
-    }
+    let loaded = proteus_core::io::load_structure(pdb).context("Biophysical analysis failed")?;
+    let reference = reference
+        .map(proteus_core::io::open_structure)
+        .transpose()
+        .context("cannot read the reference structure")?;
+    let metrics = proteus_core::metrics::analyze_pdb_detailed_with_source(
+        &loaded.pdb,
+        reference.as_ref(),
+        Some(&loaded.header_preview),
+        forced_source(confidence_source),
+    )
+    .context("Biophysical analysis failed")?
+    .metrics;
 
     let mut table = Table::new();
     table.load_style(UTF8_FULL);

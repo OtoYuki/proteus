@@ -22,9 +22,7 @@ pub(crate) mod prelude {
     pub use comfy_table::{Cell, Table};
     pub use indicatif::{ProgressBar, ProgressStyle};
     pub use proteus_core::confidence::ConfidenceSource;
-    pub use proteus_core::metrics::analyze_pdb_file;
     pub use proteus_core::models::PipelineTier;
-    pub use proteus_core::ranking::evaluate_candidate_fitness;
     pub use proteus_core::sequence::validate_and_parse_fasta;
     pub use proteus_storage::create_sqlite_pool;
     pub use proteus_storage::repository::ProteusRepository;

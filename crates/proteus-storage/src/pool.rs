@@ -15,8 +15,10 @@ pub async fn create_sqlite_pool<P: AsRef<Path>>(db_path: P) -> Result<SqlitePool
             .map_err(|e| StorageError::DatabaseError(sqlx::Error::Io(e)))?;
     }
 
-    let url = format!("sqlite://{}", path.to_string_lossy());
-    let options = SqliteConnectOptions::from_str(&url)?
+    // `filename` takes the path as it is; splicing it into a `sqlite://` URL let `?` and `%`
+    // in a data directory be read as URL syntax ("unknown value 'ro/proteus.db' for mode").
+    let options = SqliteConnectOptions::new()
+        .filename(path)
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)

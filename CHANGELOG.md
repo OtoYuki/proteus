@@ -5,6 +5,152 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+A code-level bug hunt before publishing the crates (five independent reviews: engine and
+server, core science, CLI and storage, renderer, ESM-2) found the following in the TES server.
+Each has a regression test that reproduces the reported attack.
+- **A client-chosen task `id` became a host path.** `id` names the task's work dir, so
+  `"id": "<abs path>"` or `"../.."` let inputs, outputs and volumes read and write anywhere
+  the daemon's user could, and reusing an id gave a 500. The id is now always server-assigned,
+  as TES 1.1 specifies; client `logs` and `creation_time` are ignored too.
+- **An executor could write any host file through its stdout/stderr path** by planting a
+  symlink there (`ln -s ~/.bashrc /data/log.txt`). These files are now created fresh inside
+  the work dir; a planted directory link fails the task.
+- **Symlinks inside copied directories were followed**, on the way out (a DIRECTORY output
+  holding `leak.txt -> /etc/…` delivered the host file) and on the way in (a directory input
+  from an allowed dir). A symlink below the top level now fails the copy.
+- **`Access-Control-Allow-Origin: *`** let any web page in the operator's browser submit tasks
+  to a daemon on localhost. The CORS layer is gone.
+- A task tag `proteus.network=true` turned container networking on without the operator's
+  `--executor-network`; the network is now the operator's decision only.
+- Captured stdout/stderr was unbounded (200 MB of output took the daemon to 859 MB and wrote a
+  200 MB row); it is capped at 8 MiB per stream with the drop logged.
+- The bearer token is compared as fixed-length digests, so its length no longer shows in
+  timing.
+
+### Changed
+- **`proteus view --compare` pairs residues instead of positions**: by identity (chain ID,
+  residue number, insertion code) when the files share a numbering, by residue number when
+  each is a single chain with a different chain ID (a predicted model against a deposited
+  entry), and by sequence alignment when the numbering differs; the pairing that matches the
+  most identical residues wins and is named in the summary. Only paired residues are
+  superposed; fewer than three is an error. The summary gives the pair count against each structure's total, is green only when
+  the sequences match residue for residue, and warns what differs otherwise. `--color` and
+  `--dashboard`, which `--compare` silently ignored, are now rejected with it.
+  `render_superposition_snapshot` returns `SuperpositionStats` rather than a bare RMSD.
+- `--width`/`--height` accept 1–4096 cells; the renderer also refuses a framebuffer over
+  2²⁵ pixels (`RenderError::InvalidViewport`).
+
+### Fixed
+- **TES lifecycle.** A cancel answered 200 could be overwritten by COMPLETE; a terminal state
+  is now written once. Early exits and mid-task I/O or database errors left tasks non-terminal
+  and the worker gauge raised; every path now ends in one terminal state and one event. A daemon
+  restart left tasks RUNNING and their containers running; they are marked SYSTEM_ERROR at
+  start-up and their labelled containers removed. `stdin` piped the path string instead of the
+  file's contents. The OCI runner left a container behind when it failed to start.
+- **TES conformance.** `POST /v1/tasks/{id}` without `:cancel` cancelled the task (now 405);
+  MINIMAL carried `resources`/`executors` and BASIC carried input `content`; `view` was
+  case-sensitive on single tasks with a plain-text 400; an unknown `state` filter returned an
+  empty 200 and an out-of-range `page_token` the first page (both 400 now); `PREEMPTED` and
+  `CANCELING` were missing.
+- **Native jobs** that failed after starting (unwritable work dir, database error) stayed
+  Running with an open event stream; they now fail. `submit --wait=false` jobs were never run by
+  anything; they are now marked Pending and a running `proteus serve` picks them up
+  (`--queue-workers`, default 2, at a time). Jobs a `screen` or `submit --wait` inserted belong
+  to that process and are never taken, and every start claims its job atomically.
+- **One daemon per data directory.** `proteus serve` takes a lock on the data directory and
+  binds its port before closing out tasks a previous run left unfinished, so a second daemon
+  can no longer mark the first one's live tasks SYSTEM_ERROR.
+- **Malformed structure files crashed the process.** pdbtbx panics on an mmCIF `?` in a
+  required field and on multi-byte characters in PDB records; both are now parse errors.
+- **Hostile chain ids ran as script** in `view --html`/`--web` and `/view/{job}`
+  (`</script><svg onload=…>` in an mmCIF `auth_asym_id`). JS escaping now `\u`-escapes
+  everything outside a small safe set.
+- **Confidence source.** "NMR" matched inside protein names ("NmrA-like"), hiding pLDDT 96.6 on
+  real AlphaFold DB models; `_exptl.method` beyond the first 16 KiB of an mmCIF was never read;
+  a header-less ESMFold model with low confidence was classed experimental (which raised its
+  score); a declared `--confidence-source predicted` skipped the 0–1 rescale. Detection now reads
+  machine-readable provenance from the whole file first and matches words as words.
+- **A blank element column turned `CA` into calcium**, dropping every residue (element symbols
+  read from atom names are now corrected in the standard amino acids only, so mercury in CMH
+  or bromine in a modified residue is kept); deuterium was kept as a heavy atom; ATOM lines cut
+  after the B-factor were refused; an SSBOND or CONECT record naming a residue no longer in the
+  file made the whole file unreadable (bond records are not needed and are skipped).
+- **Hydrogen bonds.** Proline's N was counted as a donor and a Ser/Thr/Tyr hydroxyl pair was
+  counted twice. Against mdtraj, precision on 1D3Z rises 76.1 → 78.5 % and on 1L2Y
+  63.2 → 66.7 %; 2L3B recall falls 97.1 → 95.7 % (one bond is now kept in the other direction).
+- Median pLDDT of an even count took the upper middle value. `--max-variants` counted the wild
+  type and overshot (0 gave one or two sequences). FASTA upper-casing let `ß` and `ı` through as
+  residues, and a literal `\n` in a multi-line file was turned into a line break. A C-alpha-only
+  trace scored 0 on the Ramachandran term instead of the neutral baseline. A ligand named `NAN`
+  was refused as a non-finite coordinate; coordinates past 4.3e9 wrapped silently.
+- **CLI.** A closed stdout (`| head -1`) panicked, and `analyze` lost its `--export`; a closed
+  stdout now ends the process quietly (status 141) and the export is written first. SIGPIPE
+  itself stays ignored, so a closed executor pipe cannot take down `proteus serve`. `screen --scorer esm2` ranked
+  unscored entries above every scored one. `analyze` walked a symlink loop 41 times, aborted on
+  one unreadable subdirectory, dropped every row when `--reference` had another length, and
+  checked the export target only after the work. Export extensions were case-sensitive (and
+  `x.CSV` got JSON). `--host localhost` and `::1` were refused; a `?` or `%` in the data
+  directory broke the database URL; the progress bar never moved; piped leaderboards wrapped
+  job ids over two lines.
+- **ESM-2 scores drifted from `transformers` with sequence length.** `proteus-esm` recomputed
+  the rotary inverse frequencies exactly; the checkpoints store them rounded to fp16, and that
+  is what the model was trained with and what `transformers` loads. At 1022 residues the 8M
+  model's amino-acid log-probabilities were off by up to 0.07 (0.1 on a random sequence); the
+  2.5e-3 on the short parity proteins, documented as fp32 accumulation noise, was the same bug.
+  They are now read from the checkpoint. Parity is 3.6e-5 in logits and 1.3e-5 in amino-acid
+  log-probabilities on the short proteins, 4.6e-5 / 3.3e-5 on a new 1022-residue fixture
+  (`validate/esm_reference.py --long`); tolerances are tightened from 1e-2 / 5e-3 to 2e-4 / 1e-4.
+- **Mutation positions counted whitespace that the tokenizer skipped**, so on
+  `MKTAYIAKQR QISF…` a mutation after the space scored the next residue, and one at the last
+  position scored the `<eos>` row. The wild type is now normalised once and both positions and
+  tokens come from it.
+- **Non-amino-acid input was scored.** Wild-type characters such as `J`, digits, `-`, `.` or an
+  inner `*` became `<unk>` or gap tokens, and substitutions to `J`/`X`/`B`/`Z`/`U`/`O` were
+  scored against them. Now: the wild type may hold the 20 standard amino acids and ESM's
+  `X`/`B`/`Z`/`U`/`O` tokens (a final `*` is dropped), anything else is an error; both sides of
+  a substitution must be standard; `scan` leaves out non-standard wild-type positions.
+- `proteus esm score wt.fast …` (a mistyped file name) scored the "protein" `WT.FAST`. An
+  argument that is neither a file nor a valid sequence is now an error.
+- The length limit was 1024 residues; ESM-2 was trained on 1022 (1024 tokens with `<cls>` and
+  `<eos>`), and longer input is refused with that explanation.
+- A `config.json` with the wrong layer or head count for its weights loaded silently (a
+  truncated network, or wrongly split heads); it is refused.
+- `[mutation=…]` tags: ProteinGym's `A10G:C4S` aborted the whole screen; `A+10G` parsed; a
+  position mutated twice in one variant was scored twice and summed. All fixed.
+- An interrupted checkpoint download left a `.part` file in the cache; a failed request left an
+  empty cache directory. Hub errors now say what to do: the 3B/15B repositories have no
+  safetensors (with the conversion command), an unknown or gated repository needs a correct id
+  or `HF_TOKEN`, and a path given to `--esm-model` that is not a directory is reported as such.
+  Missing or unreadable local files are named.
+- `--compare` paired the i-th Cα of one file with the i-th of the other, so a single missing
+  residue shifted every pairing (1UBQ against itself minus residue 1: 3.77 Å instead of 0),
+  and the longer structure was truncated without a word.
+- The interactive viewer below 118 columns: the HUD was padded but never cut, wrapped, and
+  scrolled the screen every frame — at 80×24 the structure scrolled out of view. Every HUD and
+  dashboard line is now cut to the terminal width by display width.
+- The viewer's layout is recomputed on resize and on the dashboard toggle (the separator,
+  dashboard and HUD stayed where the first frame put them), and a terminal under 12 rows is
+  no longer overdrawn: the HUD shrinks first, and the dashboard is hidden when it does not fit.
+  Dashboard section rules were one column too wide and measured in bytes.
+- SIGTERM, SIGHUP or SIGINT during the interactive viewer, or a panic in it, left the terminal
+  raw, on the alternate screen and with the cursor hidden. The terminal is now restored first
+  (the process then exits 128 + the signal number).
+- An oversized `--width/--height` aborted on allocation (100000×100000), overflowed to an empty
+  kitty image printed with exit status 0, or printed nothing for 0.
+- Sixel's median-cut palette ignored how many pixels used each colour, so the background was
+  averaged with dark shading tones: 6VXX's black backdrop decoded as (15,15,13). Colours are
+  now weighted by pixel count and the most common one keeps an exact register.
+- The ribbon face held still inside each residue and snapped by the whole carbonyl-to-carbonyl
+  angle at the next Cα. Each guide is now anchored mid-peptide and interpolated; on 1CRN the
+  worst boundary snap went from 77° to 17°.
+- `--web` wrote to a fixed name in the shared temp directory and followed symlinks; the page
+  is now a new file with a random name, created exclusively.
+- Half-block cells with one empty half painted it explicit black instead of leaving the
+  terminal's own background, a black fringe on any other background.
+- `proteus view typo.pdb` created the job database (`proteus.db`, `-wal`, `-shm`) before
+  failing; it is now opened only for an argument shaped like a job ID, and only if it exists.
+
 ## [0.6.0] — 2026-09-23
 
 The structure-QC release. `proteus analyze` takes a folder of models and writes one row per

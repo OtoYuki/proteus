@@ -29,7 +29,12 @@ pub struct ExecutorRequest<'a> {
     pub command: &'a [String],
     pub workdir: Option<&'a str>,
     pub env: &'a HashMap<String, String>,
-    pub stdin: Option<&'a str>,
+    /// Contents of the file named by the executor's `stdin` path, already read from the work
+    /// dir (TES pipes the file, not its name).
+    pub stdin: Option<&'a [u8]>,
+    /// The TES task this executor belongs to; containers are labelled with it so a restarted
+    /// daemon can find and remove what the previous process left running.
+    pub task_id: &'a str,
     /// Host directory that mirrors the container's root for every declared path
     /// (`<work_dir>/data/in.pdb` ↔ `/data/in.pdb`).
     pub work_dir: &'a Path,
@@ -53,9 +58,60 @@ pub struct ExecutorResult {
     pub system_logs: Vec<String>,
 }
 
+/// Largest stdout or stderr kept per executor (8 MiB). The rest is read and discarded, so a
+/// task printing gigabytes can neither exhaust the daemon's memory nor bloat the task row.
+pub const MAX_CAPTURED_BYTES: usize = 8 * 1024 * 1024;
+
+/// Container label carrying the TES task id.
+pub const TASK_LABEL: &str = "proteus.tes_task";
+
+/// Appends to a capped buffer, remembering whether anything was dropped.
+#[derive(Default)]
+struct Capped {
+    buf: Vec<u8>,
+    dropped: usize,
+}
+
+impl Capped {
+    fn push(&mut self, bytes: &[u8]) {
+        let room = MAX_CAPTURED_BYTES.saturating_sub(self.buf.len());
+        let take = room.min(bytes.len());
+        self.buf.extend_from_slice(&bytes[..take]);
+        self.dropped += bytes.len() - take;
+    }
+
+    /// The text, and a system-log line when it was cut.
+    fn finish(self, stream: &str) -> (String, Option<String>) {
+        let note = (self.dropped > 0).then(|| {
+            format!(
+                "{stream} truncated: kept the first {MAX_CAPTURED_BYTES} bytes, dropped {}",
+                self.dropped
+            )
+        });
+        (String::from_utf8_lossy(&self.buf).into_owned(), note)
+    }
+}
+
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(mut r: R) -> Capped {
+    use tokio::io::AsyncReadExt;
+    let mut out = Capped::default();
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        match r.read(&mut chunk).await {
+            Ok(0) | Err(_) => return out,
+            Ok(n) => out.push(&chunk[..n]),
+        }
+    }
+}
+
 #[async_trait]
 pub trait TesExecutor: Send + Sync {
     async fn run(&self, req: ExecutorRequest<'_>) -> Result<ExecutorResult, EngineError>;
+    /// Remove anything a previous daemon process left running for `task_id`. Called when a
+    /// restarted daemon finds the task unfinished.
+    async fn stop_task(&self, _task_id: &str) -> Result<(), EngineError> {
+        Ok(())
+    }
     /// `"container"` or `"host"`, reported in `service-info` tags.
     fn kind(&self) -> &'static str;
 }
@@ -123,6 +179,10 @@ impl TesExecutor for HostExecutor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         cmd.kill_on_drop(true);
+        // Its own process group, so a timeout or cancel can stop everything the command
+        // started, including background children that would otherwise keep the pipes open.
+        #[cfg(unix)]
+        cmd.process_group(0);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {
@@ -134,43 +194,71 @@ impl TesExecutor for HostExecutor {
                 })
             }
         };
-        if let (Some(mut stdin), Some(text)) = (child.stdin.take(), req.stdin) {
-            use tokio::io::AsyncWriteExt;
-            let _ = stdin.write_all(text.as_bytes()).await;
-        } else {
-            drop(child.stdin.take());
-        }
-        let waited = tokio::select! {
-            r = tokio::time::timeout(req.timeout, child.wait_with_output()) => r,
-            _ = req.cancel.cancelled() => {
-                return Ok(ExecutorResult {
-                    exit_code: -1,
-                    system_logs: vec!["host executor: canceled".into()],
-                    ..Default::default()
+        // Feed stdin from its own task: a process that does not read it (or reads slowly) must
+        // not stall the daemon before the timeout and cancel below are even armed.
+        match (child.stdin.take(), req.stdin) {
+            (Some(mut stdin), Some(bytes)) => {
+                let bytes = bytes.to_vec();
+                tokio::spawn(async move {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(&bytes).await;
                 });
             }
+            (stdin, _) => drop(stdin),
+        }
+        let out = tokio::spawn(read_capped(child.stdout.take().expect("piped stdout")));
+        let err = tokio::spawn(read_capped(child.stderr.take().expect("piped stderr")));
+        let (out_abort, err_abort) = (out.abort_handle(), err.abort_handle());
+        let pid = child.id();
+        let stop = |why: String| {
+            if let Some(pid) = pid {
+                kill_process_group(pid);
+            }
+            out_abort.abort();
+            err_abort.abort();
+            Ok(ExecutorResult {
+                exit_code: -1,
+                system_logs: vec![why],
+                ..Default::default()
+            })
         };
-        match waited {
-            Ok(Ok(output)) => Ok(ExecutorResult {
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                exit_code: output.status.code().unwrap_or(-1) as i64,
-                system_logs: vec![format!(
+        // The deadline covers the output as well as the exit: a background process that
+        // inherited stdout keeps the pipe open after the command itself has exited.
+        let finished = async {
+            let status = child.wait().await;
+            let out = out.await.unwrap_or_default();
+            let err = err.await.unwrap_or_default();
+            (status, out, err)
+        };
+        let waited = tokio::select! {
+            r = tokio::time::timeout(req.timeout, finished) => r,
+            _ = req.cancel.cancelled() => return stop("host executor: canceled".into()),
+        };
+        let Ok((status, out, err)) = waited else {
+            return stop(format!(
+                "host executor: timed out after {}s",
+                req.timeout.as_secs()
+            ));
+        };
+        match status {
+            Ok(status) => {
+                let mut system_logs = vec![format!(
                     "host executor: ran '{prog}' on the daemon host; image '{}' ignored",
                     req.image
-                )],
-            }),
-            Ok(Err(e)) => Ok(ExecutorResult {
+                )];
+                let (stdout, n1) = out.finish("stdout");
+                let (stderr, n2) = err.finish("stderr");
+                system_logs.extend(n1.into_iter().chain(n2));
+                Ok(ExecutorResult {
+                    stdout,
+                    stderr,
+                    exit_code: status.code().unwrap_or(-1) as i64,
+                    system_logs,
+                })
+            }
+            Err(e) => Ok(ExecutorResult {
                 stderr: e.to_string(),
                 exit_code: -1,
-                ..Default::default()
-            }),
-            Err(_) => Ok(ExecutorResult {
-                exit_code: -1,
-                system_logs: vec![format!(
-                    "host executor: timed out after {}s",
-                    req.timeout.as_secs()
-                )],
                 ..Default::default()
             }),
         }
@@ -179,6 +267,19 @@ impl TesExecutor for HostExecutor {
     fn kind(&self) -> &'static str {
         "host"
     }
+}
+
+/// SIGKILL a whole process group. Uses the `kill` utility rather than a libc binding; the
+/// host executor is a loopback development aid, not a hot path.
+fn kill_process_group(pgid: u32) {
+    #[cfg(unix)]
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    #[cfg(not(unix))]
+    let _ = pgid;
 }
 
 /// Runs executors inside their declared image via bollard.
@@ -318,6 +419,10 @@ impl TesExecutor for ContainerExecutor {
             open_stdin: Some(req.stdin.is_some()),
             stdin_once: Some(req.stdin.is_some()),
             attach_stdin: Some(req.stdin.is_some()),
+            labels: Some(HashMap::from([(
+                TASK_LABEL.to_string(),
+                req.task_id.to_string(),
+            )])),
             ..Default::default()
         };
         let name = format!("proteus-tes-{}", uuid::Uuid::new_v4());
@@ -351,6 +456,36 @@ impl TesExecutor for ContainerExecutor {
     fn kind(&self) -> &'static str {
         "container"
     }
+
+    async fn stop_task(&self, task_id: &str) -> Result<(), EngineError> {
+        use bollard::query_parameters::ListContainersOptions;
+        let filters =
+            HashMap::from([("label".to_string(), vec![format!("{TASK_LABEL}={task_id}")])]);
+        let found = self
+            .docker
+            .list_containers(Some(ListContainersOptions {
+                all: true,
+                filters: Some(filters),
+                ..Default::default()
+            }))
+            .await
+            .map_err(|e| EngineError::Container(format!("list containers: {e}")))?;
+        for c in found {
+            if let Some(id) = c.id {
+                let _ = self
+                    .docker
+                    .remove_container(
+                        &id,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl ContainerExecutor {
@@ -359,7 +494,7 @@ impl ContainerExecutor {
         name: &str,
         req: &ExecutorRequest<'_>,
     ) -> Result<ExecutorResult, EngineError> {
-        if let Some(text) = req.stdin {
+        if let Some(bytes) = req.stdin {
             // Attach before start so the stdin write is not lost.
             let attach = self
                 .docker
@@ -374,10 +509,10 @@ impl ContainerExecutor {
                 .await
                 .map_err(|e| EngineError::Container(format!("attach: {e}")))?;
             let mut input = attach.input;
-            let text = text.to_string();
+            let bytes = bytes.to_vec();
             tokio::spawn(async move {
                 use tokio::io::AsyncWriteExt;
-                let _ = input.write_all(text.as_bytes()).await;
+                let _ = input.write_all(&bytes).await;
                 let _ = input.shutdown().await;
             });
         }
@@ -432,7 +567,7 @@ impl ContainerExecutor {
             }
         };
 
-        let (mut stdout, mut stderr) = (String::new(), String::new());
+        let (mut stdout, mut stderr) = (Capped::default(), Capped::default());
         let mut logs = self.docker.logs(
             name,
             Some(LogsOptions {
@@ -443,12 +578,8 @@ impl ContainerExecutor {
         );
         while let Some(chunk) = logs.next().await {
             match chunk {
-                Ok(LogOutput::StdOut { message }) => {
-                    stdout.push_str(&String::from_utf8_lossy(&message))
-                }
-                Ok(LogOutput::StdErr { message }) => {
-                    stderr.push_str(&String::from_utf8_lossy(&message))
-                }
+                Ok(LogOutput::StdOut { message }) => stdout.push(&message),
+                Ok(LogOutput::StdErr { message }) => stderr.push(&message),
                 Ok(_) => {}
                 Err(e) => {
                     system_logs.push(format!("log stream error: {e}"));
@@ -456,6 +587,9 @@ impl ContainerExecutor {
                 }
             }
         }
+        let (stdout, n1) = stdout.finish("stdout");
+        let (stderr, n2) = stderr.finish("stderr");
+        system_logs.extend(n1.into_iter().chain(n2));
         Ok(ExecutorResult {
             stdout,
             stderr,
@@ -487,6 +621,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_executor_timeout_covers_background_children() {
+        // Reported: `sleep 60 & echo hi` held stdout open past the command's exit, and the
+        // timeout, which covered only the exit, never fired.
+        let dir = tempfile::tempdir().unwrap();
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "sleep 60 & echo hi".to_string(),
+        ];
+        let env = HashMap::new();
+        let roots = BTreeSet::new();
+        let started = std::time::Instant::now();
+        let r = HostExecutor
+            .run(ExecutorRequest {
+                image: "ignored",
+                command: &cmd,
+                workdir: None,
+                env: &env,
+                stdin: None,
+                task_id: "t",
+                work_dir: dir.path(),
+                mount_roots: &roots,
+                cpu_cores: None,
+                ram_gb: None,
+                network: false,
+                timeout: Duration::from_secs(2),
+                cancel: CancellationToken::new(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "timeout did not fire"
+        );
+        assert_eq!(r.exit_code, -1);
+        assert!(
+            r.system_logs[0].contains("timed out"),
+            "{:?}",
+            r.system_logs
+        );
+    }
+
+    #[tokio::test]
     async fn host_executor_runs_and_captures_output() {
         let dir = tempfile::tempdir().unwrap();
         let cmd = vec![
@@ -503,6 +680,7 @@ mod tests {
                 workdir: None,
                 env: &env,
                 stdin: None,
+                task_id: "t",
                 work_dir: dir.path(),
                 mount_roots: &roots,
                 cpu_cores: None,
@@ -538,6 +716,7 @@ mod tests {
                 workdir: None,
                 env: &env,
                 stdin: None,
+                task_id: "t",
                 work_dir: dir.path(),
                 mount_roots: &roots,
                 cpu_cores: None,
@@ -578,6 +757,7 @@ mod tests {
                 workdir: Some("/data"),
                 env: &env,
                 stdin: None,
+                task_id: "t",
                 work_dir: dir.path(),
                 mount_roots: &roots,
                 cpu_cores: Some(1),
@@ -623,7 +803,8 @@ mod tests {
                 command: &cmd,
                 workdir: Some("/data"),
                 env: &env,
-                stdin,
+                stdin: stdin.map(str::as_bytes),
+                task_id: "t",
                 work_dir: dir.path(),
                 mount_roots: &roots,
                 cpu_cores: None,
@@ -645,7 +826,8 @@ mod tests {
                 command: &cmd,
                 workdir: Some("/data"),
                 env: &env,
-                stdin,
+                stdin: stdin.map(str::as_bytes),
+                task_id: "t",
                 work_dir: dir.path(),
                 mount_roots: &roots,
                 cpu_cores: None,

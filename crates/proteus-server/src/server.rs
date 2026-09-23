@@ -3,7 +3,9 @@ use crate::api::{
     health_check, stream_job_events, submit_sequence, view_structure, ApiDoc,
 };
 use crate::telemetry::Telemetry;
-use crate::tes_api::{cancel_task, create_task, get_service_info, get_task, list_tasks};
+use crate::tes_api::{
+    cancel_task, cancel_task_colon, create_task, get_service_info, get_task, list_tasks,
+};
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -13,7 +15,6 @@ use proteus_engine::{EngineEvent, PipelineScheduler};
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -29,6 +30,8 @@ pub struct AppState {
 pub struct ServerOptions {
     /// When set, every `/v1`, `/ga4gh` and `/api` request must carry `Authorization: Bearer <token>`.
     pub auth_token: Option<String>,
+    /// Jobs submitted with `proteus submit --wait=false` run at most this many at a time.
+    pub queue_workers: usize,
 }
 
 impl AppState {
@@ -99,7 +102,12 @@ async fn require_bearer(
         })
         .map(str::trim)
         .unwrap_or("");
-    let ok = presented.len() == token.len() && presented.as_bytes().ct_eq(token.as_bytes()).into();
+    // Compare fixed-length digests so neither the token's length nor a matching prefix shows
+    // up in the response time.
+    let ok: bool = blake3::hash(presented.as_bytes())
+        .as_bytes()
+        .ct_eq(blake3::hash(token.as_bytes()).as_bytes())
+        .into();
     if ok {
         next.run(req).await
     } else {
@@ -117,22 +125,24 @@ pub fn build_router(state: AppState) -> Router {
 }
 
 pub fn build_router_with_options(state: AppState, options: ServerOptions) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    // No CORS layer, deliberately. `Access-Control-Allow-Origin: *` let any web page a user
+    // visited drive a loopback daemon (submit tasks, run commands under the host executor).
+    // TES clients are not browsers, and the Swagger UI and `/view` pages are same-origin.
 
     // Everything except /health, /metrics and the Swagger UI sits behind the optional bearer token.
     let protected = Router::new()
         // GA4GH TES v1.1 Standard Endpoints
         .route("/v1/tasks", post(create_task).get(list_tasks))
-        .route("/v1/tasks/{id}", get(get_task).post(cancel_task))
+        .route("/v1/tasks/{id}", get(get_task).post(cancel_task_colon))
         .route("/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/v1/service-info", get(get_service_info))
         .route("/v1/tasks/service-info", get(get_service_info))
         // GA4GH TES v1.1 Aliases
         .route("/ga4gh/tes/v1/tasks", post(create_task).get(list_tasks))
-        .route("/ga4gh/tes/v1/tasks/{id}", get(get_task).post(cancel_task))
+        .route(
+            "/ga4gh/tes/v1/tasks/{id}",
+            get(get_task).post(cancel_task_colon),
+        )
         .route("/ga4gh/tes/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/ga4gh/tes/v1/service-info", get(get_service_info))
         // Native Proteus API Endpoints
@@ -164,9 +174,45 @@ pub fn build_router_with_options(state: AppState, options: ServerOptions) -> Rou
         .route("/metrics", get(prometheus_metrics))
         .merge(protected)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Run native jobs handed to the daemon without a worker (`proteus submit --wait=false`,
+/// status Pending). Jobs a `screen` or `submit --wait` inserted (status Queued) belong to that
+/// process and are never taken, even if it died. At most `workers` jobs run at once; each start
+/// claims the job atomically, so nothing runs twice.
+fn spawn_queue_poller(scheduler: PipelineScheduler, workers: usize) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(workers));
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        loop {
+            tick.tick().await;
+            let free = slots.available_permits();
+            if free == 0 {
+                continue;
+            }
+            let ids = match scheduler.repo().pending_job_ids(free as i64).await {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::warn!("queue poll failed: {e}");
+                    continue;
+                }
+            };
+            for id in ids {
+                let Ok(permit) = slots.clone().try_acquire_owned() else {
+                    break;
+                };
+                let s = scheduler.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = s.process_job(id).await {
+                        tracing::warn!("pending job {id} failed: {e}");
+                    }
+                    drop(permit);
+                });
+            }
+        }
+    });
 }
 
 pub async fn run_server(
@@ -195,10 +241,21 @@ pub async fn run_server_with_options(
         }
     }
     tracing::info!("TES executor backend: {executor_kind}");
+    // Bind before touching any task: a second daemon that cannot get the port must not have
+    // already rewritten the first daemon's tasks. (The caller also holds the data directory's
+    // lock, so a second daemon on another port never gets this far either.)
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    match scheduler.recover_interrupted_tes_tasks().await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            "{n} TES task(s) left unfinished by the previous run are now SYSTEM_ERROR"
+        ),
+        Err(e) => tracing::error!("could not close out interrupted TES tasks: {e}"),
+    }
+    spawn_queue_poller(scheduler.clone(), options.queue_workers.max(1));
     let state = AppState::new(scheduler);
 
     let app = build_router_with_options(state, options);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Proteus server running on http://{}", addr);
     tracing::info!(
         "Swagger UI documentation available at http://{}/swagger-ui",
@@ -495,5 +552,180 @@ mod sse_tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---- Regressions from the 2026-09-23 bug hunt -------------------------------------
+
+    async fn test_app(dir: &std::path::Path) -> Router {
+        let repo = ProteusRepository::new(create_in_memory_pool().await.unwrap());
+        let scheduler =
+            PipelineScheduler::new(repo, Arc::new(SimulatedRunner::new()), dir.to_path_buf());
+        build_router(AppState::new(scheduler))
+    }
+
+    async fn call(app: &Router, req: Request<Body>) -> (StatusCode, axum::http::HeaderMap, String) {
+        let r = app.clone().oneshot(req).await.unwrap();
+        let (status, headers) = (r.status(), r.headers().clone());
+        let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        (status, headers, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    async fn submit(app: &Router, body: serde_json::Value) -> String {
+        let (status, _, text) = call(
+            app,
+            Request::post("/v1/tasks")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn sleeper() -> serde_json::Value {
+        serde_json::json!({
+            "executors": [{ "image": "alpine", "command": ["sleep", "30"] }],
+            "inputs": [{ "path": "/data/in.txt", "content": "SECRET-INPUT" }],
+        })
+    }
+
+    #[tokio::test]
+    async fn cross_origin_requests_get_no_cors_grant() {
+        // Reported: `Access-Control-Allow-Origin: *` let any web page drive a loopback daemon.
+        let tmp = tempdir().unwrap();
+        let app = test_app(tmp.path()).await;
+        let (_, headers, _) = call(
+            &app,
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/v1/tasks")
+                .header("origin", "https://evil.example")
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(headers.get("access-control-allow-origin").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_plain_post_to_a_task_does_not_cancel_it() {
+        // Reported: `POST /v1/tasks/{id}` without `:cancel` cancelled the task.
+        let tmp = tempdir().unwrap();
+        let app = test_app(tmp.path()).await;
+        let id = submit(&app, sleeper()).await;
+        let (status, _, _) = call(
+            &app,
+            Request::post(format!("/v1/tasks/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        let (_, _, text) = call(
+            &app,
+            Request::get(format!("/v1/tasks/{id}?view=MINIMAL"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(!text.contains("CANCELED"), "{text}");
+        let (status, _, _) = call(
+            &app,
+            Request::post(format!("/v1/tasks/{id}:cancel"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn views_project_what_tes_says_they_project() {
+        // Reported: MINIMAL carried `resources` and `executors`; BASIC carried input content;
+        // `view=minimal` was accepted on the list endpoint but a plain-text 400 on a task.
+        let tmp = tempdir().unwrap();
+        let app = test_app(tmp.path()).await;
+        let id = submit(&app, sleeper()).await;
+        let (status, _, text) = call(
+            &app,
+            Request::get(format!("/v1/tasks/{id}?view=minimal"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["id", "state"], "{text}");
+
+        let (_, _, text) = call(
+            &app,
+            Request::get(format!("/v1/tasks/{id}?view=BASIC"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(!text.contains("SECRET-INPUT"), "{text}");
+        let (_, _, text) = call(
+            &app,
+            Request::get(format!("/v1/tasks/{id}?view=FULL"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert!(text.contains("SECRET-INPUT"), "{text}");
+
+        let (status, _, text) = call(
+            &app,
+            Request::get(format!("/v1/tasks/{id}?view=bogus"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&text).is_ok(),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_filters_reject_what_they_cannot_mean() {
+        // Reported: `state=BOGUS` gave an empty 200, and a page_token for u64::MAX gave the
+        // first page (and would overflow in a debug build).
+        use base64::Engine;
+        let tmp = tempdir().unwrap();
+        let app = test_app(tmp.path()).await;
+        let (status, _, _) = call(
+            &app,
+            Request::get("/v1/tasks?state=BOGUS")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _, _) = call(
+            &app,
+            Request::get("/v1/tasks?state=RUNNING")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(u64::MAX.to_string());
+        let (status, _, _) = call(
+            &app,
+            Request::get(format!("/v1/tasks?page_token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 }

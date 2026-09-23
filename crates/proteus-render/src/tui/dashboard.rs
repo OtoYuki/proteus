@@ -13,22 +13,77 @@ pub struct DashboardData {
     pub ramachandran_points: Vec<(Option<f64>, Option<f64>, RamachandranRegion)>,
 }
 
-/// Computes visible character width of a string, ignoring ANSI escape sequences.
-pub fn visible_width(s: &str) -> usize {
-    let mut in_escape = false;
-    let mut count = 0;
-    for c in s.chars() {
-        if c == '\x1b' {
-            in_escape = true;
-        } else if in_escape {
-            if c == 'm' || c == 'H' || c == 'J' || c == 'K' {
-                in_escape = false;
-            }
+/// Split `s` into ANSI escape sequences (`true`) and runs of visible text (`false`).
+///
+/// A CSI sequence (`ESC [ … final`) ends at its final byte (`@` to `~`); any other escape is
+/// taken as `ESC` plus one character.
+fn ansi_segments(s: &str) -> impl Iterator<Item = (bool, &str)> {
+    let mut rest = s;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        if let Some(after) = rest.strip_prefix('\x1b') {
+            let len = if let Some(params) = after.strip_prefix('[') {
+                match params.find(|c: char| ('@'..='~').contains(&c)) {
+                    Some(i) => 2 + i + 1,
+                    None => rest.len(),
+                }
+            } else {
+                1 + after.chars().next().map_or(0, char::len_utf8)
+            };
+            let (esc, tail) = rest.split_at(len);
+            rest = tail;
+            Some((true, esc))
         } else {
-            count += 1;
+            let len = rest.find('\x1b').unwrap_or(rest.len());
+            let (text, tail) = rest.split_at(len);
+            rest = tail;
+            Some((false, text))
+        }
+    })
+}
+
+/// Terminal columns `s` occupies: display width (a CJK character is two columns, a combining
+/// mark none), ignoring ANSI escape sequences.
+pub fn visible_width(s: &str) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    ansi_segments(s)
+        .filter(|(esc, _)| !esc)
+        .map(|(_, text)| text.width())
+        .sum()
+}
+
+/// Cut `s` to at most `max_width` terminal columns, keeping its escape sequences intact. A
+/// line wider than the terminal wraps, and on the bottom row that scrolls the whole screen, so
+/// every positioned line has to go through this.
+pub fn truncate_to_width(s: &str, max_width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if visible_width(s) <= max_width {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut used = 0usize;
+    let mut styled = false;
+    'segments: for (esc, part) in ansi_segments(s) {
+        if esc {
+            out.push_str(part);
+            styled = true;
+            continue;
+        }
+        for c in part.chars() {
+            let w = c.width().unwrap_or(0);
+            if used + w > max_width {
+                break 'segments;
+            }
+            used += w;
+            out.push(c);
         }
     }
-    count
+    if styled {
+        out.push_str("\x1b[0m");
+    }
+    out
 }
 
 /// Pads a formatted string with spaces until its visible width matches target_width.
@@ -44,6 +99,22 @@ pub fn pad_to_width(s: &str, target_width: usize) -> String {
         }
         padded
     }
+}
+
+/// Exactly `width` terminal columns: truncated if longer, space-padded if shorter.
+pub fn fit_to_width(s: &str, width: usize) -> String {
+    pad_to_width(&truncate_to_width(s, width), width)
+}
+
+/// A section rule `{left}─{title}───…{right}` exactly `width` columns wide (the title is cut
+/// if it does not fit).
+fn section_rule(style: &str, left: char, title: &str, right: char, width: usize) -> String {
+    let title = truncate_to_width(title, width.saturating_sub(3));
+    let bar_len = width.saturating_sub(visible_width(&title) + 3);
+    format!(
+        "{style}{left}─{title}\x1b[0m\x1b[38;5;240m{:─<bar_len$}{right}\x1b[0m",
+        ""
+    )
 }
 
 #[derive(Default)]
@@ -72,8 +143,8 @@ impl DashboardRenderer {
         for (i, line) in lines.iter().enumerate().take(height) {
             let row = screen_offset_row + i as u16 + 1;
             let col = screen_offset_col + 1;
-            let padded = pad_to_width(line, width);
-            let _ = write!(out, "\x1b[{row};{col}H{padded}\x1b[0m");
+            let fitted = fit_to_width(line, width);
+            let _ = write!(out, "\x1b[{row};{col}H{fitted}\x1b[0m");
         }
     }
 
@@ -83,13 +154,7 @@ impl DashboardRenderer {
 
         // Header Title
         let header_title = format!(" {} ({} res) ", data.title, data.num_residues);
-        let header_bar_len = width.saturating_sub(header_title.len() + 2);
-        lines.push(format!(
-            "\x1b[1;36m┌─{}\x1b[0m\x1b[38;5;240m{:─<w$}┐\x1b[0m",
-            header_title,
-            "",
-            w = header_bar_len
-        ));
+        lines.push(section_rule("\x1b[1;36m", '┌', &header_title, '┐', width));
 
         // Adaptive vertical layout
         let (plot_h, has_telemetry) = if height >= 30 {
@@ -117,9 +182,14 @@ impl DashboardRenderer {
             self.render_telemetry_section(data, width, remaining, &mut lines);
         }
 
-        // Pad with empty rows to fill height
+        // Pad with empty rows to fill height, and never let a line run past the panel: a
+        // plot row at the minimum plot width is wider than a narrow panel.
+        lines.truncate(height);
         while lines.len() < height {
             lines.push(String::new());
+        }
+        for line in &mut lines {
+            *line = truncate_to_width(line, width);
         }
 
         lines
@@ -135,13 +205,12 @@ impl DashboardRenderer {
         let plot_w = width.saturating_sub(8).clamp(16, 36);
 
         // Section header
-        let title = " Ramachandran (φ, ψ) ";
-        let bar_len = width.saturating_sub(title.len() + 2);
-        lines.push(format!(
-            "\x1b[1;35m├─{}\x1b[0m\x1b[38;5;240m{:─<w$}┤\x1b[0m",
-            title,
-            "",
-            w = bar_len
+        lines.push(section_rule(
+            "\x1b[1;35m",
+            '├',
+            " Ramachandran (φ, ψ) ",
+            '┤',
+            width,
         ));
 
         // Precompute residue points on the grid
@@ -288,13 +357,7 @@ impl DashboardRenderer {
         } else {
             " B-factor Profile (experimental; no pLDDT) "
         };
-        let bar_len = width.saturating_sub(title.chars().count() + 2);
-        lines.push(format!(
-            "\x1b[1;34m├─{}\x1b[0m\x1b[38;5;240m{:─<w$}┤\x1b[0m",
-            title,
-            "",
-            w = bar_len
-        ));
+        lines.push(section_rule("\x1b[1;34m", '├', title, '┤', width));
 
         if let Some(m) = data.metrics.as_ref() {
             match m.plddt() {
@@ -372,13 +435,12 @@ impl DashboardRenderer {
         max_rows: usize,
         lines: &mut Vec<String>,
     ) {
-        let title = " Biophysical Telemetry ";
-        let bar_len = width.saturating_sub(title.len() + 2);
-        lines.push(format!(
-            "\x1b[1;33m├─{}\x1b[0m\x1b[38;5;240m{:─<w$}┤\x1b[0m",
-            title,
-            "",
-            w = bar_len
+        lines.push(section_rule(
+            "\x1b[1;33m",
+            '├',
+            " Biophysical Telemetry ",
+            '┤',
+            width,
         ));
 
         let mut row_count = 1;
@@ -485,6 +547,108 @@ mod tests {
         let padded = pad_to_width(styled, 20);
         assert_eq!(visible_width(&padded), 20);
         assert!(padded.ends_with("       "));
+    }
+
+    /// Display width, not bytes or chars: `Å`/`φ` are two bytes and one column, a CJK
+    /// character is one char and two columns.
+    #[test]
+    fn widths_are_display_columns_and_truncation_keeps_escapes() {
+        assert_eq!(visible_width("φ, ψ Å"), 6);
+        assert_eq!(visible_width("蛋白"), 4);
+        assert_eq!(visible_width("\x1b[38;2;1;2;3mab\x1b[0m\x1b[5Gc"), 3);
+
+        let styled = "\x1b[1;36mΩmega蛋白質\x1b[0m tail";
+        for w in 0..16 {
+            let cut = truncate_to_width(styled, w);
+            assert!(visible_width(&cut) <= w, "{w}: {cut:?}");
+            assert!(cut.starts_with("\x1b[1;36m"), "escape dropped at {w}");
+            assert_eq!(visible_width(&fit_to_width(styled, w)), w);
+        }
+        // A wide character that does not fit is dropped whole, not split.
+        assert_eq!(visible_width(&truncate_to_width("a蛋", 2)), 1);
+        assert_eq!(truncate_to_width("short", 10), "short");
+    }
+
+    fn sample_data(title: &str) -> DashboardData {
+        DashboardData {
+            title: title.to_string(),
+            num_residues: 46,
+            num_disulfides: 3,
+            metrics: Some(BiophysicalMetrics {
+                id: uuid::Uuid::new_v4(),
+                prediction_id: uuid::Uuid::new_v4(),
+                radius_of_gyration: 9.762,
+                rmsd_to_reference: None,
+                contact_density: 0.148,
+                plddt_distribution: PlddtDistribution {
+                    mean: 91.2,
+                    median: 93.4,
+                    high_confidence_fraction: 0.957,
+                    very_high_confidence_fraction: 0.782,
+                },
+                confidence_source: Default::default(),
+                secondary_structure_summary: None,
+                ramachandran_stats: Some(RamachandranStats {
+                    favored_fraction: 0.955,
+                    allowed_fraction: 0.045,
+                    outlier_fraction: 0.0,
+                    outlier_count: 0,
+                    total_evaluated: 44,
+                }),
+                steric_overlap: None,
+                sasa_metrics: None,
+                interaction_network: None,
+                candidate_fitness_score: Some(87.4),
+            }),
+            plddts: vec![92.0; 46],
+            ramachandran_points: vec![
+                (Some(-60.0), Some(-45.0), RamachandranRegion::Favored),
+                (Some(-120.0), Some(135.0), RamachandranRegion::Favored),
+            ],
+        }
+    }
+
+    /// Every dashboard line must fit its panel: a line one column too wide wraps into the next
+    /// row (the header's closing `┐` used to land on the Ramachandran rule), and section rules
+    /// must reach exactly to the panel edge. Measured in display columns — the titles carry
+    /// `φ`, `ψ` and whatever the file name is.
+    #[test]
+    fn every_dashboard_line_fits_the_panel_width() {
+        let renderer = DashboardRenderer::new();
+        for title in [
+            "1crn.pdb",
+            "a_very_long_structure_file_name_蛋白質_model_0001.cif",
+        ] {
+            let data = sample_data(title);
+            for width in 20..=90 {
+                for height in [10, 17, 18, 24, 30, 45] {
+                    let lines = renderer.generate_lines(&data, width, height);
+                    assert_eq!(lines.len(), height);
+                    for (i, line) in lines.iter().enumerate() {
+                        assert!(
+                            visible_width(line) <= width,
+                            "{title} {width}x{height} line {i} is {} columns: {line:?}",
+                            visible_width(line)
+                        );
+                        let plain: String = ansi_segments(line)
+                            .filter(|(esc, _)| !esc)
+                            .map(|(_, t)| t)
+                            .collect();
+                        if plain.starts_with("┌─") || plain.starts_with("├─") {
+                            assert_eq!(
+                                visible_width(line),
+                                width,
+                                "{title} {width}x{height}: rule {i} does not reach the edge"
+                            );
+                            assert!(
+                                plain.ends_with('┐') || plain.ends_with('┤'),
+                                "{title} {width}x{height}: rule {i} lost its corner: {plain}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

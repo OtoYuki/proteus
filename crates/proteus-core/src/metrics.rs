@@ -184,6 +184,19 @@ pub fn analyze_pdb_detailed_with_header(
     reference_pdb: Option<&pdbtbx::PDB>,
     extra_header: Option<&str>,
 ) -> Result<DetailedBiophysicalAnalysis, CoreError> {
+    analyze_pdb_detailed_with_source(pdb, reference_pdb, extra_header, None)
+}
+
+/// As [`analyze_pdb_detailed_with_header`], with the pLDDT-vs-B-factor decision taken from
+/// `source` when given instead of detected. Everything downstream — the 0–1 → 0–100 rescale
+/// of ESMFold-style pLDDT, the statistics, the fitness weights — follows the decision, so a
+/// declared source is treated exactly like a detected one.
+pub fn analyze_pdb_detailed_with_source(
+    pdb: &pdbtbx::PDB,
+    reference_pdb: Option<&pdbtbx::PDB>,
+    extra_header: Option<&str>,
+    source: Option<crate::confidence::ConfidenceSource>,
+) -> Result<DetailedBiophysicalAnalysis, CoreError> {
     // All metrics are defined on protein heavy atoms: drop solvent, ions, ligands, hydrogens.
     let protein = crate::io::protein_heavy_atoms(pdb);
     let pdb = &protein;
@@ -234,7 +247,8 @@ pub fn analyze_pdb_detailed_with_header(
         crate::confidence::pdb_header_text(pdb),
         extra_header.unwrap_or("")
     );
-    let confidence_source = crate::confidence::detect_confidence_source(&header, &plddts);
+    let confidence_source =
+        source.unwrap_or_else(|| crate::confidence::detect_confidence_source(&header, &plddts));
 
     // Normalize pLDDT if model wrote it in [0.0, 1.0] range (e.g. ESMFold)
     let max_plddt = plddts.iter().copied().fold(f64::MIN, f64::max);
@@ -249,7 +263,12 @@ pub fn analyze_pdb_detailed_with_header(
     let mean_plddt = plddts.iter().sum::<f64>() / n_plddt;
     let mut sorted_plddt = plddts.clone();
     sorted_plddt.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median_plddt = sorted_plddt[sorted_plddt.len() / 2];
+    let mid = sorted_plddt.len() / 2;
+    let median_plddt = if sorted_plddt.len().is_multiple_of(2) {
+        (sorted_plddt[mid - 1] + sorted_plddt[mid]) / 2.0
+    } else {
+        sorted_plddt[mid]
+    };
 
     let high_conf = plddts.iter().filter(|&&v| v >= 70.0).count() as f64 / n_plddt;
     let very_high_conf = plddts.iter().filter(|&&v| v >= 90.0).count() as f64 / n_plddt;
@@ -308,7 +327,13 @@ pub fn analyze_pdb_detailed_with_header(
         },
         confidence_source,
         secondary_structure_summary: Some(ss_summary),
-        ramachandran_stats: Some(rama_stats),
+        // A C-alpha-only trace (no backbone N or C anywhere) has no φ/ψ at all: report no
+        // Ramachandran statistics rather than zero favoured residues, which the fitness score
+        // would read as all outliers.
+        ramachandran_stats: backbones
+            .iter()
+            .any(|r| r.n.is_some() || r.c.is_some())
+            .then_some(rama_stats),
         steric_overlap: Some(steric_overlap),
         sasa_metrics: Some(sasa_metrics),
         interaction_network: Some(interaction_network),
