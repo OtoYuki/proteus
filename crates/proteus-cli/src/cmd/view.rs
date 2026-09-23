@@ -2,6 +2,17 @@
 
 use super::prelude::*;
 
+/// Options the browser page has no use for; given with --web or --html they are an error
+/// rather than silently ignored (`--compare` used to produce a page of the target alone).
+const TERMINAL_ONLY: [&str; 6] = [
+    "compare",
+    "interactive",
+    "dashboard",
+    "backend",
+    "width",
+    "height",
+];
+
 /// Arguments of `proteus view`.
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -41,12 +52,13 @@ pub struct Args {
     height: Option<usize>,
 
     /// Open the structure in a browser: a self-contained WebGL2 page drawn by Proteus from the
-    /// same ribbon, DSSP and measurements as the terminal viewer; no network needed
-    #[arg(long)]
+    /// same ribbon, DSSP and measurements as the terminal viewer; no network needed. The page
+    /// shows one structure, so the terminal-only options and --compare are refused with it
+    #[arg(long, conflicts_with_all = TERMINAL_ONLY)]
     web: bool,
 
     /// Write that self-contained page to a file instead of opening it
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = TERMINAL_ONLY)]
     html: Option<PathBuf>,
 }
 
@@ -522,6 +534,32 @@ mod tests {
         assert_eq!(
             color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
             Some(CliColorScheme::Rainbow)
+        );
+    }
+
+    /// The page draws one structure: asking it for a superposition, or for terminal options,
+    /// is refused instead of producing a page that silently left them out.
+    #[test]
+    fn the_browser_page_refuses_options_it_cannot_honour() {
+        for extra in [
+            &["--compare", "ref.pdb"][..],
+            &["--interactive"],
+            &["--dashboard"],
+            &["--backend", "sixel"],
+            &["--width", "80"],
+        ] {
+            for out in [&["--web"][..], &["--html", "x.html"]] {
+                let args: Vec<&str> = ["proteus", "view", "x.pdb"]
+                    .iter()
+                    .chain(out)
+                    .chain(extra)
+                    .copied()
+                    .collect();
+                assert!(Cli::try_parse_from(&args).is_err(), "{args:?} was accepted");
+            }
+        }
+        assert!(
+            Cli::try_parse_from(["proteus", "view", "x.pdb", "--web", "--color", "ss"]).is_ok()
         );
     }
 
