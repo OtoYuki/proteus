@@ -1467,8 +1467,9 @@ mod tests {
         // Reported: 200 MB of stdout took the daemon to 859 MB RSS and a 200 MB DB row.
         let tmp = tempdir().unwrap();
         let (scheduler, repo) = host_scheduler(&tmp.path().join("artifacts")).await;
-        let mb = crate::tes_exec::MAX_CAPTURED_BYTES / (1024 * 1024) + 2;
-        let task = sh_task("", &format!("head -c {}M /dev/zero | tr '\\0' x", mb));
+        // A plain byte count: BSD head (macOS) does not take `-c 10M`.
+        let bytes = crate::tes_exec::MAX_CAPTURED_BYTES + 2 * 1024 * 1024;
+        let task = sh_task("", &format!("head -c {bytes} /dev/zero | tr '\\0' x"));
         let id = scheduler.submit_tes_task(task).await.unwrap();
         let done = finished(&repo, &id).await;
         let out = done.logs[0].logs[0].stdout.as_deref().unwrap();
