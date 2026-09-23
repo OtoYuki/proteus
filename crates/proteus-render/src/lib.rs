@@ -747,6 +747,66 @@ mod tests {
         );
     }
 
+    /// The ribbon face must twist smoothly through a residue boundary, not snap there.
+    ///
+    /// With one fixed carbonyl guide per residue, the wide axis held still across a residue
+    /// and then turned by the whole guide-to-guide angle between the last ring of one residue
+    /// and the first of the next. Measured as the angle between the wide axes (vertex 0 minus
+    /// vertex 4) of consecutive 8-vertex rings of the same secondary structure, each boundary
+    /// step is compared with the step right after it, inside the next residue: both straddle
+    /// the same C-alpha knot, where the spline tangent turns fastest, so the tangent's share
+    /// largely cancels and what is left is the snap. On 1CRN the difference was a median 9.7°,
+    /// p90 61.6° and max 76.8° with one guide per residue; guides anchored mid-peptide and
+    /// interpolated give 6.3°, 12.4° and 16.5°.
+    #[test]
+    fn ribbon_face_twists_smoothly_across_residue_boundaries() {
+        let data = parse_pdb_structure(CRAMBIN_PDB).unwrap();
+        let v = &data.ribbon_mesh.vertices;
+        // Wide-axis turn from ring k-1 to ring k, or None across a segment or SS change.
+        let step = |k: usize| -> Option<(f32, bool)> {
+            let (a0, a4, b0, b4) = (v[8 * (k - 1)], v[8 * (k - 1) + 4], v[8 * k], v[8 * k + 4]);
+            let (wa, wb) = (a0.position - a4.position, b0.position - b4.position);
+            let centre_step = ((a0.position + a4.position) - (b0.position + b4.position)) * 0.5;
+            if wa.norm() < 1e-3
+                || wb.norm() < 1e-3
+                || centre_step.norm() > 3.0
+                || a0.secondary_structure != b0.secondary_structure
+            {
+                return None;
+            }
+            let angle = wa
+                .normalize()
+                .dot(&wb.normalize())
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            Some((angle, a0.residue_index != b0.residue_index))
+        };
+        // Only full rings: the two cap-centre vertices sit after the last ring.
+        let rings = v.len() / 8;
+        let mut excess: Vec<f32> = Vec::new();
+        for k in 1..rings - 1 {
+            if let (Some((across, true)), Some((next, false))) = (step(k), step(k + 1)) {
+                excess.push((across - next).abs());
+            }
+        }
+        assert!(
+            excess.len() > 25,
+            "only {} boundaries measured",
+            excess.len()
+        );
+        excess.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = excess[excess.len() / 2];
+        let p90 = excess[excess.len() * 9 / 10];
+        let max = excess[excess.len() - 1];
+        assert!(
+            median < 8.0 && p90 < 20.0 && max < 30.0,
+            "at a residue boundary the ribbon face turns differently from one ring later by a \
+             median {median:.1}° (p90 {p90:.1}°, max {max:.1}°) — it snaps at each residue \
+             instead of twisting"
+        );
+    }
+
     /// Secondary structure must survive a file that does not declare it.
     ///
     /// **Predicted structures carry no `HELIX`/`SHEET` records** — an ESMFold response has
