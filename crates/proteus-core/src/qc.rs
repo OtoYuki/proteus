@@ -336,6 +336,30 @@ mod tests {
     }
 
     #[test]
+    fn a_c_alpha_only_trace_is_not_scored_as_all_outliers() {
+        // Reported: C-alpha-only models always scored 0 on the Ramachandran term (every
+        // residue unevaluated read as nothing favoured), so the documented baseline was dead.
+        let mut text = String::from("TITLE     ALPHAFOLD PREDICTION\n");
+        for i in 0..8 {
+            text.push_str(&format!(
+                "ATOM  {:>5}  CA  ALA A{:>4}    {:>8.3}{:>8.3}{:>8.3}  1.00 90.00           C\n",
+                i + 1,
+                i + 1,
+                2.3 * (i as f64 * 1.745).cos(),
+                2.3 * (i as f64 * 1.745).sin(),
+                1.5 * i as f64
+            ));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ca.pdb");
+        std::fs::write(&path, text).unwrap();
+        let m = crate::metrics::analyze_pdb_file(&path, None).unwrap();
+        assert!(m.ramachandran_stats.is_none());
+        let f = crate::ranking::evaluate_candidate_fitness(&m, 8);
+        assert_eq!(f.ramachandran_component, 85.0);
+    }
+
+    #[test]
     fn chains_are_counted_and_separated_in_the_sequence() {
         let mut text = String::new();
         let mut serial = 1;

@@ -327,7 +327,13 @@ pub fn analyze_pdb_detailed_with_source(
         },
         confidence_source,
         secondary_structure_summary: Some(ss_summary),
-        ramachandran_stats: Some(rama_stats),
+        // A C-alpha-only trace (no backbone N or C anywhere) has no φ/ψ at all: report no
+        // Ramachandran statistics rather than zero favoured residues, which the fitness score
+        // would read as all outliers.
+        ramachandran_stats: backbones
+            .iter()
+            .any(|r| r.n.is_some() || r.c.is_some())
+            .then_some(rama_stats),
         steric_overlap: Some(steric_overlap),
         sasa_metrics: Some(sasa_metrics),
         interaction_network: Some(interaction_network),
