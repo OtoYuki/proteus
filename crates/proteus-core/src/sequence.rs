@@ -28,7 +28,8 @@ pub fn validate_and_parse_fasta(content: &str) -> Result<Sequence, CoreError> {
             .any(|l| l.starts_with("ATOM") || l.starts_with("HETATM") || l.starts_with("HEADER"))
             || trimmed.contains("_atom_site.");
         return Err(CoreError::InvalidFasta(if looks_like_structure {
-            "this looks like a PDB or mmCIF file, not a FASTA. Sequence commands take a FASTA;              to analyse a structure use `proteus analyze --pdb <file>`"
+            "this looks like a PDB or mmCIF file, not a FASTA. Sequence commands take a FASTA; \
+             to analyse a structure use `proteus analyze <file>`"
                 .into()
         } else {
             "FASTA header must begin with '>'".into()
