@@ -16,4 +16,7 @@ pub enum RenderError {
 
     #[error("PDB parse error: {0}")]
     PdbParse(String),
+
+    #[error("Invalid viewport: {0}")]
+    InvalidViewport(String),
 }

@@ -5,8 +5,8 @@ use crate::rasterizer::camera::OrbitCamera;
 use crate::rasterizer::pipeline::Rasterizer;
 use crate::rasterizer::shader::ColorScheme;
 use crate::terminal::halfblock::HalfBlockRenderer;
-use crate::tui::dashboard::{DashboardData, DashboardRenderer};
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crate::tui::dashboard::{fit_to_width, DashboardData, DashboardRenderer};
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -14,14 +14,135 @@ use crossterm::terminal::{
 };
 use std::fmt::Write as _;
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Put the terminal back the way the shell expects it: cooked mode, main screen, cursor shown.
+fn restore_terminal() {
+    let _ = disable_raw_mode();
+    let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+}
 
 struct RawTerminalGuard;
 
 impl Drop for RawTerminalGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+        restore_terminal();
+    }
+}
+
+type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
+
+/// While alive, a panic first runs `restore` and then the previous hook. Without it a panic
+/// inside the viewer prints its message into the alternate screen, which is then discarded,
+/// and leaves the shell in raw mode with no cursor. Dropping it reinstates the previous hook.
+struct PanicHookGuard {
+    previous: Option<Arc<PanicHook>>,
+    active: Arc<AtomicBool>,
+}
+
+impl PanicHookGuard {
+    fn install(restore: fn()) -> Self {
+        let previous: Arc<PanicHook> = Arc::new(std::panic::take_hook());
+        let active = Arc::new(AtomicBool::new(true));
+        let (chained, armed) = (Arc::clone(&previous), Arc::clone(&active));
+        std::panic::set_hook(Box::new(move |info| {
+            if armed.load(Ordering::SeqCst) {
+                restore();
+            }
+            chained(info);
+        }));
+        Self {
+            previous: Some(previous),
+            active,
+        }
+    }
+}
+
+impl Drop for PanicHookGuard {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::SeqCst);
+        // `set_hook` itself panics on a panicking thread, which during unwinding would abort;
+        // the disarmed hook stays installed then and only forwards to the previous one.
+        if std::thread::panicking() {
+            return;
+        }
+        if let Some(previous) = self.previous.take() {
+            std::panic::set_hook(Box::new(move |info| previous(info)));
+        }
+    }
+}
+
+/// Terminal width below which the dashboard is not drawn beside the view.
+pub const DASHBOARD_MIN_COLS: u16 = 90;
+/// Fewest rows the dashboard can be drawn in (see [`DashboardRenderer::render_to_buffer`]).
+pub const DASHBOARD_MIN_ROWS: u16 = 10;
+
+/// Where each part of the interactive screen goes on a terminal of `cols` × `rows` cells.
+///
+/// Every region lies inside the terminal and none overlaps another, for any size including
+/// zero: the view takes what the HUD leaves, the HUD shrinks to one line and then none on a
+/// very short terminal, and the dashboard is hidden rather than squeezed when it does not fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewerLayout {
+    pub cols: u16,
+    pub rows: u16,
+    /// Cells given to the 3-D view, anchored top-left.
+    pub view_cols: u16,
+    pub view_rows: u16,
+    /// Dashboard panel as (first column, width), 0-based; the separator is the column before.
+    pub dashboard: Option<(u16, u16)>,
+    /// Status lines under the view: 2, or fewer on a short terminal.
+    pub hud_rows: u16,
+}
+
+impl ViewerLayout {
+    pub fn compute(cols: u16, rows: u16, dashboard: bool) -> Self {
+        let hud_rows = match rows {
+            0..=3 => 0,
+            4..=7 => 1,
+            _ => 2,
+        };
+        let view_rows = rows - hud_rows;
+        let (view_cols, dashboard) =
+            if dashboard && cols >= DASHBOARD_MIN_COLS && view_rows >= DASHBOARD_MIN_ROWS {
+                let left = (u32::from(cols) * 58 / 100) as u16;
+                (left, Some((left + 1, cols - left - 1)))
+            } else {
+                (cols, None)
+            };
+        Self {
+            cols,
+            rows,
+            view_cols,
+            view_rows,
+            dashboard,
+            hud_rows,
+        }
+    }
+
+    /// The HUD as positioned lines, each exactly the terminal width so that nothing wraps: a
+    /// line one column too wide on the bottom row scrolls the whole screen every frame.
+    /// `status` is the state line, `controls` the key help; with one HUD row only `status` is
+    /// shown.
+    pub fn hud_lines(&self, status: &str, controls: &str) -> Vec<String> {
+        let width = self.cols as usize;
+        let mut lines: Vec<(&str, &str)> = Vec::new();
+        if self.hud_rows >= 1 {
+            lines.push(("\x1b[36m", status));
+        }
+        if self.hud_rows >= 2 {
+            lines.push(("\x1b[90m", controls));
+        }
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, (style, text))| {
+                let row = self.view_rows as usize + i + 1;
+                format!("\x1b[{row};1H{style}{}\x1b[0m", fit_to_width(text, width))
+            })
+            .collect()
     }
 }
 
@@ -34,6 +155,10 @@ pub struct ViewerConfig {
     pub disulfide_mesh: Option<TriangleMesh>,
     pub dashboard_enabled: bool,
     pub dashboard_data: Option<DashboardData>,
+    /// Set from elsewhere (a SIGTERM/SIGHUP handler) to make the viewer restore the terminal
+    /// and return. Raw mode turns Ctrl-C into a key press, but a signal still terminates the
+    /// process outright, leaving the terminal raw and on the alternate screen.
+    pub stop: Option<Arc<AtomicBool>>,
 }
 
 impl Default for ViewerConfig {
@@ -47,6 +172,7 @@ impl Default for ViewerConfig {
             disulfide_mesh: None,
             dashboard_enabled: false,
             dashboard_data: None,
+            stop: None,
         }
     }
 }
@@ -58,34 +184,23 @@ pub fn run_interactive_viewer(
     mut camera: OrbitCamera,
     config: ViewerConfig,
 ) -> Result<(), RenderError> {
+    // Declared first so it is dropped last, after the terminal has been restored.
+    let _panic_guard = PanicHookGuard::install(restore_terminal);
     enable_raw_mode().map_err(|e| RenderError::Terminal(e.to_string()))?;
+    let _guard = RawTerminalGuard;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, Hide)
         .map_err(|e| RenderError::Terminal(e.to_string()))?;
-    let _guard = RawTerminalGuard;
 
-    let (mut term_cols, mut term_rows) =
+    let (term_cols, term_rows) =
         crossterm::terminal::size().map_err(|e| RenderError::Terminal(e.to_string()))?;
 
     let mut dashboard_mode = config.dashboard_enabled && config.dashboard_data.is_some();
     let dashboard_renderer = DashboardRenderer::new();
 
-    let mut left_cols = if dashboard_mode && term_cols >= 90 {
-        (term_cols * 58) / 100
-    } else {
-        term_cols
-    };
-    let mut right_cols = if dashboard_mode && term_cols >= 90 {
-        term_cols.saturating_sub(left_cols + 1)
-    } else {
-        0
-    };
-
-    // Reserve 2 rows at the bottom for HUD and controls
-    let hud_height = 2u16;
-    let render_rows = term_rows.saturating_sub(hud_height).max(10);
+    let mut layout = ViewerLayout::compute(term_cols, term_rows, dashboard_mode);
     // Halfblock resolution: 1 character row = 2 pixel rows
-    let mut fb = Framebuffer::new(left_cols as usize, (render_rows * 2) as usize);
+    let mut fb = Framebuffer::new(layout.view_cols as usize, layout.view_rows as usize * 2);
 
     let mut rasterizer = Rasterizer::new(config.initial_color_scheme);
     let mut compositor = HalfBlockRenderer::new();
@@ -100,8 +215,17 @@ pub fn run_interactive_viewer(
     let mut fps_timer = Instant::now();
 
     loop {
+        if config
+            .stop
+            .as_ref()
+            .is_some_and(|s| s.load(Ordering::Relaxed))
+        {
+            break;
+        }
+
         // Handle input events
         let timeout = Duration::from_millis(16);
+        let mut relayout: Option<(u16, u16)> = None;
         if event::poll(timeout).map_err(|e| RenderError::Terminal(e.to_string()))? {
             match event::read().map_err(|e| RenderError::Terminal(e.to_string()))? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -111,22 +235,7 @@ pub fn run_interactive_viewer(
                     KeyCode::Tab | KeyCode::Char('b') => {
                         if config.dashboard_data.is_some() {
                             dashboard_mode = !dashboard_mode;
-                            left_cols = if dashboard_mode && term_cols >= 90 {
-                                (term_cols * 58) / 100
-                            } else {
-                                term_cols
-                            };
-                            right_cols = if dashboard_mode && term_cols >= 90 {
-                                term_cols.saturating_sub(left_cols + 1)
-                            } else {
-                                0
-                            };
-                            let new_render_rows = term_rows.saturating_sub(hud_height).max(10);
-                            fb.resize(left_cols as usize, (new_render_rows * 2) as usize);
-                            let _ = execute!(
-                                stdout,
-                                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-                            );
+                            relayout = Some((layout.cols, layout.rows));
                         }
                     }
                     KeyCode::Char('c') => {
@@ -157,28 +266,21 @@ pub fn run_interactive_viewer(
                     KeyCode::Char('-') | KeyCode::Char('_') => camera.adjust_zoom(0.85),
                     _ => {}
                 },
-                Event::Resize(new_cols, new_rows) => {
-                    term_cols = new_cols;
-                    term_rows = new_rows;
-                    left_cols = if dashboard_mode && term_cols >= 90 {
-                        (term_cols * 58) / 100
-                    } else {
-                        term_cols
-                    };
-                    right_cols = if dashboard_mode && term_cols >= 90 {
-                        term_cols.saturating_sub(left_cols + 1)
-                    } else {
-                        0
-                    };
-                    let new_render_rows = term_rows.saturating_sub(hud_height).max(10);
-                    fb.resize(left_cols as usize, (new_render_rows * 2) as usize);
-                    let _ = execute!(
-                        stdout,
-                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-                    );
-                }
+                Event::Resize(new_cols, new_rows) => relayout = Some((new_cols, new_rows)),
                 _ => {}
             }
+        }
+
+        // A resize or a dashboard toggle moves every region, not only the view: recompute the
+        // whole layout, and repaint from scratch because the screen is cleared.
+        if let Some((cols, rows)) = relayout {
+            layout = ViewerLayout::compute(cols, rows, dashboard_mode);
+            fb.resize(layout.view_cols as usize, layout.view_rows as usize * 2);
+            compositor.invalidate();
+            let _ = execute!(
+                stdout,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+            );
         }
 
         // Auto spin around Y axis
@@ -196,48 +298,54 @@ pub fn run_interactive_viewer(
             fps_timer = Instant::now();
         }
 
-        // Render frame
-        fb.clear(ColorRGB::BLACK);
-        rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme);
-
-        // Render superimposed secondary mesh if present
-        if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
-            rasterizer.rasterize_mesh(sec_mesh, &camera, &mut fb, ColorScheme::Solid(sec_color));
-        }
-
-        // Render disulfide bridges if present and enabled
-        if show_disulfides {
-            if let Some(ref ds_mesh) = config.disulfide_mesh {
-                let gold = ColorRGB::new(251, 191, 36);
-                rasterizer.rasterize_mesh(ds_mesh, &camera, &mut fb, ColorScheme::Solid(gold));
-            }
-        }
-
-        // Post-processing: Screen-space ambient occlusion + cartoon silhouette outlines
-        rasterizer.apply_post_processing(&mut fb);
-
-        // Compose to terminal
         out_buf.clear();
-        compositor.render_differential(&fb, &mut out_buf, 0, 0);
+        if layout.view_cols > 0 && layout.view_rows > 0 {
+            // Render frame
+            fb.clear(ColorRGB::BLACK);
+            rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme);
 
-        // Render side-by-side biophysical dashboard if enabled
-        if dashboard_mode && right_cols >= 20 {
-            if let Some(ref d_data) = config.dashboard_data {
-                // Draw vertical separator column at left_cols
-                let sep_col = left_cols + 1;
-                for r in 0..render_rows {
-                    let row_pos = r + 1;
-                    let _ = write!(out_buf, "\x1b[{row_pos};{sep_col}H\x1b[38;5;240m│\x1b[0m");
-                }
-                dashboard_renderer.render_to_buffer(
-                    d_data,
-                    &mut out_buf,
-                    left_cols + 1,
-                    0,
-                    right_cols as usize,
-                    render_rows as usize,
+            // Render superimposed secondary mesh if present
+            if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
+                rasterizer.rasterize_mesh(
+                    sec_mesh,
+                    &camera,
+                    &mut fb,
+                    ColorScheme::Solid(sec_color),
                 );
             }
+
+            // Render disulfide bridges if present and enabled
+            if show_disulfides {
+                if let Some(ref ds_mesh) = config.disulfide_mesh {
+                    let gold = ColorRGB::new(251, 191, 36);
+                    rasterizer.rasterize_mesh(ds_mesh, &camera, &mut fb, ColorScheme::Solid(gold));
+                }
+            }
+
+            // Post-processing: Screen-space ambient occlusion + cartoon silhouette outlines
+            rasterizer.apply_post_processing(&mut fb);
+
+            // Compose to terminal
+            compositor.render_differential(&fb, &mut out_buf, 0, 0);
+        }
+
+        // Render the side-by-side biophysical dashboard where the layout has room for it
+        if let (Some((dash_col, dash_width)), Some(d_data)) =
+            (layout.dashboard, config.dashboard_data.as_ref())
+        {
+            // Vertical separator in the column just left of the panel (1-based `dash_col`)
+            for r in 0..layout.view_rows {
+                let row_pos = r + 1;
+                let _ = write!(out_buf, "\x1b[{row_pos};{dash_col}H\x1b[38;5;240m│\x1b[0m");
+            }
+            dashboard_renderer.render_to_buffer(
+                d_data,
+                &mut out_buf,
+                dash_col,
+                0,
+                dash_width as usize,
+                layout.view_rows as usize,
+            );
         }
 
         // Draw HUD status lines
@@ -266,10 +374,12 @@ pub fn run_interactive_viewer(
             "N/A"
         };
         let dash_status = if config.dashboard_data.is_some() {
-            if dashboard_mode {
+            if !dashboard_mode {
+                "OFF"
+            } else if layout.dashboard.is_some() {
                 "ON "
             } else {
-                "OFF"
+                "ON (no room)"
             }
         } else {
             "N/A"
@@ -308,24 +418,9 @@ pub fn run_interactive_viewer(
         };
         let status_row2 = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [Tab] Dashboard | [c] Color | [o] FX | [d] S-S | [r] Reset | [q] Quit";
 
-        let _ = execute!(
-            stdout,
-            MoveTo(0, term_rows.saturating_sub(2)),
-            crossterm::style::SetForegroundColor(crossterm::style::Color::Cyan),
-            crossterm::style::Print(format!(
-                "{:<width$}",
-                status_row1,
-                width = term_cols as usize
-            )),
-            MoveTo(0, term_rows.saturating_sub(1)),
-            crossterm::style::SetForegroundColor(crossterm::style::Color::DarkGrey),
-            crossterm::style::Print(format!(
-                "{:<width$}",
-                status_row2,
-                width = term_cols as usize
-            )),
-            crossterm::style::ResetColor
-        );
+        for line in layout.hud_lines(&status_row1, status_row2) {
+            out_buf.push_str(&line);
+        }
 
         if !out_buf.is_empty() {
             let _ = stdout.write_all(out_buf.as_bytes());
@@ -334,4 +429,120 @@ pub fn run_interactive_viewer(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::dashboard::visible_width;
+    use std::sync::atomic::AtomicUsize;
+
+    /// The status line as the viewer formats it for a real file, and the key help line,
+    /// which alone is 118 columns.
+    const STATUS: &str = " 1crn.pdb | Tris: 3520 | Color: Secondary Structure | S-S: ON  | Dash: OFF | FX: ON  | Spin: ON  | 60 FPS";
+    const CONTROLS: &str = " [arrows/hjkl] Orbit | [+/-] Zoom | [Space] Spin | [Tab] Dashboard | [c] Color | [o] FX | [d] S-S | [r] Reset | [q] Quit";
+
+    /// At 80×24 the HUD used to be padded but never cut, so both lines wrapped, the bottom row
+    /// scrolled the screen every frame, and the protein scrolled away under copies of the
+    /// status line. Every HUD line must be exactly the terminal width, in display columns.
+    #[test]
+    fn hud_lines_never_exceed_the_terminal_width() {
+        let wide_title = " 蛋白質_model_ünïcödé_φψ.cif | Superimposed RMSD: 0.123 Å | Tris: 1";
+        for cols in 0..=200u16 {
+            for rows in [0u16, 1, 3, 4, 7, 8, 24, 60] {
+                let layout = ViewerLayout::compute(cols, rows, false);
+                for status in [STATUS, wide_title] {
+                    let lines = layout.hud_lines(status, CONTROLS);
+                    assert_eq!(lines.len(), layout.hud_rows as usize);
+                    for line in &lines {
+                        assert_eq!(
+                            visible_width(line),
+                            cols as usize,
+                            "{cols}x{rows}: HUD line is not the terminal width: {line:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The layout must place every region on screen without overlap, for any terminal size,
+    /// and follow a resize. The old code fixed the view at `max(rows - 2, 10)` rows, so on a
+    /// terminal under 12 rows the view and dashboard overdrew the HUD (and ran off-screen).
+    #[test]
+    fn layout_regions_fit_and_never_overlap() {
+        for rows in 0..=70u16 {
+            for cols in (0..=260u16).step_by(7).chain([89, 90, 91, 1200, u16::MAX]) {
+                for dash in [false, true] {
+                    let l = ViewerLayout::compute(cols, rows, dash);
+                    assert_eq!(
+                        l.view_rows + l.hud_rows,
+                        rows,
+                        "{cols}x{rows}: view and HUD do not tile the height"
+                    );
+                    assert!(l.view_cols <= cols);
+                    match l.dashboard {
+                        Some((first, width)) => {
+                            assert!(dash, "{cols}x{rows}: dashboard shown while off");
+                            // Separator at `first - 1`, directly right of the view.
+                            assert_eq!(first, l.view_cols + 1, "{cols}x{rows}");
+                            assert_eq!(first as u32 + width as u32, cols as u32, "{cols}x{rows}");
+                            assert!(width >= 20 && l.view_rows >= DASHBOARD_MIN_ROWS);
+                        }
+                        None => assert_eq!(l.view_cols, cols, "{cols}x{rows}"),
+                    }
+                }
+            }
+        }
+        // Tiny terminals give up the HUD before the view; nothing is drawn below the screen.
+        assert_eq!(ViewerLayout::compute(80, 8, false).view_rows, 6);
+        assert_eq!(ViewerLayout::compute(80, 5, false).hud_rows, 1);
+        assert_eq!(ViewerLayout::compute(80, 2, false).hud_rows, 0);
+        // A dashboard that does not fit is hidden, not squeezed.
+        assert_eq!(ViewerLayout::compute(130, 8, true).dashboard, None);
+        assert_eq!(ViewerLayout::compute(89, 40, true).dashboard, None);
+        // Resizing recomputes everything, including the HUD position.
+        let (big, small) = (
+            ViewerLayout::compute(140, 40, true),
+            ViewerLayout::compute(140, 20, true),
+        );
+        assert_eq!(big.view_rows, 38);
+        assert_eq!(small.view_rows, 18);
+        assert_eq!(
+            small.hud_lines(STATUS, CONTROLS)[0].find("\x1b[19;1H"),
+            Some(0)
+        );
+    }
+
+    static RESTORED: AtomicUsize = AtomicUsize::new(0);
+    fn count_restore() {
+        RESTORED.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// A panic inside the viewer must restore the terminal before the message is printed, and
+    /// the guard must survive being dropped during that very unwind (calling `set_hook` while
+    /// panicking would abort the process).
+    #[test]
+    fn a_panic_restores_the_terminal_first() {
+        let before = RESTORED.load(Ordering::SeqCst);
+        let result = std::panic::catch_unwind(|| {
+            let _guard = PanicHookGuard::install(count_restore);
+            panic!("viewer blew up");
+        });
+        assert!(result.is_err());
+        assert!(
+            RESTORED.load(Ordering::SeqCst) > before,
+            "the panic hook did not restore the terminal"
+        );
+
+        // Dropped normally, the guard reinstates the previous hook.
+        drop(PanicHookGuard::install(count_restore));
+        let after = RESTORED.load(Ordering::SeqCst);
+        let _ = std::panic::catch_unwind(|| panic!("after the viewer"));
+        assert_eq!(
+            RESTORED.load(Ordering::SeqCst),
+            after,
+            "the restoring hook outlived the viewer"
+        );
+    }
 }

@@ -16,3 +16,4 @@ crossterm = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
+unicode-width = { workspace = true }

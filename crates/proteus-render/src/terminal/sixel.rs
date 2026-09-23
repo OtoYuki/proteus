@@ -157,28 +157,46 @@ fn emit_band(band: &[u8], out: &mut String) {
 /// Returns the palette, a palette index per pixel, and the worst per-channel error, so the
 /// caller can state the cost rather than hide it. An image with few enough distinct colours —
 /// which a cartoon render usually is — passes through exactly, with a reported error of 0.
+///
+/// Above the budget, colours are weighted by how many pixels use them, and the most common
+/// colour — the background, in a render — keeps a register of its own. Unweighted, the one
+/// background colour counted the same as each of hundreds of rarely used shading tones, was
+/// averaged into a box with dark greys, and a black background came out tinted (15,15,13) on
+/// 6VXX.
 fn quantise(colors: &[ColorRGB]) -> (Vec<ColorRGB>, Vec<u8>, u8) {
     use std::collections::HashMap;
 
-    let mut distinct: Vec<ColorRGB> = {
-        let mut seen = HashMap::new();
+    let mut distinct: Vec<(ColorRGB, u64)> = {
+        let mut seen: HashMap<(u8, u8, u8), (ColorRGB, u64)> = HashMap::new();
         for c in colors {
-            seen.entry((c.r, c.g, c.b)).or_insert(*c);
+            seen.entry((c.r, c.g, c.b)).or_insert((*c, 0)).1 += 1;
         }
         seen.into_values().collect()
     };
-    distinct.sort_by_key(|c| (c.r, c.g, c.b));
+    distinct.sort_by_key(|(c, _)| (c.r, c.g, c.b));
 
     let palette = if distinct.len() <= MAX_COLORS {
-        distinct
+        distinct.into_iter().map(|(c, _)| c).collect()
     } else {
-        median_cut(&distinct, MAX_COLORS)
+        let dominant = distinct
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, (_, n))| *n)
+            .map(|(i, _)| i)
+            .expect("more than MAX_COLORS colours");
+        let (background, _) = distinct.remove(dominant);
+        let mut palette = median_cut(&distinct, MAX_COLORS - 1);
+        palette.push(background);
+        palette
     };
 
-    // Exact-match fast path, then nearest neighbour for anything the cut merged.
+    // Exact-match fast path, then nearest neighbour for anything the cut merged. Built in
+    // reverse so that, should a box average coincide with the reserved colour, the first
+    // register wins; either is exact.
     let exact: HashMap<(u8, u8, u8), u8> = palette
         .iter()
         .enumerate()
+        .rev()
         .map(|(i, c)| ((c.r, c.g, c.b), i as u8))
         .collect();
 
@@ -221,21 +239,33 @@ fn nearest(palette: &[ColorRGB], c: ColorRGB) -> u8 {
     best as u8
 }
 
-/// Classic median cut: repeatedly split the box with the widest channel at that channel's
-/// median, then average each resulting box.
-fn median_cut(colors: &[ColorRGB], target: usize) -> Vec<ColorRGB> {
-    let mut boxes: Vec<Vec<ColorRGB>> = vec![colors.to_vec()];
+/// Median cut over pixel-weighted colours: repeatedly split the box with the widest channel
+/// at that channel's weighted median (half the box's *pixels* on each side, not half its
+/// distinct colours), then take each box's pixel-weighted mean.
+fn median_cut(colors: &[(ColorRGB, u64)], target: usize) -> Vec<ColorRGB> {
+    let mut boxes: Vec<Vec<(ColorRGB, u64)>> = vec![colors.to_vec()];
     while boxes.len() < target {
         let Some((idx, channel)) = widest_box(&boxes) else {
             break;
         };
         let mut b = boxes.swap_remove(idx);
-        b.sort_by_key(|c| match channel {
+        b.sort_by_key(|(c, _)| match channel {
             0 => c.r,
             1 => c.g,
             _ => c.b,
         });
-        let mid = b.len() / 2;
+        let total: u64 = b.iter().map(|(_, n)| n).sum();
+        let mut seen = 0u64;
+        let mut mid = b.len();
+        for (i, (_, n)) in b.iter().enumerate() {
+            seen += n;
+            if seen * 2 >= total {
+                mid = i + 1;
+                break;
+            }
+        }
+        // Both halves non-empty (the box has at least two colours).
+        let mid = mid.clamp(1, b.len() - 1);
         let hi = b.split_off(mid);
         boxes.push(b);
         boxes.push(hi);
@@ -244,24 +274,29 @@ fn median_cut(colors: &[ColorRGB], target: usize) -> Vec<ColorRGB> {
         .into_iter()
         .filter(|b| !b.is_empty())
         .map(|b| {
-            let n = b.len() as u32;
-            let (r, g, bl) = b.iter().fold((0u32, 0u32, 0u32), |acc, c| {
-                (acc.0 + c.r as u32, acc.1 + c.g as u32, acc.2 + c.b as u32)
+            let n: u64 = b.iter().map(|(_, w)| w).sum();
+            let (r, g, bl) = b.iter().fold((0u64, 0u64, 0u64), |acc, (c, w)| {
+                (
+                    acc.0 + c.r as u64 * w,
+                    acc.1 + c.g as u64 * w,
+                    acc.2 + c.b as u64 * w,
+                )
             });
-            ColorRGB::new((r / n) as u8, (g / n) as u8, (bl / n) as u8)
+            let mean = |sum: u64| ((sum + n / 2) / n) as u8;
+            ColorRGB::new(mean(r), mean(g), mean(bl))
         })
         .collect()
 }
 
 /// The box with the largest single-channel spread, and which channel that is.
-fn widest_box(boxes: &[Vec<ColorRGB>]) -> Option<(usize, u8)> {
+fn widest_box(boxes: &[Vec<(ColorRGB, u64)>]) -> Option<(usize, u8)> {
     let mut best: Option<(usize, u8, u8)> = None;
     for (i, b) in boxes.iter().enumerate() {
         if b.len() < 2 {
             continue;
         }
         let (mut lo, mut hi) = ([255u8; 3], [0u8; 3]);
-        for c in b {
+        for (c, _) in b {
             for (k, v) in [c.r, c.g, c.b].into_iter().enumerate() {
                 lo[k] = lo[k].min(v);
                 hi[k] = hi[k].max(v);
@@ -452,6 +487,56 @@ mod tests {
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// On a real render the palette budget is exceeded (shading gives far more than 256
+    /// tones) and the background must still come out exactly black. Before colours were
+    /// weighted by pixel count, the background — one colour covering most of the frame —
+    /// was averaged with dark shading tones into a tinted grey, the whole frame's backdrop.
+    #[test]
+    fn background_survives_quantisation_of_a_real_render() {
+        let text = include_str!("../../../proteus-core/tests/data/1crn.pdb");
+        let data = crate::parse_pdb_structure(text).unwrap();
+        let (w, h) =
+            crate::viewport_pixels(110, 30, crate::terminal::TerminalBackend::Sixel).unwrap();
+        let mut fb = Framebuffer::new(w, h);
+        fb.clear(ColorRGB::BLACK);
+        let scheme = crate::rasterizer::ColorScheme::Rainbow;
+        let mut rasterizer = crate::rasterizer::Rasterizer::new(scheme);
+        rasterizer.rasterize_mesh(&data.ribbon_mesh, &data.camera, &mut fb, scheme);
+        rasterizer.apply_post_processing(&mut fb);
+
+        let distinct: std::collections::HashSet<_> =
+            fb.colors.iter().map(|c| (c.r, c.g, c.b)).collect();
+        assert!(
+            distinct.len() > MAX_COLORS,
+            "fixture has only {} colours, so the cut is not exercised",
+            distinct.len()
+        );
+
+        let (palette, indices, _) = quantise(&fb.colors);
+        assert!(palette.len() <= MAX_COLORS);
+        assert_eq!(
+            fb.colors[0],
+            ColorRGB::BLACK,
+            "corner pixel is not background"
+        );
+        for (src, &idx) in fb.colors.iter().zip(&indices) {
+            if *src == ColorRGB::BLACK {
+                assert_eq!(
+                    palette[idx as usize],
+                    ColorRGB::BLACK,
+                    "background quantised to a tint"
+                );
+            }
+        }
+        // And on the wire: the register the corner uses is defined as 0% 0% 0%.
+        let encoded = SixelRenderer::render_snapshot(&fb);
+        let register = indices[0];
+        assert!(
+            encoded.contains(&format!("#{register};2;0;0;0#")),
+            "background register {register} is not defined as black"
+        );
     }
 
     #[test]

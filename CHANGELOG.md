@@ -36,6 +36,44 @@ All notable changes to this project are documented here. The format follows
   safetensors (with the conversion command), an unknown or gated repository needs a correct id
   or `HF_TOKEN`, and a path given to `--esm-model` that is not a directory is reported as such.
   Missing or unreadable local files are named.
+### Changed
+- **`proteus view --compare` pairs residues by identity** (chain ID, residue number, insertion
+  code) and superposes only the residues both structures have; fewer than three shared is an
+  error. The summary gives the pair count against each structure's total, is green only when
+  the sequences match residue for residue, and warns what differs otherwise. `--color` and
+  `--dashboard`, which `--compare` silently ignored, are now rejected with it.
+  `render_superposition_snapshot` returns `SuperpositionStats` rather than a bare RMSD.
+- `--width`/`--height` accept 1–4096 cells; the renderer also refuses a framebuffer over
+  2²⁵ pixels (`RenderError::InvalidViewport`).
+
+### Fixed
+- `--compare` paired the i-th Cα of one file with the i-th of the other, so a single missing
+  residue shifted every pairing (1UBQ against itself minus residue 1: 3.77 Å instead of 0),
+  and the longer structure was truncated without a word.
+- The interactive viewer below 118 columns: the HUD was padded but never cut, wrapped, and
+  scrolled the screen every frame — at 80×24 the structure scrolled out of view. Every HUD and
+  dashboard line is now cut to the terminal width by display width.
+- The viewer's layout is recomputed on resize and on the dashboard toggle (the separator,
+  dashboard and HUD stayed where the first frame put them), and a terminal under 12 rows is
+  no longer overdrawn: the HUD shrinks first, and the dashboard is hidden when it does not fit.
+  Dashboard section rules were one column too wide and measured in bytes.
+- SIGTERM, SIGHUP or SIGINT during the interactive viewer, or a panic in it, left the terminal
+  raw, on the alternate screen and with the cursor hidden. The terminal is now restored first
+  (the process then exits 128 + the signal number).
+- An oversized `--width/--height` aborted on allocation (100000×100000), overflowed to an empty
+  kitty image printed with exit status 0, or printed nothing for 0.
+- Sixel's median-cut palette ignored how many pixels used each colour, so the background was
+  averaged with dark shading tones: 6VXX's black backdrop decoded as (15,15,13). Colours are
+  now weighted by pixel count and the most common one keeps an exact register.
+- The ribbon face held still inside each residue and snapped by the whole carbonyl-to-carbonyl
+  angle at the next Cα. Each guide is now anchored mid-peptide and interpolated; on 1CRN the
+  worst boundary snap went from 77° to 17°.
+- `--web` wrote to a fixed name in the shared temp directory and followed symlinks; the page
+  is now a new file with a random name, created exclusively.
+- Half-block cells with one empty half painted it explicit black instead of leaving the
+  terminal's own background, a black fringe on any other background.
+- `proteus view typo.pdb` created the job database (`proteus.db`, `-wal`, `-shm`) before
+  failing; it is now opened only for an argument shaped like a job ID, and only if it exists.
 
 ## [0.6.0] — 2026-09-23
 
