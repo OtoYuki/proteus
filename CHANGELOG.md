@@ -5,6 +5,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **ESM-2 scores drifted from `transformers` with sequence length.** `proteus-esm` recomputed
+  the rotary inverse frequencies exactly; the checkpoints store them rounded to fp16, and that
+  is what the model was trained with and what `transformers` loads. At 1022 residues the 8M
+  model's amino-acid log-probabilities were off by up to 0.07 (0.1 on a random sequence); the
+  2.5e-3 on the short parity proteins, documented as fp32 accumulation noise, was the same bug.
+  They are now read from the checkpoint. Parity is 3.6e-5 in logits and 1.3e-5 in amino-acid
+  log-probabilities on the short proteins, 4.6e-5 / 3.3e-5 on a new 1022-residue fixture
+  (`validate/esm_reference.py --long`); tolerances are tightened from 1e-2 / 5e-3 to 2e-4 / 1e-4.
+- **Mutation positions counted whitespace that the tokenizer skipped**, so on
+  `MKTAYIAKQR QISF…` a mutation after the space scored the next residue, and one at the last
+  position scored the `<eos>` row. The wild type is now normalised once and both positions and
+  tokens come from it.
+- **Non-amino-acid input was scored.** Wild-type characters such as `J`, digits, `-`, `.` or an
+  inner `*` became `<unk>` or gap tokens, and substitutions to `J`/`X`/`B`/`Z`/`U`/`O` were
+  scored against them. Now: the wild type may hold the 20 standard amino acids and ESM's
+  `X`/`B`/`Z`/`U`/`O` tokens (a final `*` is dropped), anything else is an error; both sides of
+  a substitution must be standard; `scan` leaves out non-standard wild-type positions.
+- `proteus esm score wt.fast …` (a mistyped file name) scored the "protein" `WT.FAST`. An
+  argument that is neither a file nor a valid sequence is now an error.
+- The length limit was 1024 residues; ESM-2 was trained on 1022 (1024 tokens with `<cls>` and
+  `<eos>`), and longer input is refused with that explanation.
+- A `config.json` with the wrong layer or head count for its weights loaded silently (a
+  truncated network, or wrongly split heads); it is refused.
+- `[mutation=…]` tags: ProteinGym's `A10G:C4S` aborted the whole screen; `A+10G` parsed; a
+  position mutated twice in one variant was scored twice and summed. All fixed.
+- An interrupted checkpoint download left a `.part` file in the cache; a failed request left an
+  empty cache directory. Hub errors now say what to do: the 3B/15B repositories have no
+  safetensors (with the conversion command), an unknown or gated repository needs a correct id
+  or `HF_TOKEN`, and a path given to `--esm-model` that is not a directory is reported as such.
+  Missing or unreadable local files are named.
+
 ## [0.6.0] — 2026-09-23
 
 The structure-QC release. `proteus analyze` takes a folder of models and writes one row per

@@ -56,16 +56,46 @@ pub enum EsmCommand {
     },
 }
 
+/// Where `--esm-model` points: a local checkpoint directory or a Hub id.
+#[derive(Debug, PartialEq, Eq)]
+enum ModelSource<'a> {
+    Dir(&'a std::path::Path),
+    Hub(&'a str),
+}
+
+/// A Hub id is `<owner>/<name>`, which is also a valid relative path; anything that can only be
+/// a path and is not a directory is reported as such, not sent to the Hub as an id.
+fn model_source(model: &str) -> Result<ModelSource<'_>> {
+    let path = std::path::Path::new(model);
+    if path.is_dir() {
+        return Ok(ModelSource::Dir(path));
+    }
+    if path.exists() {
+        bail!(
+            "'{model}' is a file; --esm-model takes a directory holding config.json and \
+             model.safetensors, or a Hub id such as {DEFAULT_MODEL}"
+        );
+    }
+    let path_like = model.starts_with(['.', '/', '~'])
+        || model.contains('\\')
+        || model.matches('/').count() != 1;
+    if path_like {
+        bail!(
+            "no such directory: '{model}' (--esm-model takes a directory holding config.json \
+             and model.safetensors, or a Hub id such as {DEFAULT_MODEL})"
+        );
+    }
+    Ok(ModelSource::Hub(model))
+}
+
 pub fn load_model(opts: &EsmOptions) -> Result<Esm2> {
-    let path = std::path::Path::new(&opts.model);
-    let model = if path.is_dir() {
-        Esm2::from_files(
+    let model = match model_source(&opts.model)? {
+        ModelSource::Dir(path) => Esm2::from_files(
             &path.join("config.json"),
             &path.join("model.safetensors"),
             &Device::Cpu,
-        )
-    } else {
-        Esm2::from_hub(&opts.model, &Device::Cpu)
+        ),
+        ModelSource::Hub(id) => Esm2::from_hub(id, &Device::Cpu),
     }
     .with_context(|| format!("loading ESM-2 model '{}'", opts.model))?;
     let c = model.config();
@@ -90,7 +120,7 @@ async fn read_wildtype(arg: &str) -> Result<(String, String)> {
     } else if std::path::Path::new(arg).exists() {
         tokio::fs::read_to_string(arg).await?
     } else {
-        return Ok(("wildtype".into(), arg.trim().to_ascii_uppercase()));
+        return Ok(("wildtype".into(), raw_residues(arg)?));
     };
     let seqs =
         proteus_core::sequence::validate_and_parse_multi_fasta(&text).context("parsing FASTA")?;
@@ -99,6 +129,21 @@ async fn read_wildtype(arg: &str) -> Result<(String, String)> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("no sequence in input"))?;
     Ok((first.header, first.fasta))
+}
+
+/// A wild-type argument that is not a file: residues only if every character is an amino-acid
+/// letter. A mistyped file name (`wt.fast`) used to be upper-cased and scored as a protein.
+fn raw_residues(arg: &str) -> Result<String> {
+    let seq = proteus_esm::Tokenizer::normalize(arg)
+        .map_err(|_| anyhow::anyhow!("'{arg}': no such file, and not a protein sequence"))?;
+    // A short all-letter word may still be a file name without its extension.
+    if seq.len() < 30 {
+        eprintln!(
+            "note: '{arg}' is not a file; scoring it as a {}-residue sequence",
+            seq.len()
+        );
+    }
+    Ok(seq)
 }
 
 fn score_mutations(model: &Esm2, wt: &str, muts: &[Mutation], masked: bool) -> Result<Vec<f32>> {
@@ -164,6 +209,13 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             let model = load_model(&opts)?;
             warn_if_outside_known_good(&wt);
             let rows = proteus_esm::scan(&model, &wt, opts.masked)?;
+            let unscanned = wt.len() - rows.len();
+            if unscanned > 0 {
+                eprintln!(
+                    "note: {unscanned} positions with a non-standard wild-type residue \
+                     (X/B/Z/U/O) have no substitution scores"
+                );
+            }
             if let Some(path) = &export {
                 let mut out = String::from("position,wt");
                 for aa in AMINO_ACIDS {
@@ -260,15 +312,17 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
         }
         println!("{line}");
     }
+    // Rows keep their true positions; a non-standard wild-type residue has none.
+    let first = rows.first().map_or(1, |r| r.pos).to_string();
     println!(
-        "   1{:>w$}  (red = deleterious, blue = tolerated, · = wild type){}",
-        width,
+        "   {first}{:>w$}  (red = deleterious, blue = tolerated, · = wild type){}",
+        rows.last().map_or(0, |r| r.pos),
         if step > 1 {
             format!("; {step} positions per column")
         } else {
             String::new()
         },
-        w = width.div_ceil(step).saturating_sub(1)
+        w = width.div_ceil(step).saturating_sub(first.len())
     );
 }
 
@@ -278,7 +332,9 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
 /// else the first entry. Each variant's substitutions come from `[mutation=P19A]` in its header
 /// or, failing that, from a position-wise diff against the wild type (same length only).
 /// Returns `None` for entries that cannot be related to the wild type.
-/// Substitutions declared in a header's `[mutation=P19A,C4S]` tag, if any.
+/// Substitutions declared in a header's `[mutation=P19A,C4S]` tag, if any. `:` (ProteinGym's
+/// multi-mutant separator), `,`, `/` and `;` all separate substitutions; one variant may not
+/// mutate a position twice.
 fn tagged_mutations(header: &str) -> Result<Option<Vec<Mutation>>> {
     let Some(m) = header
         .split("[mutation=")
@@ -287,11 +343,19 @@ fn tagged_mutations(header: &str) -> Result<Option<Vec<Mutation>>> {
     else {
         return Ok(None);
     };
-    m.split([',', '/', ';'])
+    let muts = m
+        .split([',', '/', ';', ':'])
         .filter(|x| !x.trim().is_empty())
-        .map(|x| parse_mutation(x).map_err(|e| anyhow::anyhow!("{e}")))
-        .collect::<Result<Vec<_>>>()
-        .map(Some)
+        .map(|x| parse_mutation(x).map_err(|e| anyhow::anyhow!("'{header}': {e}")))
+        .collect::<Result<Vec<_>>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    if let Some(dup) = muts.iter().find(|m| !seen.insert(m.pos)) {
+        bail!(
+            "'{header}': position {} is mutated more than once in one variant",
+            dup.pos
+        );
+    }
+    Ok(Some(muts))
 }
 
 /// The wild-type sequence a library is scored against: the `[wildtype]` entry when there is
@@ -373,7 +437,11 @@ pub fn score_library(
         let score = if muts.is_empty() {
             0.0
         } else {
-            scorer.score(&muts)?.iter().sum()
+            scorer
+                .score(&muts)
+                .with_context(|| format!("scoring '{}'", s.header))?
+                .iter()
+                .sum()
         };
         out.insert(s.id, Some(score));
     }
@@ -428,6 +496,71 @@ mod tests {
     fn wild_type_falls_back_to_the_first_untagged_entry() {
         let lib = vec![seq("scaffold", "TCDE"), seq("variant", "TADE")];
         assert_eq!(wild_type_of(&lib).unwrap(), "TCDE");
+    }
+
+    #[test]
+    fn a_missing_file_is_not_scored_as_a_protein() {
+        // `wt.fast` (a typo of wt.fasta) used to become the 7-residue protein "WT.FAST".
+        for bad in ["wt.fast", "./wildtype", "data/wt.fasta", "P12345_1"] {
+            let err = raw_residues(bad).unwrap_err().to_string();
+            assert!(err.contains("no such file"), "{bad}: {err}");
+        }
+        assert_eq!(raw_residues("mktay iakqr*").unwrap(), "MKTAYIAKQR");
+    }
+
+    #[test]
+    fn a_mistyped_model_directory_is_not_sent_to_the_hub() {
+        for bad in [
+            "./models/esm2",
+            "../esm2",
+            "/no/such/esm2",
+            "models/esm2/t6",
+            "~/esm2",
+        ] {
+            let err = model_source(bad).unwrap_err().to_string();
+            assert!(err.contains("no such directory"), "{bad}: {err}");
+        }
+        let manifest = env!("CARGO_MANIFEST_DIR");
+        let file = format!("{manifest}/Cargo.toml");
+        assert!(model_source(&file)
+            .unwrap_err()
+            .to_string()
+            .contains("is a file"));
+        assert_eq!(
+            model_source(manifest).unwrap(),
+            ModelSource::Dir(std::path::Path::new(manifest))
+        );
+        assert_eq!(
+            model_source(DEFAULT_MODEL).unwrap(),
+            ModelSource::Hub(DEFAULT_MODEL)
+        );
+    }
+
+    #[test]
+    fn proteingym_multi_mutant_tags_parse() {
+        // ProteinGym writes multi-mutants as A10G:C4S; the ':' used to abort the whole screen.
+        let muts = tagged_mutations("v [mutation=A10G:C4S]").unwrap().unwrap();
+        assert_eq!(muts.len(), 2);
+        assert_eq!((muts[0].pos, muts[1].pos), (10, 4));
+        assert_eq!(
+            tagged_mutations("v [mutation=A10G,C4S;D5E/F6G]")
+                .unwrap()
+                .unwrap()
+                .len(),
+            4
+        );
+        assert!(tagged_mutations("no tag").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_variant_tag_is_strict() {
+        // Both substitutions of A10G:A10C were scored and summed.
+        let err = tagged_mutations("v [mutation=A10G:A10C]")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("more than once"), "{err}");
+        assert!(tagged_mutations("v [mutation=A+10G]").is_err());
+        assert!(tagged_mutations("v [mutation=A10J]").is_err());
     }
 
     #[test]
