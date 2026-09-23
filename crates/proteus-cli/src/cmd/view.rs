@@ -107,14 +107,6 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     };
 
     if web || html.is_some() {
-        let html_path = html.unwrap_or_else(|| {
-            let sanitized: String = title
-                .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { '_' })
-                .collect();
-            std::env::temp_dir().join(format!("proteus_view_{sanitized}.html"))
-        });
-
         let format = proteus_core::io::sniff_format(
             &pdb_content,
             target_path.file_name().and_then(|n| n.to_str()),
@@ -148,9 +140,21 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         }
         .render();
 
-        tokio::fs::write(&html_path, html_content)
-            .await
-            .with_context(|| format!("Failed to write HTML file to {:?}", html_path))?;
+        let html_path = match html {
+            // The user named the file: write exactly there.
+            Some(path) => {
+                tokio::fs::write(&path, html_content)
+                    .await
+                    .with_context(|| format!("Failed to write HTML file to {:?}", path))?;
+                path
+            }
+            None => {
+                let (mut file, path) = create_web_page_file(&std::env::temp_dir(), &title)?;
+                std::io::Write::write_all(&mut file, html_content.as_bytes())
+                    .with_context(|| format!("Failed to write HTML file to {:?}", path))?;
+                path
+            }
+        };
 
         println!(
             "Generated standalone 3D WebGL viewer HTML -> {:?}",
@@ -313,6 +317,30 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+/// Create the `--web` page as a new file with an unpredictable name in `dir`.
+///
+/// The name used to be fixed (`proteus_view_<title>.html` in the shared temp directory), so
+/// another user could plant a symlink there and have the page written through it into any
+/// file the viewer's user can write. `tempfile` creates the file with `O_CREAT | O_EXCL`
+/// (never following a link) under a random name, readable only by its owner; the file is kept
+/// so the browser can open it after this process exits.
+fn create_web_page_file(dir: &Path, title: &str) -> Result<(std::fs::File, PathBuf)> {
+    let sanitized: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .take(48)
+        .collect();
+    let file = tempfile::Builder::new()
+        .prefix(&format!("proteus_view_{sanitized}_"))
+        .suffix(".html")
+        .tempfile_in(dir)
+        .with_context(|| format!("Failed to create an HTML file in {}", dir.display()))?;
+    let (file, path) = file
+        .keep()
+        .with_context(|| format!("Failed to keep the HTML file in {}", dir.display()))?;
+    Ok((file, path))
+}
+
 /// Run the interactive viewer with SIGTERM, SIGHUP and SIGINT turned into a clean exit.
 ///
 /// In raw mode Ctrl-C is a key press, but a signal from outside (`kill`, a closed SSH session,
@@ -394,6 +422,33 @@ mod tests {
             color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
             Some(CliColorScheme::Rainbow)
         );
+    }
+
+    /// `--web` must not write through a file planted at a predictable name in the shared temp
+    /// directory: every page gets a fresh file, and a symlink waiting at the old fixed name is
+    /// left alone along with its target.
+    #[cfg(unix)]
+    #[test]
+    fn web_page_is_a_new_file_not_a_planted_link() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, "precious").unwrap();
+        // The name the page used to get for this title.
+        let planted = dir.path().join("proteus_view_1crn_pdb.html");
+        std::os::unix::fs::symlink(&victim, &planted).unwrap();
+
+        let (mut file, path) = super::create_web_page_file(dir.path(), "1crn.pdb").unwrap();
+        file.write_all(b"<html></html>").unwrap();
+        let (_, second) = super::create_web_page_file(dir.path(), "1crn.pdb").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+        assert_ne!(path, planted);
+        assert_ne!(path, second, "two pages got the same name");
+        assert!(path.starts_with(dir.path()));
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(meta.file_type().is_file(), "the page is not a regular file");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<html></html>");
     }
 
     /// A viewport the renderer cannot allocate is refused at the argument parser, with the

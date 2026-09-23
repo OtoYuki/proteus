@@ -2643,6 +2643,7 @@ dependencies = [
  "proteus-server",
  "proteus-storage",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
