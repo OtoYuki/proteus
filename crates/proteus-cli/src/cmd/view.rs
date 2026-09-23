@@ -152,16 +152,26 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             }
         };
 
-        println!(
-            "Generated standalone 3D WebGL viewer HTML -> {:?}",
-            html_path
-        );
+        println!("Wrote the browser viewer page: {}", html_path.display());
 
         if web {
-            println!("Launching default browser via xdg-open...");
-            let _ = std::process::Command::new("xdg-open")
-                .arg(&html_path)
-                .spawn();
+            // macOS has `open`; Linux and the BSDs have xdg-utils. A missing opener is said,
+            // not swallowed: the page is still there to open by hand.
+            let opener = if cfg!(target_os = "macos") {
+                "open"
+            } else {
+                "xdg-open"
+            };
+            match std::process::Command::new(opener).arg(&html_path).spawn() {
+                Ok(_) => println!(
+                    "Opened {} in the default browser ({opener}).",
+                    html_path.display()
+                ),
+                Err(e) => println!(
+                    "Could not start {opener} ({e}); open {} in a browser.",
+                    html_path.display()
+                ),
+            }
         }
         return Ok(());
     }
@@ -463,7 +473,7 @@ mod tests {
     /// crystal structure is not painted "very low confidence" from small B-factors.
     #[test]
     fn view_colour_is_optional() {
-        let color_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+        let color_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command.unwrap() {
             Commands::View(Args { color, .. }) => color,
             _ => unreachable!(),
         };
@@ -510,7 +520,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("proteus.db");
         for target in ["typo.pdb", "models/missing.cif", "deadbeef"] {
-            let Commands::View(args) = Cli::try_parse_from(["proteus", "view", target])
+            let Some(Commands::View(args)) = Cli::try_parse_from(["proteus", "view", target])
                 .unwrap()
                 .command
             else {

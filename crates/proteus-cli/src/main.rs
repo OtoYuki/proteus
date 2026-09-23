@@ -8,6 +8,7 @@ mod cmd;
 mod esm_cmd;
 mod job_ref;
 mod report;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;
@@ -59,5 +60,19 @@ async fn run() -> Result<()> {
     let db_path = data_dir.join("proteus.db");
     let artifacts_dir = data_dir.join("artifacts");
 
-    cmd::dispatch(cli.command, &db_path, &artifacts_dir, &data_dir).await
+    match cli.command {
+        Some(command) => cmd::dispatch(command, &db_path, &artifacts_dir, &data_dir).await,
+        None if tui::wanted() => tui::run(&db_path, &data_dir).await,
+        // Not at a terminal (a pipe, a script, CI): the usage error and exit status 2, exactly
+        // as before the home screen existed.
+        None => {
+            use clap::CommandFactory;
+            // Parsing again with the subcommand required reproduces clap's own output.
+            cli::Cli::command()
+                .subcommand_required(true)
+                .arg_required_else_help(true)
+                .get_matches();
+            unreachable!("clap exits when the required subcommand is missing")
+        }
+    }
 }

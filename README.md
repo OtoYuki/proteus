@@ -315,6 +315,22 @@ proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --e
 Jobs are referred to by UUID or by any unique prefix of one, the way git handles commits. The
 leaderboard prints the first eight characters; `proteus view 0916a5e6` resolves it.
 
+### `proteus` — the home screen
+
+![the home screen: jobs, a folder of structures measured as you move, and the fold form](docs/media/home.gif)
+
+Run with no command in a terminal, `proteus` opens a full-screen home:
+
+- **Jobs:** your jobs, newest first, refreshed every 2 s. Enter opens the 3-D viewer, `w` the
+  browser page, `i` the full report, and `/` filters the list.
+- **Structures:** a file browser over the current folder. Each structure file you stop on is
+  measured in the background, with the same numbers as `analyze`.
+- **Run:** forms to fold a sequence (`submit`) or scan a protein (`mutate … | screen -`).
+
+Every action runs a `proteus` command, and the Run forms show the exact command line before you
+run it, so what you did can be pasted into a script. In a pipe or a script, bare `proteus` still
+prints the usage and exits 2.
+
 ### `proteus mutate` — variant libraries
 
 ```bash
