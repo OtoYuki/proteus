@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-23
+
+The release where Proteus gets a face.
+- **Browser viewer:** the page is now ours. WebGL2 draws the same ribbon, colours and
+  measurements as the terminal, verified in Chromium, Firefox and WebKit, and it replaces the
+  vendored 3Dmol.js.
+- **Home screen:** `proteus` with no command opens one in a terminal, with your jobs, a folder
+  of structures measured as you move, and forms that show the command they run.
+- **Identity:** everything wears one identity, a s1re.sh sub-brand. The structure colours now
+  stay apart for colour-blind readers.
+- **Bug hunt:** a review of all of this before release fixed 26 defects. Among them, a closed
+  terminal could leave `proteus` spinning at full CPU, and structures with disulfide bonds drew
+  an empty browser page.
+
 ### Added
 - A home screen. `proteus` with no command, in a terminal, opens a full-screen TUI (ratatui)
   with three tabs:
@@ -664,7 +678,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/OtoYuki/proteus/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OtoYuki/proteus/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0
