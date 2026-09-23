@@ -5,6 +5,11 @@ use std::fmt::Write;
 /// Each character cell combines two vertical pixels into one cell using `▀` (U+2580):
 /// - Top pixel = Foreground color
 /// - Bottom pixel = Background color
+///
+/// Black is the framebuffer's "nothing drawn here", and it is left to the terminal's own
+/// background rather than painted black: a cell with one empty half is drawn as `▀` or `▄` in
+/// the other half's colour over the default background, so a ribbon's edge does not carry a
+/// black fringe on a terminal whose background is not black.
 pub struct HalfBlockRenderer {
     prev_top: Vec<ColorRGB>,
     prev_bottom: Vec<ColorRGB>,
@@ -44,27 +49,7 @@ impl HalfBlockRenderer {
                     ColorRGB::BLACK
                 };
 
-                if top == ColorRGB::BLACK && bottom == ColorRGB::BLACK {
-                    if cur_fg.is_some() || cur_bg.is_some() {
-                        out.push_str("\x1b[0m");
-                        cur_fg = None;
-                        cur_bg = None;
-                    }
-                    out.push(' ');
-                    continue;
-                }
-
-                // Optimize ANSI escape sequences
-                if cur_fg != Some(top) {
-                    let _ = write!(out, "\x1b[38;2;{};{};{}m", top.r, top.g, top.b);
-                    cur_fg = Some(top);
-                }
-                if cur_bg != Some(bottom) {
-                    let _ = write!(out, "\x1b[48;2;{};{};{}m", bottom.r, bottom.g, bottom.b);
-                    cur_bg = Some(bottom);
-                }
-
-                out.push('▀');
+                emit_cell(&mut out, top, bottom, &mut cur_fg, &mut cur_bg);
             }
 
             // Reset at line boundary
@@ -98,6 +83,12 @@ impl HalfBlockRenderer {
         let cols = fb.width;
         let char_rows = fb.height.div_ceil(2);
         let total_cells = cols * char_rows;
+
+        // Whatever was written since the last frame (dashboard, HUD) may have changed the
+        // colours, so start from a known state: `None` is the terminal default.
+        out.push_str("\x1b[0m");
+        self.last_fg = None;
+        self.last_bg = None;
 
         let resized = self.prev_top.len() != total_cells;
         if resized {
@@ -145,29 +136,43 @@ impl HalfBlockRenderer {
                     cursor_moved = true;
                 }
 
-                if top == ColorRGB::BLACK && bottom == ColorRGB::BLACK {
-                    if self.last_fg.is_some() || self.last_bg.is_some() {
-                        out.push_str("\x1b[0m");
-                        self.last_fg = None;
-                        self.last_bg = None;
-                    }
-                    out.push(' ');
-                    continue;
-                }
-
-                if self.last_fg != Some(top) {
-                    let _ = write!(out, "\x1b[38;2;{};{};{}m", top.r, top.g, top.b);
-                    self.last_fg = Some(top);
-                }
-                if self.last_bg != Some(bottom) {
-                    let _ = write!(out, "\x1b[48;2;{};{};{}m", bottom.r, bottom.g, bottom.b);
-                    self.last_bg = Some(bottom);
-                }
-
-                out.push('▀');
+                emit_cell(out, top, bottom, &mut self.last_fg, &mut self.last_bg);
             }
         }
     }
+}
+
+/// Append one cell, emitting only the colour changes it needs. `fg`/`bg` track the terminal's
+/// current colours, `None` meaning its default; [`ColorRGB::BLACK`] is an empty pixel.
+fn emit_cell(
+    out: &mut String,
+    top: ColorRGB,
+    bottom: ColorRGB,
+    fg: &mut Option<ColorRGB>,
+    bg: &mut Option<ColorRGB>,
+) {
+    let (glyph, want_fg, want_bg) = match (top == ColorRGB::BLACK, bottom == ColorRGB::BLACK) {
+        (true, true) => (' ', *fg, None),
+        (false, true) => ('▀', Some(top), None),
+        (true, false) => ('▄', Some(bottom), None),
+        (false, false) => ('▀', Some(top), Some(bottom)),
+    };
+    if *fg != want_fg {
+        if let Some(c) = want_fg {
+            let _ = write!(out, "\x1b[38;2;{};{};{}m", c.r, c.g, c.b);
+        }
+        *fg = want_fg;
+    }
+    if *bg != want_bg {
+        match want_bg {
+            Some(c) => {
+                let _ = write!(out, "\x1b[48;2;{};{};{}m", c.r, c.g, c.b);
+            }
+            None => out.push_str("\x1b[49m"),
+        }
+        *bg = want_bg;
+    }
+    out.push(glyph);
 }
 
 impl Default for HalfBlockRenderer {
@@ -190,5 +195,39 @@ mod tests {
         assert!(s.contains('▀'));
         assert!(s.contains("\x1b[38;2;255;0;0m"));
         assert!(s.contains("\x1b[48;2;0;255;0m"));
+    }
+
+    /// An empty pixel is the terminal's background, not black paint. A cell with only one
+    /// half drawn used to set `48;2;0;0;0`, which shows as a black fringe along every edge of
+    /// the ribbon on a terminal with any other background.
+    #[test]
+    fn empty_pixels_use_the_default_background() {
+        let red = ColorRGB::new(255, 0, 0);
+        let blue = ColorRGB::new(0, 0, 255);
+        let mut fb = Framebuffer::new(3, 2);
+        fb.set_pixel(0, 0, red, 1.0); // top half only
+        fb.set_pixel(1, 1, blue, 1.0); // bottom half only
+        fb.set_pixel(2, 0, red, 1.0); // both halves
+        fb.set_pixel(2, 1, blue, 1.0);
+
+        let snapshot = HalfBlockRenderer::render_snapshot(&fb);
+        let mut differential = String::new();
+        HalfBlockRenderer::new().render_differential(&fb, &mut differential, 0, 0);
+
+        for out in [&snapshot, &differential] {
+            assert!(
+                !out.contains("48;2;0;0;0") && !out.contains("38;2;0;0;0"),
+                "an empty half was painted black: {out:?}"
+            );
+            // Top-only cell: upper half block in red over the default background.
+            assert!(out.contains("\x1b[38;2;255;0;0m▀"), "{out:?}");
+            // Bottom-only cell: lower half block in blue over the default background.
+            assert!(out.contains("\x1b[38;2;0;0;255m▄"), "{out:?}");
+            // Both halves drawn: foreground over an explicit background, as before.
+            assert!(
+                out.contains("\x1b[38;2;255;0;0m\x1b[48;2;0;0;255m▀"),
+                "{out:?}"
+            );
+        }
     }
 }
