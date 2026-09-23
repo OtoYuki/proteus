@@ -7,7 +7,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - The browser viewer (`proteus view --web/--html`, the daemon's `/view/{job}`) is now our own:
-  about 500 lines of WebGL2 drawing the same ribbon mesh, DSSP and colours as the terminal
+  about 730 lines of our own JavaScript (WebGL2) drawing the same ribbon mesh, DSSP and colours as the terminal
   viewer, with the same keys (`c`, `o`, `d`, `Space`, `r`, plus `s` to save a PNG), hover labels
   (chain, residue, 8-state DSSP, pLDDT or B-factor), and panels for the measurements, a
   Ramachandran plot and the per-residue pLDDT. It replaces the vendored 3Dmol.js 2.5.5, which

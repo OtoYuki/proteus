@@ -82,7 +82,7 @@ re-implements geometry.
 No network access, no third-party code. `<script>`-context escaping is kept for every string
 taken from a structure file (chain ids are free text).
 
-**Renderer** (WebGL2, about 400 lines of our own JavaScript):
+**Renderer** (WebGL2; as built, 726 lines of our own JavaScript across `core.js` and `viewer.js`):
 - a geometry pass into a framebuffer with colour and depth textures
 - a full-screen post pass for outlines and SSAO, the same rules as the CPU pass, with pixel
   offsets scaled to the canvas resolution
