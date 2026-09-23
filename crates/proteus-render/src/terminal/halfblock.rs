@@ -76,6 +76,16 @@ impl HalfBlockRenderer {
         out
     }
 
+    /// Forget what is on screen, so the next frame repaints every cell. Needed after the
+    /// screen is cleared: a resize can keep the cell count (80×20 → 40×40), and a dashboard
+    /// toggle on a narrow terminal keeps the view's size, and neither is otherwise detected.
+    pub fn invalidate(&mut self) {
+        self.prev_top.clear();
+        self.prev_bottom.clear();
+        self.last_fg = None;
+        self.last_bg = None;
+    }
+
     /// Differential update: only emits ANSI codes for cells that changed from the previous frame.
     /// Clears and repaints if dimensions changed.
     pub fn render_differential(

@@ -77,6 +77,7 @@ indicatif = "0.18"
 comfy-table = "8"
 crossterm = "0.29"
 base64 = "0.23"
+unicode-width = "0.2"
 
 # Diagnostics & Docs
 tracing = "0.1"

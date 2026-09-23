@@ -2723,6 +2723,7 @@ dependencies = [
  "pdbtbx",
  "proteus-core",
  "thiserror 2.0.20",
+ "unicode-width",
  "uuid",
 ]
 

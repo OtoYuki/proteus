@@ -246,13 +246,10 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 disulfide_mesh: None,
                 dashboard_enabled: false,
                 dashboard_data: None,
+                stop: None,
             };
-            proteus_render::tui::run_interactive_viewer(
-                &sup_data.target_mesh,
-                sup_data.camera,
-                config,
-            )
-            .context("Interactive dual-structure 3D viewer error")?;
+            run_viewer(&sup_data.target_mesh, sup_data.camera, config)
+                .context("Interactive dual-structure 3D viewer error")?;
         } else {
             let (snapshot, rmsd) = proteus_render::render_superposition_snapshot(
                 &pdb_content,
@@ -290,13 +287,10 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             disulfide_mesh: structure_data.disulfide_mesh,
             dashboard_enabled: dashboard || term_cols >= 100,
             dashboard_data,
+            stop: None,
         };
-        proteus_render::tui::run_interactive_viewer(
-            &structure_data.ribbon_mesh,
-            structure_data.camera,
-            config,
-        )
-        .context("Interactive 3D viewer error")?;
+        run_viewer(&structure_data.ribbon_mesh, structure_data.camera, config)
+            .context("Interactive 3D viewer error")?;
     } else {
         let structure_data = structure_data.expect("parsed above when --compare is absent");
         let snapshot = proteus_render::render_structure_snapshot(
@@ -311,6 +305,68 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         println!("{snapshot}");
     }
     Ok(())
+}
+
+/// Run the interactive viewer with SIGTERM, SIGHUP and SIGINT turned into a clean exit.
+///
+/// In raw mode Ctrl-C is a key press, but a signal from outside (`kill`, a closed SSH session,
+/// a job-control timeout) would otherwise end the process with the terminal still raw, on the
+/// alternate screen and with the cursor hidden. The handler asks the viewer to stop, the viewer
+/// restores the terminal on its way out, and the process then exits with the conventional
+/// `128 + signal` status.
+fn run_viewer(
+    mesh: &proteus_render::geometry::mesh::TriangleMesh,
+    camera: proteus_render::rasterizer::OrbitCamera,
+    mut config: proteus_render::tui::ViewerConfig,
+) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let stop = Arc::new(AtomicBool::new(false));
+    let received = watch_termination_signals(Arc::clone(&stop))?;
+    config.stop = Some(stop);
+    let run = || proteus_render::tui::run_interactive_viewer(mesh, camera, config);
+    // The viewer blocks; on the multi-threaded runtime let the signal task run elsewhere.
+    let result = match tokio::runtime::Handle::current().runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(run),
+        _ => run(),
+    };
+    let signal = received.load(Ordering::SeqCst);
+    if signal != 0 {
+        std::process::exit(128 + signal);
+    }
+    Ok(result?)
+}
+
+/// Listen for SIGTERM, SIGHUP and SIGINT; on the first, record its number and set `stop`.
+#[cfg(unix)]
+fn watch_termination_signals(
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<Arc<std::sync::atomic::AtomicI32>> {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use tokio::signal::unix::{signal, SignalKind};
+    // Registered before returning, so a signal that arrives once this has returned is caught.
+    let mut term = signal(SignalKind::terminate())?;
+    let mut hup = signal(SignalKind::hangup())?;
+    let mut int = signal(SignalKind::interrupt())?;
+    let received = Arc::new(AtomicI32::new(0));
+    let flag = Arc::clone(&received);
+    tokio::spawn(async move {
+        // POSIX numbers, identical on Linux and macOS.
+        let n = tokio::select! {
+            _ = term.recv() => 15,
+            _ = hup.recv() => 1,
+            _ = int.recv() => 2,
+        };
+        flag.store(n, Ordering::SeqCst);
+        stop.store(true, Ordering::SeqCst);
+    });
+    Ok(received)
+}
+
+#[cfg(not(unix))]
+fn watch_termination_signals(
+    _stop: Arc<std::sync::atomic::AtomicBool>,
+) -> std::io::Result<Arc<std::sync::atomic::AtomicI32>> {
+    Ok(Arc::new(std::sync::atomic::AtomicI32::new(0)))
 }
 
 #[cfg(test)]
@@ -332,5 +388,32 @@ mod tests {
             color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
             Some(CliColorScheme::Rainbow)
         );
+    }
+
+    /// SIGTERM while the viewer runs must reach the viewer as a stop request (it then restores
+    /// the terminal) rather than kill the process with the terminal left raw.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn sigterm_asks_the_viewer_to_stop() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let stop = Arc::new(AtomicBool::new(false));
+        let received = super::watch_termination_signals(Arc::clone(&stop)).unwrap();
+        let status = std::process::Command::new("kill")
+            .args(["-TERM", &std::process::id().to_string()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+        for _ in 0..200 {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(
+            stop.load(Ordering::SeqCst),
+            "SIGTERM did not stop the viewer"
+        );
+        assert_eq!(received.load(Ordering::SeqCst), 15);
     }
 }
