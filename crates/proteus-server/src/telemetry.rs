@@ -135,7 +135,7 @@ impl Telemetry {
 
         // Task total counter
         out.push_str(
-            "# HELP proteus_tasks_total Total count of pipeline and TES tasks scheduled\n",
+            "# HELP proteus_tasks_total Transitions into each state since the daemon started (one task that finishes counts once under queued, running and complete); proteus_active_workers is the current number running\n",
         );
         out.push_str("# TYPE proteus_tasks_total counter\n");
         out.push_str(&format!(
@@ -161,9 +161,7 @@ impl Telemetry {
 
         // Active workers gauge
         let workers = self.active_workers.load(Ordering::Relaxed);
-        out.push_str(
-            "\n# HELP proteus_active_workers Number of concurrently running worker threads\n",
-        );
+        out.push_str("\n# HELP proteus_active_workers Tasks and jobs executing right now\n");
         out.push_str("# TYPE proteus_active_workers gauge\n");
         out.push_str(&format!("proteus_active_workers {}\n", workers));
 
@@ -391,5 +389,13 @@ mod tests {
         assert!(rendered.contains("proteus_cas_operations_total{op=\"hit\"} 10"));
         assert!(rendered.contains("proteus_task_duration_seconds_count 1"));
         assert!(rendered.contains("proteus_biophysical_duration_seconds_count 1"));
+    }
+    #[test]
+    fn counter_help_says_it_counts_transitions() {
+        // Found making the product report: one finished task shows queued 1, running 1,
+        // complete 1, which reads as three tasks unless the help text says what is counted.
+        let text = Telemetry::new().render_prometheus();
+        assert!(text.contains("# HELP proteus_tasks_total Transitions into each state"));
+        assert!(text.contains("# HELP proteus_active_workers Tasks and jobs executing right now"));
     }
 }

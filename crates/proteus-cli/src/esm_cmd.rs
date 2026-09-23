@@ -193,6 +193,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             let scores = score_mutations(&model, &wt, &muts, opts.masked)?;
             let mut table = Table::new();
             table.load_style(UTF8_FULL);
+            crate::cli::fit_table(&mut table);
             table.set_header(vec!["Mutation", "ESM-2 score (log p_mt − log p_wt)"]);
             for (m, s) in muts.iter().zip(&scores) {
                 table.add_row(vec![
@@ -275,6 +276,7 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
             print_heatmap(&rows);
             let mut table = Table::new();
             table.load_style(UTF8_FULL);
+            crate::cli::fit_table(&mut table);
             table.set_header(vec!["Most tolerated", "score", "Least tolerated", "score"]);
             for i in 0..top.min(n) {
                 let (best, bs) = &all[i];
@@ -292,14 +294,44 @@ pub async fn run(cmd: EsmCommand, opts: EsmOptions) -> Result<()> {
     Ok(())
 }
 
+/// Centre and half-width of the heat map's colour scale: the median of the substitution scores
+/// and the 95th percentile of their distance from it. A fixed scale around 0 does not work:
+/// with wild-type marginals nearly every substitution scores below 0, and the whole map came
+/// out one shade of red. Relative to the scan's own median, the colours say which
+/// substitutions this protein tolerates best and worst.
+fn heat_scale(rows: &[proteus_esm::ScanRow]) -> (f32, f32) {
+    let mut scores: Vec<f32> = rows
+        .iter()
+        .flat_map(|r| {
+            AMINO_ACIDS
+                .iter()
+                .zip(r.scores)
+                .filter(move |(aa, _)| **aa != r.wt)
+                .map(|(_, s)| s)
+        })
+        .filter(|s| s.is_finite())
+        .collect();
+    if scores.is_empty() {
+        return (0.0, 1.0);
+    }
+    scores.sort_by(f32::total_cmp);
+    let centre = scores[scores.len() / 2];
+    let mut dist: Vec<f32> = scores.iter().map(|s| (s - centre).abs()).collect();
+    dist.sort_by(f32::total_cmp);
+    let spread = dist[(dist.len() * 95 / 100).min(dist.len() - 1)].max(0.25);
+    (centre, spread)
+}
+
 /// 20-row text heat map: rows are amino acids, columns are positions (one cell per residue,
-/// truecolor from red (deleterious) through grey (neutral) to blue (tolerated)).
+/// truecolor from red (least tolerated) through grey (this scan's median) to blue (most
+/// tolerated)).
 fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
     let width = rows.len();
     let max_cols = 160;
     let step = width.div_ceil(max_cols).max(1);
+    let (centre, spread) = heat_scale(rows);
     let scale = |s: f32| -> (u8, u8, u8) {
-        let t = (s / 6.0).clamp(-1.0, 1.0);
+        let t = ((s - centre) / spread).clamp(-1.0, 1.0);
         if t < 0.0 {
             let k = -t;
             (
@@ -332,7 +364,7 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
     // Rows keep their true positions; a non-standard wild-type residue has none.
     let first = rows.first().map_or(1, |r| r.pos).to_string();
     println!(
-        "   {first}{:>w$}  (red = deleterious, blue = tolerated, · = wild type){}",
+        "   {first}{:>w$}{}",
         rows.last().map_or(0, |r| r.pos),
         if step > 1 {
             format!("; {step} positions per column")
@@ -340,6 +372,10 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
             String::new()
         },
         w = width.div_ceil(step).saturating_sub(first.len())
+    );
+    println!(
+        "   red = least tolerated | blue = most tolerated | grey = this scan's median \
+         ({centre:+.2}) | \u{b7} = wild type"
     );
 }
 
@@ -584,5 +620,40 @@ mod tests {
     fn inconsistent_mutation_tag_is_an_error() {
         let lib = vec![seq("v_T1A [mutation=T1A]", "GCDE")];
         assert!(wild_type_of(&lib).is_err());
+    }
+    #[test]
+    fn heat_map_scale_is_centred_on_the_scan_not_on_zero() {
+        // Found making the product report: with wild-type marginals every score was negative
+        // and the fixed ±6 scale around 0 painted the whole map red.
+        let rows: Vec<proteus_esm::ScanRow> = (1..=10)
+            .map(|pos| {
+                let mut scores = [0f32; 20];
+                for (k, s) in scores.iter_mut().enumerate() {
+                    *s = -1.0 - (k as f32) * 0.5 - pos as f32 * 0.1;
+                }
+                scores[0] = 0.0; // the wild type (A) scores 0 by construction
+                proteus_esm::ScanRow {
+                    pos,
+                    wt: 'A',
+                    scores,
+                }
+            })
+            .collect();
+        let (centre, spread) = heat_scale(&rows);
+        assert!(
+            centre < -1.0,
+            "centre {centre} ignores the wild type and sits in the data"
+        );
+        assert!(spread > 0.25);
+        let best = -1.0 - 0.5 - 0.1; // the most tolerated substitution
+        let worst = -1.0 - 19.0 * 0.5 - 1.0;
+        assert!(
+            (best - centre) / spread > 0.5,
+            "the best substitution must read as blue"
+        );
+        assert!(
+            (worst - centre) / spread < -0.5,
+            "the worst must read as red"
+        );
     }
 }

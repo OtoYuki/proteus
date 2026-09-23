@@ -23,6 +23,8 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
 
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
+
+    crate::cli::fit_table(&mut table);
     table.set_header(vec!["Field", "Value"]);
 
     table.add_row(vec!["Job ID", &job.id.to_string()]);
