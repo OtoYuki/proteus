@@ -317,8 +317,10 @@ impl StructureRenderData {
     /// What one rendered pixel covers, in Ångströms, for a terminal viewport of `cols` × `rows`
     /// cells on `backend`. See [`OrbitCamera::angstroms_per_pixel`].
     pub fn angstroms_per_pixel(&self, cols: usize, rows: usize, backend: TerminalBackend) -> f64 {
-        let (w, h) = framebuffer_size(cols, rows, backend);
-        self.camera.angstroms_per_pixel(w, h)
+        match viewport_pixels(cols, rows, backend) {
+            Ok((w, h)) => self.camera.angstroms_per_pixel(w, h),
+            Err(_) => f64::NAN,
+        }
     }
 
     /// A one-line caveat when the viewport cannot resolve what the structure contains, or
@@ -350,18 +352,48 @@ impl StructureRenderData {
     }
 }
 
-/// Framebuffer pixels behind one terminal cell, per backend: half-block packs 1×2 per cell,
-/// Braille 2×4, and the kitty protocol blits true pixels.
-pub(crate) fn framebuffer_size(
+/// Largest viewport side accepted, in terminal cells. Well past any real terminal.
+pub const MAX_VIEWPORT_CELLS: usize = 4096;
+
+/// Largest framebuffer accepted, in pixels (2²⁵: a 4096 × 4096-cell half-block frame). At 7
+/// bytes a pixel (colour and depth) that is ~235 MB; a true-pixel backend reaches it at a far
+/// smaller cell count, since each cell is 8 × 16 pixels.
+pub const MAX_FRAMEBUFFER_PIXELS: usize = 1 << 25;
+
+/// Framebuffer pixels behind a `cols` × `rows`-cell viewport on `backend`, or an error when
+/// the viewport is empty or too large to allocate. Half-block packs 1×2 pixels per cell,
+/// Braille 2×4, and kitty/Sixel blit true pixels (8×16 per cell).
+///
+/// Without this a `--width 100000 --height 100000` aborted the process on allocation, and a
+/// width near `usize::MAX / 8` overflowed to an empty kitty image printed with exit status 0.
+pub fn viewport_pixels(
     cols: usize,
     rows: usize,
     backend: TerminalBackend,
-) -> (usize, usize) {
-    match backend {
-        TerminalBackend::HalfBlock => (cols, rows * 2),
-        TerminalBackend::Braille => (cols * 2, rows * 4),
+) -> Result<(usize, usize), RenderError> {
+    if cols == 0 || rows == 0 {
+        return Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells is empty; width and height must be at least 1"
+        )));
+    }
+    if cols > MAX_VIEWPORT_CELLS || rows > MAX_VIEWPORT_CELLS {
+        return Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells exceeds the maximum of {MAX_VIEWPORT_CELLS} per side"
+        )));
+    }
+    let (px_w, px_h) = match backend {
+        TerminalBackend::HalfBlock => (1, 2),
+        TerminalBackend::Braille => (2, 4),
         // Sixel and kitty both blit true pixels, so both get a full cell's worth.
-        TerminalBackend::Kitty | TerminalBackend::Sixel => (cols * 8, rows * 16),
+        TerminalBackend::Kitty | TerminalBackend::Sixel => (8, 16),
+    };
+    let (w, h) = (cols * px_w, rows * px_h);
+    match w.checked_mul(h) {
+        Some(n) if n <= MAX_FRAMEBUFFER_PIXELS => Ok((w, h)),
+        _ => Err(RenderError::InvalidViewport(format!(
+            "{cols}×{rows} cells is {w}×{h} pixels on this backend, over the \
+             {MAX_FRAMEBUFFER_PIXELS}-pixel limit; use a smaller --width/--height"
+        ))),
     }
 }
 
@@ -386,7 +418,7 @@ pub fn render_structure_snapshot(
     scheme: ColorScheme,
 ) -> Result<String, RenderError> {
     // Pixel dimensions based on backend
-    let (px_width, px_height) = framebuffer_size(width, height, backend);
+    let (px_width, px_height) = viewport_pixels(width, height, backend)?;
     let mut fb = Framebuffer::new(px_width, px_height);
     fb.clear(ColorRGB::BLACK);
 
@@ -514,13 +546,8 @@ pub fn render_superposition_snapshot(
     height: usize,
     backend: TerminalBackend,
 ) -> Result<(String, f64), RenderError> {
+    let (px_width, px_height) = viewport_pixels(width, height, backend)?;
     let data = prepare_superposition_for_rendering(target_pdb, reference_pdb)?;
-
-    let (px_width, px_height) = match backend {
-        TerminalBackend::HalfBlock => (width, height * 2),
-        TerminalBackend::Braille => (width * 2, height * 4),
-        TerminalBackend::Kitty | TerminalBackend::Sixel => (width * 8, height * 16),
-    };
 
     let mut fb = Framebuffer::new(px_width, px_height);
     fb.clear(ColorRGB::BLACK);
@@ -885,6 +912,40 @@ mod tests {
             !data.ribbon_mesh.vertices.is_empty(),
             "fallback did not produce a ribbon"
         );
+    }
+
+    /// A viewport too large to allocate, or empty, is refused with an error rather than
+    /// aborting on allocation, overflowing, or printing nothing with success.
+    #[test]
+    fn oversized_or_empty_viewports_are_refused() {
+        use TerminalBackend::*;
+        let data = parse_pdb_structure(CRAMBIN_PDB).unwrap();
+        let scheme = ColorScheme::SecondaryStructure;
+        for (w, h, backend) in [
+            (100_000, 100_000, HalfBlock),
+            (100_000, 100_000, Kitty),
+            (usize::MAX / 8 + 1, 1, Kitty), // w * 8 wraps to 0
+            (usize::MAX, usize::MAX, Braille),
+            (0, 10, Kitty),
+            (10, 0, HalfBlock),
+            (MAX_VIEWPORT_CELLS + 1, 10, HalfBlock),
+            (MAX_VIEWPORT_CELLS, MAX_VIEWPORT_CELLS, Sixel), // within cells, over pixels
+        ] {
+            let err = render_structure_snapshot(&data, w, h, backend, scheme)
+                .expect_err(&format!("{w}x{h} {backend:?} was accepted"));
+            assert!(
+                matches!(err, RenderError::InvalidViewport(_)),
+                "{w}x{h} {backend:?}: {err}"
+            );
+            let err = render_superposition_snapshot(CRAMBIN_PDB, CRAMBIN_PDB, w, h, backend)
+                .expect_err(&format!("superposition {w}x{h} {backend:?} was accepted"));
+            assert!(matches!(err, RenderError::InvalidViewport(_)), "{err}");
+            // The resolution advice must not panic on the same input either.
+            assert!(data.resolution_note(w, h, backend).is_none());
+        }
+        // The limits themselves are usable.
+        assert!(render_structure_snapshot(&data, MAX_VIEWPORT_CELLS, 2, HalfBlock, scheme).is_ok());
+        assert!(viewport_pixels(MAX_VIEWPORT_CELLS, MAX_VIEWPORT_CELLS, HalfBlock).is_ok());
     }
 
     #[test]

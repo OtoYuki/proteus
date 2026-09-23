@@ -40,8 +40,13 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
+    /// # Panics
+    /// If `width * height` overflows `usize`; callers taking sizes from users validate them
+    /// first (see `proteus_render::viewport_pixels`).
     pub fn new(width: usize, height: usize) -> Self {
-        let size = width * height;
+        let size = width
+            .checked_mul(height)
+            .expect("framebuffer dimensions overflow usize");
         Self {
             width,
             height,
@@ -54,7 +59,9 @@ impl Framebuffer {
         if self.width != width || self.height != height {
             self.width = width;
             self.height = height;
-            let size = width * height;
+            let size = width
+                .checked_mul(height)
+                .expect("framebuffer dimensions overflow usize");
             self.colors.resize(size, ColorRGB::BLACK);
             self.depths.resize(size, f32::INFINITY);
         }

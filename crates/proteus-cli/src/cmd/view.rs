@@ -29,12 +29,12 @@ pub struct Args {
     #[arg(short, long, value_enum)]
     color: Option<CliColorScheme>,
 
-    /// Terminal viewport width (defaults to terminal width or 80)
-    #[arg(long)]
+    /// Terminal viewport width in cells, 1–4096 (defaults to terminal width or 80)
+    #[arg(long, value_parser = viewport_cells())]
     width: Option<usize>,
 
-    /// Terminal viewport height (defaults to terminal height or 30)
-    #[arg(long)]
+    /// Terminal viewport height in cells, 1–4096 (defaults to terminal height or 30)
+    #[arg(long, value_parser = viewport_cells())]
     height: Option<usize>,
 
     /// Open the structure in a browser: a self-contained 3Dmol.js page, no network needed
@@ -44,6 +44,12 @@ pub struct Args {
     /// Write that self-contained 3Dmol.js page (with our DSSP assignment) to a file
     #[arg(long)]
     html: Option<PathBuf>,
+}
+
+/// `--width`/`--height`: a cell count the renderer can allocate a framebuffer for.
+fn viewport_cells() -> clap::builder::RangedU64ValueParser<usize> {
+    clap::builder::RangedU64ValueParser::<usize>::new()
+        .range(1..=proteus_render::MAX_VIEWPORT_CELLS as u64)
 }
 
 pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
@@ -388,6 +394,23 @@ mod tests {
             color_of(&["proteus", "view", "x.pdb", "--color", "rainbow"]),
             Some(CliColorScheme::Rainbow)
         );
+    }
+
+    /// A viewport the renderer cannot allocate is refused at the argument parser, with the
+    /// limit in the message, instead of aborting (100000×100000) or printing nothing (0).
+    #[test]
+    fn viewport_size_is_bounded() {
+        let parse = |w: &str| Cli::try_parse_from(["proteus", "view", "x.pdb", "--width", w]);
+        for bad in ["0", "4097", "100000", "18446744073709551615"] {
+            let Err(err) = parse(bad) else {
+                panic!("--width {bad} was accepted")
+            };
+            let err = err.to_string();
+            assert!(err.contains("--width"), "{bad}: {err}");
+        }
+        assert!(parse("1").is_ok());
+        assert!(parse("4096").is_ok());
+        assert!(Cli::try_parse_from(["proteus", "view", "x.pdb", "--height", "5000"]).is_err());
     }
 
     /// SIGTERM while the viewer runs must reach the viewer as a stop request (it then restores
