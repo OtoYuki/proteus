@@ -387,9 +387,9 @@ pub async fn get_prediction_pdb(
     }
 }
 
-/// 3Dmol.js page for a job's prediction. The prediction file is inspected so that the viewer is
-/// told the right format and coloured by confidence on the file's own scale; a job without a
-/// prediction is a 404 rather than an empty viewer.
+/// Browser viewer page for a job's prediction, drawn by `proteus_render::web` from the same
+/// ribbon, DSSP and measurements as the terminal viewer, and coloured by pLDDT only when the file
+/// really is a prediction. A job without a prediction is a 404 rather than an empty viewer.
 pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uuid>) -> Response {
     let pred = match state.scheduler.repo().get_prediction_by_job(job_id).await {
         Ok(Some(p)) => p,
@@ -402,37 +402,6 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 .into_response()
         }
     };
-    let loaded = match proteus_core::io::load_structure(std::path::Path::new(&pred.pdb_path)) {
-        Ok(l) => l,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to read prediction artifact: {e}"),
-            )
-                .into_response()
-        }
-    };
-    let analysis = proteus_core::metrics::analyze_pdb_detailed_with_header(
-        &loaded.pdb,
-        None,
-        Some(&loaded.header_preview),
-    );
-    // Raw B-factor scale of the file: 0-1 (ESMFold API) or 0-100.
-    let max_b = loaded
-        .pdb
-        .atoms()
-        .map(|a| a.b_factor())
-        .fold(f64::MIN, f64::max);
-    let plddt_scale = if max_b > 0.0 && max_b <= 1.0 {
-        100.0
-    } else {
-        1.0
-    };
-    let color = proteus_core::webview::WebColorScheme::from_provenance(
-        analysis.as_ref().ok().map(|a| a.metrics.confidence_source),
-        plddt_scale,
-    );
-    let secondary_structure = proteus_core::webview::dssp_by_residue(&loaded.pdb);
 
     let engine = proteus_engine::engine_name(pred.metadata.as_ref());
     let caption = if engine == proteus_engine::ENGINE_SIMULATED {
@@ -446,9 +415,9 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
         format!("job {job_id} — engine: {engine}")
     };
 
-    // The structure is embedded rather than fetched by the page: a second request would carry
-    // no Authorization header and be refused behind --auth-token, and the page must also open
-    // from disk with no server at all.
+    // Everything is embedded rather than fetched by the page: a second request would carry no
+    // Authorization header and be refused behind --auth-token, and the page must also open from
+    // disk with no server at all.
     let text = match proteus_core::io::read_structure_text(std::path::Path::new(&pred.pdb_path)) {
         Ok(t) => t,
         Err(e) => {
@@ -459,14 +428,36 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 .into_response()
         }
     };
-    let html = proteus_core::webview::WebViewPage {
-        title: "Proteus structure viewer",
-        caption: &caption,
-        structure: &text,
-        format: loaded.format,
-        color,
-        secondary_structure: &secondary_structure,
-    }
-    .render();
+    // Building the mesh is CPU work (0.7 s for a 2 900-residue spike); keep it off the runtime.
+    let rendered = tokio::task::spawn_blocking(move || {
+        proteus_render::parse_pdb_structure(&text).map(|structure| {
+            let scheme = structure.default_color_scheme();
+            proteus_render::web::WebPage {
+                title: "Proteus structure viewer",
+                caption: &caption,
+                structure: &structure,
+                scheme,
+            }
+            .render()
+        })
+    })
+    .await;
+    let html = match rendered {
+        Ok(Ok(html)) => html,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to build the viewer for this prediction: {e}"),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Viewer task failed: {e}"),
+            )
+                .into_response()
+        }
+    };
     axum::response::Html(html).into_response()
 }

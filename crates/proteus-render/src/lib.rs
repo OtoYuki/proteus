@@ -3,6 +3,7 @@ pub mod geometry;
 pub mod rasterizer;
 pub mod terminal;
 pub mod tui;
+pub mod web;
 
 use error::RenderError;
 use geometry::mesh::{generate_cartoon_mesh, TriangleMesh};
@@ -43,6 +44,20 @@ pub struct StructureRenderData {
         Option<f64>,
         proteus_core::structure::RamachandranRegion,
     )>,
+    /// Per residue of the ribbon, in mesh `residue_index` order: chain ID, residue number,
+    /// insertion code and three-letter name. What the browser viewer's hover shows.
+    pub residue_labels: Vec<ResidueLabel>,
+    /// Eight-state DSSP string, one character per residue of the ribbon.
+    pub dssp: String,
+}
+
+/// Identity of one residue of the ribbon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResidueLabel {
+    pub chain: String,
+    pub number: isize,
+    pub insertion_code: Option<String>,
+    pub name: String,
 }
 
 /// Detect disulfide bonds by checking CYS sulfur-sulfur proximity (1.7Å - 2.6Å).
@@ -295,7 +310,20 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         (None, plddts.clone(), Vec::new())
     };
 
+    let residue_labels = trace
+        .ids
+        .iter()
+        .zip(&trace.names)
+        .map(|((chain, number, icode), name)| ResidueLabel {
+            chain: chain.clone(),
+            number: *number,
+            insertion_code: icode.clone(),
+            name: name.clone(),
+        })
+        .collect();
     Ok(StructureRenderData {
+        residue_labels,
+        dssp: ss_summary.dssp.clone(),
         ribbon_mesh,
         disulfide_mesh,
         camera,

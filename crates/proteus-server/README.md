@@ -2,7 +2,7 @@
 
 The `proteusd` HTTP daemon of [Proteus](https://github.com/OtoYuki/proteus), on axum: a GA4GH
 TES 1.1 server (`/v1/tasks`, `/ga4gh/tes/v1/…`; passes the ELIXIR compliance suite), the native
-job API (`/api/v1/…`) with Server-Sent Events per job, a self-contained 3Dmol.js page per prediction (`/view/{job}`),
+job API (`/api/v1/…`) with Server-Sent Events per job, a self-contained WebGL2 viewer page per prediction (`/view/{job}`),
 Prometheus `/metrics`, `/health`, and Swagger UI at `/swagger-ui`. Optional bearer-token auth
 covers everything except `/health`, `/metrics` and the Swagger UI.
 

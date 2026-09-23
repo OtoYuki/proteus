@@ -13,6 +13,7 @@ shipped code differs from a document, the table below says so — the code, `CHA
 | [2026-09-21 SP1 scientific correctness](2026-09-21-sp1-scientific-correctness-design.md) | implemented | Everything in §3 landed (`proteus-dssp`, Top8000 grids, pLDDT provenance, `validate/`); the P-SEA label is gone. |
 | [2026-09-21 SP3 TES execution](2026-09-21-sp3-tes-execution-and-ecosystem-design.md) | implemented, with substitutions | No `--i-know-what-i-am-doing` escape hatch: `--executor host` is simply refused off loopback. `--task-timeout` became `--executor-timeout`. Nextflow gets no CI smoke test (Java on the runner was not worth it; the WDL job covers the same server path). |
 | [2026-09-21 SP4 ESM-2 scoring](2026-09-21-sp4-esm2-fitness-scoring-design.md) | implemented | Library scoring caches the wild-type forward pass (`MarginalScorer`, 2026-09-22). |
+| [2026-09-23 WebGL viewer](2026-09-23-webgl-viewer-design.md) | implemented | Faces are flipped toward the viewer by the view-space normal, not `gl_FrontFacing` (the document says why). |
 
 [2026-09-22 dependency choices](2026-09-22-dependency-choices.md) records where the popular
 answer was the wrong one for a binary that has to run offline, and what replaced it.

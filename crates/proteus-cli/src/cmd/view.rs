@@ -40,11 +40,12 @@ pub struct Args {
     #[arg(long, value_parser = viewport_cells())]
     height: Option<usize>,
 
-    /// Open the structure in a browser: a self-contained 3Dmol.js page, no network needed
+    /// Open the structure in a browser: a self-contained WebGL2 page drawn by Proteus from the
+    /// same ribbon, DSSP and measurements as the terminal viewer; no network needed
     #[arg(long)]
     web: bool,
 
-    /// Write that self-contained 3Dmol.js page (with our DSSP assignment) to a file
+    /// Write that self-contained page to a file instead of opening it
     #[arg(long)]
     html: Option<PathBuf>,
 }
@@ -122,36 +123,16 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     };
 
     if web || html.is_some() {
-        let format = proteus_core::io::sniff_format(
-            &pdb_content,
-            target_path.file_name().and_then(|n| n.to_str()),
-        );
-        let (color, secondary_structure) =
-            match proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None) {
-                Ok(pdb) => {
-                    let scale = proteus_render::parse_pdb_structure(&pdb_content)
-                        .map(|sd| sd.plddt_scale)
-                        .unwrap_or(1.0);
-                    let source = proteus_core::metrics::analyze_pdb_detailed(&pdb, None)
-                        .ok()
-                        .map(|a| a.metrics.confidence_source);
-                    (
-                        proteus_core::webview::WebColorScheme::from_provenance(source, scale),
-                        proteus_core::webview::dssp_by_residue(&pdb),
-                    )
-                }
-                Err(_) => (
-                    proteus_core::webview::WebColorScheme::SecondaryStructure,
-                    Vec::new(),
-                ),
-            };
-        let html_content = proteus_core::webview::WebViewPage {
+        let structure = proteus_render::parse_pdb_structure(&pdb_content)
+            .context("Failed to parse structure for the browser viewer")?;
+        let scheme = color
+            .map(Into::into)
+            .unwrap_or_else(|| structure.default_color_scheme());
+        let html_content = proteus_render::web::WebPage {
             title: "Proteus structure viewer",
             caption: &title,
-            structure: &pdb_content,
-            format,
-            color,
-            secondary_structure: &secondary_structure,
+            structure: &structure,
+            scheme,
         }
         .render();
 

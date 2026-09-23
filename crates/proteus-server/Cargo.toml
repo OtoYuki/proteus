@@ -12,6 +12,7 @@ description = "Headless Axum daemon (proteusd) with Server-Sent Events and OpenA
 proteus-core = { workspace = true, features = ["openapi"] }
 proteus-storage = { workspace = true }
 proteus-engine = { workspace = true }
+proteus-render = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
