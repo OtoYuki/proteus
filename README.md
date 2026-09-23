@@ -44,7 +44,35 @@ tier you asked for and why it could not honour it. Every export row carries the 
 the Parquet file is tagged `proteus.schema_version = 4` and reads directly into DuckDB, Polars
 or PyArrow.
 
-## 2. Look at it, over SSH
+## 2. Triage a folder of predicted models
+
+```bash
+proteus analyze models/ --export qc.parquet          # every .pdb/.cif(.gz) below models/
+proteus analyze designs/*.cif --reference target.pdb --json | jq .rmsd_to_reference
+```
+
+A folding or design campaign ends with a directory of hundreds or thousands of models and the
+question of which ones are worth looking at. `analyze` over a directory gives one row per
+structure — sequence, chain and residue counts, pLDDT (only when the file really carries one),
+DSSP composition and string, MolProbity-contour Ramachandran, SASA and burial, heavy-atom
+overlaps, the interaction network, Rg against the folded-protein law, optional Kabsch RMSD to a
+reference, and the triage score — computed in parallel and written as Parquet, CSV or JSON.
+
+```sql
+-- duckdb
+SELECT model, plddt_mean, rama_outliers, rg_ratio
+FROM 'qc.parquet'
+WHERE plddt_mean > 80 AND rama_outliers = 0 AND rg_ratio < 1.3
+ORDER BY fitness DESC;
+```
+
+A file that cannot be read is named on stderr and makes the exit status non-zero, but does not
+stop the rest. pLDDT is read from the B-factor column and rescaled when a predictor wrote it on
+0–1 (ESMFold); on three AlphaFold DB models the per-structure mean matches the database's own
+`globalMetricValue` to 0.01. 1 000 models of 76–142 residues take about 44 s on one core and
+7 s on 16 threads (i7-11800H laptop, 8 cores; `-j` sets the thread count).
+
+## 3. Look at it, over SSH
 
 ![the interactive terminal viewer with a live Ramachandran plot and biophysical telemetry](docs/media/view.gif)
 
@@ -82,7 +110,7 @@ and its encoder is round-tripped through libsixel's own decoder in CI rather tha
 Keys: arrows or `hjkl` orbit, `+`/`-` zoom, `Space` spin, `Tab` dashboard, `c` colour scheme,
 `o` SSAO and outlines, `d` disulfides, `r` reset camera, `q` quit.
 
-## 3. Check every number against someone else's implementation
+## 4. Check every number against someone else's implementation
 
 ![make validate comparing 53 structures against mdtraj, FreeSASA, cctbx and PLIP](docs/media/validate.gif)
 
@@ -115,7 +143,7 @@ stacking over-reported 5× for want of a lateral-offset test. Growing the corpus
 comparison harness itself silently collapsing insertion codes, so residues 52 and 52A were being
 compared as one.
 
-## 4. Drive it from a workflow engine
+## 5. Drive it from a workflow engine
 
 ![Nextflow running a scatter-gather pipeline against the Proteus TES server](docs/media/tes.gif)
 
@@ -299,14 +327,21 @@ proteus view structure.pdb --interactive --dashboard
 proteus view structure.pdb --backend halfblock --color ss --width 80 --height 36
 proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
-proteus view structure.pdb --html out.html        # a self-contained Mol* page, offline
+proteus view structure.pdb --html out.html        # a self-contained 3Dmol.js page, works offline
 ```
 
-### `proteus analyze` — one structure, every metric
+### `proteus analyze` — one structure in full, or a table over many
 
 ```bash
-proteus analyze --pdb structure.pdb
+proteus analyze structure.pdb                          # the full report, below
+proteus analyze models/ --export qc.parquet            # one row per file: .parquet, .csv, .json
+proteus analyze a.pdb b.cif.gz --json                  # JSON Lines on stdout
+proteus analyze models/ --reference wt.pdb -j 8 --top 50
 ```
+
+Directories are searched recursively for `.pdb`, `.ent`, `.cif` and `.mmcif`, each optionally
+gzipped. `--confidence-source predicted|experimental` overrides the pLDDT-vs-B-factor detection.
+The Parquet file is tagged `proteus.qc_schema_version = 1`.
 
 1CRN (crambin). It is an X-ray structure, so no pLDDT is reported — the B-factor column is not
 a confidence and Proteus will not pretend it is:

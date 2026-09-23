@@ -17,7 +17,7 @@ pub(crate) mod prelude {
     pub(crate) use crate::esm_cmd;
     pub(crate) use crate::job_ref;
     pub use crate::report::print_job_inspection;
-    pub use anyhow::{Context, Result};
+    pub use anyhow::{bail, Context, Result};
     pub use comfy_table::presets::UTF8_FULL;
     pub use comfy_table::{Cell, Table};
     pub use indicatif::{ProgressBar, ProgressStyle};

@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`proteus analyze` takes many structures.** Files and directories (searched recursively
+  for `.pdb`, `.ent`, `.cif`, `.mmcif`, optionally gzipped) are analysed in parallel (`-j`) into
+  one row per structure: file, model, chain and residue counts, one-letter sequence, confidence
+  source, pLDDT statistics (null for experimental structures), Rg with the folded-protein
+  expectation and their ratio, DSSP fractions and string, Ramachandran, SASA, heavy-atom
+  overlaps, interaction counts, optional RMSD to `--reference`, and the triage score.
+  `--export` writes `.parquet` (tagged `proteus.qc_schema_version = 1`), `.csv` or `.json`;
+  `--json` prints JSON Lines. An unreadable file is reported and makes the exit status
+  non-zero without stopping the others. One file with neither flag still prints the full
+  report; `--pdb` still works.
+
+### Fixed
+- `view --html` and `--web` were described as a Mol\* page in `--help`, the README and the
+  smoke test; the page has been 3Dmol.js since 0.5.0. The smoke assertion had kept passing
+  only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now checks
+  for the page's own viewer call.
+
 ### Changed
 - **Positioning corrected against a proper landscape search.** Three "only in Rust" claims were
   wrong, and are now stated accurately with the neighbours named and linked in the README:

@@ -49,6 +49,23 @@ expect "salt bridge ARG17-GLU23" 'ARG17:NH2-GLU23:OE2'
 check "analyze cif" "$BIN" analyze --pdb "$CIF"
 expect "mmCIF gives the same Rg" 'Radius of Gyration.*9\.676'
 
+# --- analyze, many structures: a directory becomes one row per file, in every export format
+mkdir -p "$WORK/models/sub"
+cp "$PDB" "$WORK/models/a.pdb"; cp "$CIF" "$WORK/models/sub/b.cif"; cp "$FASTA" "$WORK/models/notes.fasta"
+gzip -c "$PDB" >"$WORK/models/c.pdb.gz"
+check "analyze a directory → parquet" "$BIN" analyze "$WORK/models" --export "$WORK/qc.parquet"
+expect "three structures, the FASTA skipped" '3 of 3 structures analysed'
+check "qc parquet written" test -s "$WORK/qc.parquet"
+check "analyze → csv" "$BIN" analyze "$WORK/models" --export "$WORK/qc.csv"
+check "csv has a header and three rows" test "$(wc -l <"$WORK/qc.csv")" -eq 4
+check "csv header" grep -q '^file,model,n_chains,n_residues,sequence,' "$WORK/qc.csv"
+check "analyze --json" bash -c "'$BIN' analyze '$WORK/models/a.pdb' --json 2>/dev/null"
+expect "json line carries the crambin sequence" '"sequence":"TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN"'
+expect "json: no pLDDT for an X-ray structure" '"plddt_mean":null'
+check "a bad file fails the run but not the others" bash -c "! '$BIN' analyze '$WORK/models' '$FASTA' --export '$WORK/qc2.json' 2>'$WORK/err'"
+check "…and the good rows are still written" grep -q '"model": "a"' "$WORK/qc2.json"
+check "…and the failure is named" grep -q 'failed: .*1crn.fasta' "$WORK/err"
+
 # --- mutate → screen pipeline, exports in every format, simulated runner is labelled
 check "mutate alanine scan" "$BIN" mutate "$FASTA" --mode alanine --start 1 --end 5 --output "$WORK/lib.fasta"
 check "library has WT + 5 variants" test "$(grep -c '^>' "$WORK/lib.fasta")" -eq 6
@@ -75,7 +92,7 @@ check "inspect by short id" "$BIN" inspect "${JOB:0:8}"
 check "unknown short id is refused" bash -c "! '$BIN' status deadbeef 2>/dev/null"
 check "too-short prefix is refused" bash -c "! '$BIN' status ab 2>/dev/null"
 
-# --- viewers: every backend draws something; HTML export is a Mol* page
+# --- viewers: every backend draws something; HTML export is a self-contained 3Dmol.js page
 for backend in halfblock braille sixel kitty; do
     check "view --backend $backend" "$BIN" view "$PDB" --backend "$backend" --width 80 --height 24
     check "  frame is not blank ($backend)" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
@@ -88,7 +105,7 @@ if command -v sixel2png >/dev/null; then
 fi
 check "view --compare" "$BIN" view "$PDB" --compare "$CIF" --backend halfblock --width 80 --height 24
 check "view --html" "$BIN" view "$PDB" --html "$WORK/view.html"
-check "html embeds Mol*" grep -q 'molstar' "$WORK/view.html"
+check "html embeds 3Dmol.js" grep -q "\$3Dmol\.createViewer" "$WORK/view.html"
 check "view a job (C-alpha-only simulated model)" "$BIN" view "$JOB" --backend halfblock --width 80 --height 24
 check "  frame is not blank" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
 

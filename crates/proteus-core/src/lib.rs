@@ -9,6 +9,7 @@ pub mod io;
 pub mod metrics;
 pub mod models;
 pub mod mutagenesis;
+pub mod qc;
 pub mod rama8000;
 pub mod ranking;
 pub mod sasa;
