@@ -80,7 +80,7 @@ on 16 (i7-11800H laptop, 8 cores; `-j` sets the thread count).
 ```bash
 proteus view <job> --interactive --dashboard        # or a .pdb / .cif / .cif.gz path
 proteus view structure.pdb --backend sixel          # a still, for a CI log
-proteus view mutant.pdb --compare wildtype.pdb      # superposed, with Kabsch RMSD
+proteus view mutant.pdb --compare wildtype.pdb      # superposed; Kabsch RMSD over shared residues
 ```
 
 A software rasteriser, a cartoon ribbon and a telemetry dashboard, in the terminal. No X11
@@ -340,6 +340,10 @@ proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
 proteus view structure.pdb --html out.html        # a self-contained 3Dmol.js page, works offline
 ```
+
+`--compare` pairs residues by chain ID, residue number and insertion code, superposes only the
+ones both structures have, and reports how many that was; the RMSD is printed in yellow with a
+warning when the sequences differ.
 
 ### `proteus analyze` — one structure in full, or a table over many
 
