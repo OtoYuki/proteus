@@ -45,7 +45,8 @@ pub struct MutagenesisConfig {
     pub window_start: Option<usize>,
     /// Optional 1-indexed end position (inclusive). Defaults to sequence length.
     pub window_end: Option<usize>,
-    /// Optional upper bound limit on total generated variants.
+    /// Optional upper bound on the number of mutants generated. The wild type, when
+    /// included, does not count against it.
     pub max_variants: Option<usize>,
     /// Whether to include the unmutated wildtype scaffold as candidate #0.
     pub include_wildtype: bool,
@@ -120,6 +121,11 @@ pub fn generate_mutant_library(
         });
     }
 
+    // `max_variants` counts mutants only; the wild type sits in front of them.
+    let cap = config
+        .max_variants
+        .map(|limit| limit + usize::from(config.include_wildtype));
+
     // Zero-indexed bounds [start - 1, end - 1]
     let zero_start = start - 1;
     let zero_end = end - 1;
@@ -146,10 +152,8 @@ pub fn generate_mutant_library(
                     created_at: Utc::now(),
                 });
 
-                if let Some(limit) = config.max_variants {
-                    if library.len() >= limit {
-                        break;
-                    }
+                if cap.is_some_and(|c| library.len() >= c) {
+                    break;
                 }
             }
             MutagenesisMode::Saturation => {
@@ -173,22 +177,23 @@ pub fn generate_mutant_library(
                         created_at: Utc::now(),
                     });
 
-                    if let Some(limit) = config.max_variants {
-                        if library.len() >= limit {
-                            return Ok(library);
-                        }
+                    if cap.is_some_and(|c| library.len() >= c) {
+                        break;
                     }
                 }
             }
         }
 
-        if let Some(limit) = config.max_variants {
-            if library.len() >= limit {
-                break;
-            }
+        if cap.is_some_and(|c| library.len() >= c) {
+            break;
         }
     }
 
+    // The checks above run after a push; a cap of 0 (or one hit mid-position) is enforced
+    // here.
+    if let Some(c) = cap {
+        library.truncate(c);
+    }
     Ok(library)
 }
 
@@ -285,5 +290,26 @@ mod tests {
 
         let library = generate_mutant_library(&scaffold, &config).unwrap();
         assert_eq!(library.len(), 5);
+    }
+    #[test]
+    fn max_variants_counts_mutants_and_is_exact() {
+        // Reported: `max_variants = 0` still returned 1-2 sequences, and 1 with the wild type
+        // included returned 2.
+        let scaffold = sample_scaffold();
+        for (limit, wt, expected) in [(0, false, 0), (0, true, 1), (1, true, 2), (3, false, 3)] {
+            for mode in [
+                MutagenesisMode::AlanineScanning,
+                MutagenesisMode::Saturation,
+            ] {
+                let config = MutagenesisConfig {
+                    mode,
+                    max_variants: Some(limit),
+                    include_wildtype: wt,
+                    ..Default::default()
+                };
+                let lib = generate_mutant_library(&scaffold, &config).unwrap();
+                assert_eq!(lib.len(), expected, "{mode:?} limit {limit} wt {wt}");
+            }
+        }
     }
 }

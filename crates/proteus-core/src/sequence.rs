@@ -9,7 +9,14 @@ pub const STANDARD_AMINO_ACIDS: &[char] = &[
 ];
 
 pub fn validate_and_parse_fasta(content: &str) -> Result<Sequence, CoreError> {
-    let normalized = content.replace("\\n", "\n");
+    // Single-line input with literal `\n` separators (a sequence pasted through a shell or a
+    // JSON field) is unescaped; a real multi-line file is taken as it is, so a header such as
+    // `>C:\new\seqs` keeps its backslashes.
+    let normalized = if content.contains('\n') {
+        content.to_string()
+    } else {
+        content.replace("\\n", "\n")
+    };
     let trimmed = normalized.trim();
     if trimmed.is_empty() {
         return Err(CoreError::InvalidFasta("Empty FASTA content".into()));
@@ -56,7 +63,9 @@ pub fn validate_and_parse_fasta(content: &str) -> Result<Sequence, CoreError> {
         return Err(CoreError::InvalidFasta("Empty sequence".into()));
     }
 
-    let upper = sequence_str.to_uppercase();
+    // ASCII-only upper-casing: `to_uppercase` maps `ß` to `SS` and dotless `ı` to `I`, which
+    // would let non-amino-acid letters through as valid residues.
+    let upper = sequence_str.to_ascii_uppercase();
     for c in upper.chars() {
         if !STANDARD_AMINO_ACIDS.contains(&c) {
             return Err(CoreError::InvalidFasta(format!(
@@ -242,5 +251,20 @@ FVNQHLCGSHLVEALYLVCGERGFFYTPKT
         let parsed_again = validate_and_parse_multi_fasta(&formatted).expect("Should roundtrip");
         assert_eq!(parsed_again.len(), 3);
         assert_eq!(parsed_again[0].fasta, seqs[0].fasta);
+    }
+    #[test]
+    fn letters_that_upper_case_into_amino_acids_are_still_rejected() {
+        // Reported: `MKTıLLß` (7 characters) validated as `MKTILLSS` (8 residues).
+        assert!(validate_and_parse_fasta(">x\nMKTıLLß\n").is_err());
+    }
+
+    #[test]
+    fn backslashes_in_a_multi_line_header_are_kept() {
+        // Reported: `>C:\new\seqs` was split at the literal `\n` and the file rejected.
+        let s = validate_and_parse_fasta(">C:\\new\\seqs\nMKT\n").unwrap();
+        assert_eq!(s.header, "C:\\new\\seqs");
+        assert_eq!(s.fasta, "MKT");
+        // One-line input with literal separators still works.
+        assert_eq!(validate_and_parse_fasta(">x\\nMKT").unwrap().fasta, "MKT");
     }
 }

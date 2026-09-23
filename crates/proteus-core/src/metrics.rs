@@ -263,7 +263,12 @@ pub fn analyze_pdb_detailed_with_source(
     let mean_plddt = plddts.iter().sum::<f64>() / n_plddt;
     let mut sorted_plddt = plddts.clone();
     sorted_plddt.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median_plddt = sorted_plddt[sorted_plddt.len() / 2];
+    let mid = sorted_plddt.len() / 2;
+    let median_plddt = if sorted_plddt.len().is_multiple_of(2) {
+        (sorted_plddt[mid - 1] + sorted_plddt[mid]) / 2.0
+    } else {
+        sorted_plddt[mid]
+    };
 
     let high_conf = plddts.iter().filter(|&&v| v >= 70.0).count() as f64 / n_plddt;
     let very_high_conf = plddts.iter().filter(|&&v| v >= 90.0).count() as f64 / n_plddt;

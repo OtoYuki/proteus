@@ -314,6 +314,28 @@ mod tests {
     }
 
     #[test]
+    fn median_plddt_of_an_even_count_is_the_mean_of_the_middle_two() {
+        // Reported: B-factors 50/60/90/95 gave a median of 90, not 75.
+        let mut text = String::from("TITLE     ALPHAFOLD PREDICTION\n");
+        for (i, b) in [50.0, 60.0, 90.0, 95.0].iter().enumerate() {
+            text.push_str(&format!(
+                "ATOM  {:>5}  CA  GLY A{:>4}    {:>8.3}{:>8.3}{:>8.3}  1.00{:>6.2}           C\n",
+                i + 1,
+                i + 1,
+                3.8 * i as f64,
+                0.0,
+                0.0,
+                b
+            ));
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.pdb");
+        std::fs::write(&path, text).unwrap();
+        let qc = structure_qc(&path, None, None).unwrap();
+        assert_eq!(qc.plddt_median, Some(75.0));
+    }
+
+    #[test]
     fn chains_are_counted_and_separated_in_the_sequence() {
         let mut text = String::new();
         let mut serial = 1;
