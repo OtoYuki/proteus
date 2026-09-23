@@ -89,7 +89,10 @@ pub async fn run(
         pb.set_style(
             ProgressStyle::default_spinner()
                 .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-                .template("{spinner:.green} {msg}")?,
+                .template(&format!(
+                    "{{spinner:.{}}} {{msg}}",
+                    tint(proteus_render::brand::Role::Accent)
+                ))?,
         );
         pb.set_message("Executing bio-compute pipeline...");
         pb.enable_steady_tick(std::time::Duration::from_millis(80));

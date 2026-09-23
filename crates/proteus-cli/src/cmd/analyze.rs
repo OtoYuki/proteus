@@ -158,8 +158,12 @@ fn analyze_many(
         Mutex::new(vec![None; inputs.len()]);
     let bar = ProgressBar::new(inputs.len() as u64);
     bar.set_style(
-        ProgressStyle::with_template("{bar:40} {pos}/{len} structures  {elapsed} (eta {eta})")
-            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+        ProgressStyle::with_template(&format!(
+            "{{bar:40.{}/{}}} {{pos}}/{{len}} structures  {{elapsed}} (eta {{eta}})",
+            crate::cli::tint(proteus_render::brand::Role::Accent),
+            crate::cli::tint(proteus_render::brand::Role::Line)
+        ))
+        .unwrap_or_else(|_| ProgressStyle::default_bar()),
     );
     if inputs.len() < 2 {
         bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());

@@ -40,6 +40,11 @@ All notable changes to this project are documented here. The format follows
   - Ramachandran points with a shape per region.
   - A legend that names the AlphaFold colours, or says a B-factor is not a confidence.
   - Geist Mono and Figtree embedded (SIL OFL 1.1), so it looks the same offline.
+- Brand assets and CLI output:
+  - The README opens with the lockup (light and dark).
+  - A 1280 × 640 social card is in `docs/brand/`.
+  - Progress bars, spinners and the `--compare` summary use the brand colours at the terminal's
+    depth, and none under `NO_COLOR` or in a pipe.
 - The dashboard's pLDDT strip uses the AlphaFold colours. It had four colours of its own, so
   the strip and the ribbon beside it disagreed. Without colour, the strip shows the bands as
   shade density.
