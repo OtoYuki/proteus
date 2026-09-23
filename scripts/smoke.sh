@@ -120,6 +120,22 @@ check "  and nothing from the network" bash -c "! grep -qE 'https?://|src=' '$WO
 check "view a job (C-alpha-only simulated model)" "$BIN" view "$JOB" --backend halfblock --width 80 --height 24
 check "  frame is not blank" test "$(tr -d ' \n' <<<"$OUT" | wc -c)" -gt 0
 
+# A terminal that goes away (a closed window, a dropped SSH session) must end the interactive
+# viewer and the home screen, not leave them spinning at full CPU on a dead tty. Needs tmux.
+if command -v tmux >/dev/null; then
+    gone_after_hangup() { # gone_after_hangup <args...>  — run in a tmux pane, kill the pane
+        local sock="proteus-smoke-$$" pid
+        tmux -L "$sock" new-session -d -x 100 -y 30 "echo \$\$ > '$WORK/pane.pid'; exec '$BIN' $*"
+        sleep 2
+        pid="$(cat "$WORK/pane.pid")"
+        tmux -L "$sock" kill-server
+        for _ in $(seq 1 20); do kill -0 "$pid" 2>/dev/null || return 0; sleep 0.2; done
+        kill -9 "$pid" 2>/dev/null; return 1
+    }
+    check "view --interactive ends when its terminal closes" gone_after_hangup view "$PDB" --interactive
+    check "the home screen ends when its terminal closes" gone_after_hangup
+fi
+
 # --- daemon: health, TES service-info, native API, auth
 "$BIN" serve --port "$PORT" --executor host --runner simulated --auth-token smoke >"$WORK/serve.log" 2>&1 &
 DAEMON_PID=$!
