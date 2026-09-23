@@ -97,6 +97,9 @@ expect "short id resolves to the same job" "$JOB"
 check "inspect by short id" "$BIN" inspect "${JOB:0:8}"
 check "unknown short id is refused" bash -c "! '$BIN' status deadbeef 2>/dev/null"
 check "too-short prefix is refused" bash -c "! '$BIN' status ab 2>/dev/null"
+# Bare `proteus` opens the home screen only at a terminal; in a script it is still usage + exit 2.
+check "bare proteus outside a terminal prints usage" bash -c "'$BIN' </dev/null 2>&1 | grep -q 'Usage: proteus <COMMAND>'"
+check "  and exits 2" bash -c "'$BIN' </dev/null >/dev/null 2>&1; test \$? -eq 2"
 
 # --- viewers: every backend draws something; HTML export is our self-contained WebGL2 page
 for backend in halfblock braille sixel kitty; do

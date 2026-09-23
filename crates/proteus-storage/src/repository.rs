@@ -202,63 +202,39 @@ impl ProteusRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        if let Some(r) = row {
-            let job_id_str: String = r.get("id");
-            let seq_id_str: String = r.get("sequence_id");
-            let tier_str: String = r.get("tier");
-            let status_str: String = r.get("status");
-            let priority: i32 = r.get("priority");
-            let created_at_str: String = r.get("created_at");
-            let started_at_str: Option<String> = r.get("started_at");
-            let completed_at_str: Option<String> = r.get("completed_at");
-            let error_log: Option<String> = r.get("error_log");
+        row.as_ref().map(job_from_row).transpose()
+    }
 
-            let job_id =
-                Uuid::from_str(&job_id_str).map_err(|e| StorageError::NotFound(e.to_string()))?;
-            let sequence_id =
-                Uuid::from_str(&seq_id_str).map_err(|e| StorageError::NotFound(e.to_string()))?;
-            let tier = match tier_str.as_str() {
-                "FastScreening" => PipelineTier::FastScreening,
-                "HighFidelity" => PipelineTier::HighFidelity,
-                _ => PipelineTier::FullValidation,
-            };
-            let status = match status_str.as_str() {
-                "Pending" => JobStatus::Pending,
-                "Queued" => JobStatus::Queued,
-                "Running" => JobStatus::Running,
-                "Completed" => JobStatus::Completed,
-                "Failed" => JobStatus::Failed,
-                "Cancelled" => JobStatus::Cancelled,
-                _ => JobStatus::Pending,
-            };
-            let created_at = DateTime::parse_from_rfc3339(&created_at_str)
-                .map_err(|e| StorageError::NotFound(e.to_string()))?
-                .with_timezone(&Utc);
-            let started_at = started_at_str.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|t| t.with_timezone(&Utc))
-            });
-            let completed_at = completed_at_str.and_then(|s| {
-                DateTime::parse_from_rfc3339(&s)
-                    .ok()
-                    .map(|t| t.with_timezone(&Utc))
-            });
-
-            Ok(Some(PipelineJob {
-                id: job_id,
-                sequence_id,
-                tier,
-                status,
-                priority,
-                created_at,
-                started_at,
-                completed_at,
-                error_log,
-            }))
-        } else {
-            Ok(None)
-        }
+    /// The newest `limit` jobs, each with its sequence and the newest prediction if there is
+    /// one: what a list of one's own work needs, in one query.
+    pub async fn list_jobs(&self, limit: i64) -> Result<Vec<JobSummary>, StorageError> {
+        let rows = sqlx::query(
+            "SELECT j.id, j.sequence_id, j.tier, j.status, j.priority, j.created_at, \
+                    j.started_at, j.completed_at, j.error_log, \
+                    s.header, s.length, p.pdb_path, p.plddt, p.metadata \
+             FROM jobs j \
+             LEFT JOIN sequences s ON s.id = j.sequence_id \
+             LEFT JOIN predictions p ON p.rowid = \
+                 (SELECT rowid FROM predictions WHERE job_id = j.id ORDER BY rowid DESC LIMIT 1) \
+             ORDER BY j.created_at DESC, j.rowid DESC \
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let metadata: Option<String> = r.get("metadata");
+                Ok(JobSummary {
+                    job: job_from_row(r)?,
+                    header: r.get::<Option<String>, _>("header").unwrap_or_default(),
+                    length: r.get::<Option<i64>, _>("length").unwrap_or(0),
+                    pdb_path: r.get("pdb_path"),
+                    plddt: r.get("plddt"),
+                    metadata: metadata.and_then(|m| serde_json::from_str(&m).ok()),
+                })
+            })
+            .collect()
     }
 
     // Prediction methods
@@ -790,6 +766,69 @@ pub struct TesTaskRecord {
     pub updated_at: String,
 }
 
+/// One row of [`ProteusRepository::list_jobs`].
+#[derive(Debug, Clone)]
+pub struct JobSummary {
+    pub job: PipelineJob,
+    /// FASTA header of the job's sequence (empty if the sequence row is gone).
+    pub header: String,
+    pub length: i64,
+    /// Newest prediction's structure file, mean pLDDT and engine metadata, if it has one.
+    pub pdb_path: Option<String>,
+    pub plddt: Option<f64>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// A `jobs` row (columns as selected by `get_job` and `list_jobs`) as a [`PipelineJob`].
+fn job_from_row(r: &sqlx::sqlite::SqliteRow) -> Result<PipelineJob, StorageError> {
+    let job_id_str: String = r.get("id");
+    let seq_id_str: String = r.get("sequence_id");
+    let tier_str: String = r.get("tier");
+    let status_str: String = r.get("status");
+    let created_at_str: String = r.get("created_at");
+    let started_at_str: Option<String> = r.get("started_at");
+    let completed_at_str: Option<String> = r.get("completed_at");
+
+    let id = Uuid::from_str(&job_id_str).map_err(|e| StorageError::NotFound(e.to_string()))?;
+    let sequence_id =
+        Uuid::from_str(&seq_id_str).map_err(|e| StorageError::NotFound(e.to_string()))?;
+    let tier = match tier_str.as_str() {
+        "FastScreening" => PipelineTier::FastScreening,
+        "HighFidelity" => PipelineTier::HighFidelity,
+        _ => PipelineTier::FullValidation,
+    };
+    let status = match status_str.as_str() {
+        "Pending" => JobStatus::Pending,
+        "Queued" => JobStatus::Queued,
+        "Running" => JobStatus::Running,
+        "Completed" => JobStatus::Completed,
+        "Failed" => JobStatus::Failed,
+        "Cancelled" => JobStatus::Cancelled,
+        _ => JobStatus::Pending,
+    };
+    let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+        .map_err(|e| StorageError::NotFound(e.to_string()))?
+        .with_timezone(&Utc);
+    let parse = |s: Option<String>| {
+        s.and_then(|s| {
+            DateTime::parse_from_rfc3339(&s)
+                .ok()
+                .map(|t| t.with_timezone(&Utc))
+        })
+    };
+    Ok(PipelineJob {
+        id,
+        sequence_id,
+        tier,
+        status,
+        priority: r.get("priority"),
+        created_at,
+        started_at: parse(started_at_str),
+        completed_at: parse(completed_at_str),
+        error_log: r.get("error_log"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1013,6 +1052,64 @@ mod tests {
     }
 
     /// Two jobs sharing a first byte, so the prefix lookup has something to be ambiguous about.
+    #[tokio::test]
+    async fn job_listing_is_newest_first_with_sequence_and_prediction() {
+        let pool = create_in_memory_pool().await.unwrap();
+        let repo = ProteusRepository::new(pool);
+        let t0 = Utc::now() - chrono::Duration::hours(1);
+        let mut ids = Vec::new();
+        for (i, header) in ["first", "second", "third"].iter().enumerate() {
+            let seq = Sequence {
+                id: Uuid::new_v4(),
+                header: header.to_string(),
+                fasta: "ACDE".into(),
+                length: 4 + i,
+                created_at: t0,
+            };
+            repo.insert_sequence(&seq).await.unwrap();
+            let job = PipelineJob {
+                id: Uuid::new_v4(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status: JobStatus::Queued,
+                priority: 1,
+                created_at: t0 + chrono::Duration::minutes(i as i64),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            };
+            repo.insert_job(&job).await.unwrap();
+            ids.push(job.id);
+        }
+        // Two predictions for the second job: the listing shows the newer one, once.
+        for (path, plddt) in [("old.pdb", 50.0), ("new.pdb", 80.0)] {
+            repo.insert_prediction(&Prediction {
+                id: Uuid::new_v4(),
+                job_id: ids[1],
+                pdb_path: path.into(),
+                plddt: Some(plddt),
+                confidence_category: None,
+                metadata: Some(serde_json::json!({ "engine": "esmfold-api" })),
+            })
+            .await
+            .unwrap();
+        }
+
+        let all = repo.list_jobs(10).await.unwrap();
+        let order: Vec<_> = all.iter().map(|j| j.header.as_str()).collect();
+        assert_eq!(order, ["third", "second", "first"]);
+        assert_eq!(all[0].length, 6);
+        assert_eq!(all[1].pdb_path.as_deref(), Some("new.pdb"));
+        assert_eq!(all[1].plddt, Some(80.0));
+        assert_eq!(all[1].metadata.as_ref().unwrap()["engine"], "esmfold-api");
+        assert!(all[0].pdb_path.is_none() && all[2].plddt.is_none());
+        assert_eq!(all[2].job.id, ids[0]);
+
+        let two = repo.list_jobs(2).await.unwrap();
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].job.id, ids[2]);
+    }
+
     #[tokio::test]
     async fn job_id_prefix_lookup_distinguishes_unique_from_ambiguous() {
         let pool = create_in_memory_pool().await.unwrap();

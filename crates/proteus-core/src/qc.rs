@@ -230,6 +230,91 @@ pub fn structure_qc(
     })
 }
 
+/// One structure's measurements as labelled, formatted rows: what the browser page's panel and
+/// the terminal home screen show, from one function so the two cannot disagree.
+pub fn summary_rows(
+    m: &crate::models::BiophysicalMetrics,
+    num_residues: usize,
+) -> Vec<[String; 2]> {
+    let mut rows = Vec::new();
+    let rg0 = expected_folded_rg(num_residues.max(1));
+    rows.push([
+        "Radius of gyration".into(),
+        format!(
+            "{:.2} Å (×{:.2} of a compact fold)",
+            m.radius_of_gyration,
+            m.radius_of_gyration / rg0
+        ),
+    ]);
+    if let Some(p) = m.plddt() {
+        rows.push([
+            "pLDDT".into(),
+            format!(
+                "mean {:.1} · ≥70: {:.0} % · ≥90: {:.0} %",
+                p.mean,
+                p.high_confidence_fraction * 100.0,
+                p.very_high_confidence_fraction * 100.0
+            ),
+        ]);
+    }
+    if let Some(ss) = m.secondary_structure_summary.as_ref() {
+        rows.push([
+            "Secondary structure".into(),
+            format!(
+                "helix {:.0} % · strand {:.0} % · coil {:.0} %",
+                ss.helix_fraction * 100.0,
+                ss.strand_fraction * 100.0,
+                ss.coil_fraction * 100.0
+            ),
+        ]);
+    }
+    if let Some(r) = m.ramachandran_stats.as_ref() {
+        rows.push([
+            "Ramachandran".into(),
+            format!(
+                "favoured {:.1} % · outliers {}",
+                r.favored_fraction * 100.0,
+                r.outlier_count
+            ),
+        ]);
+    }
+    if let Some(sasa) = m.sasa_metrics.as_ref() {
+        rows.push([
+            "SASA".into(),
+            format!(
+                "{:.0} Å² · hydrophobic burial {:.0} %",
+                sasa.total_sasa,
+                sasa.hydrophobic_burial_ratio * 100.0
+            ),
+        ]);
+    }
+    if let Some(o) = m.steric_overlap.as_ref() {
+        rows.push([
+            "Heavy-atom overlaps".into(),
+            format!(
+                "{:.1} per 1000 atoms ({})",
+                o.heavy_atom_overlap_score, o.clash_count
+            ),
+        ]);
+    }
+    if let Some(net) = m.interaction_network.as_ref() {
+        rows.push([
+            "Interactions".into(),
+            format!(
+                "{} H-bonds · {} salt bridges · {} π–π · {} cation–π",
+                net.summary.total_hbonds,
+                net.summary.total_salt_bridges,
+                net.summary.total_pi_pi_stacks,
+                net.summary.total_cation_pi
+            ),
+        ]);
+    }
+    if let Some(f) = m.candidate_fitness_score {
+        rows.push(["Triage score".into(), format!("{f:.1} / 100")]);
+    }
+    rows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

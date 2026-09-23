@@ -5,6 +5,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- A home screen. `proteus` with no command, in a terminal, opens a full-screen TUI (ratatui)
+  with three tabs:
+  - **Jobs:** your jobs, which no command could list before. Refreshed every 2 s; opens the
+    viewer, the browser page or the full report.
+  - **Structures:** a file browser that measures the structure file you stop on, with the same
+    numbers as `analyze`.
+  - **Run:** forms for `submit` and for a `mutate | screen` scan.
+
+  Every action runs `proteus` itself and the forms show the command line first. Outside a
+  terminal, bare `proteus` behaves exactly as before: usage on stderr, exit 2.
+- `ProteusRepository::list_jobs` and `proteus_core::qc::summary_rows`. The browser page and the
+  home screen format measurements with the same function.
+
 ### Changed
 - The browser viewer (`proteus view --web/--html`, the daemon's `/view/{job}`) is now our own:
   about 730 lines of our own JavaScript (WebGL2) drawing the same ribbon mesh, DSSP and colours as the terminal
@@ -17,6 +31,9 @@ All notable changes to this project are documented here. The format follows
   structure file; that stays next to the page or at `/api/v1/predictions/by-job/{id}/pdb`.
 
 ### Fixed
+- `proteus view --web` always ran `xdg-open`. On macOS, which has no `xdg-open`, the failure was
+  ignored and no browser opened. It now uses `open` on macOS and says so when no opener can be
+  started.
 - `proteus esm scan`'s heat map was one shade of red with wild-type marginals (almost every score
   is below 0, and the colour scale was fixed around 0). The scale is now centred on the scan's own
   median and spread, printed in the legend, so blue marks the substitutions this protein

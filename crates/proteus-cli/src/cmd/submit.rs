@@ -120,7 +120,7 @@ mod tests {
     /// `--wait` defaults on but must be switchable off, so a script can enqueue and return.
     #[test]
     fn submit_wait_can_be_switched_off() {
-        let wait_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+        let wait_of = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command.unwrap() {
             Commands::Submit(Args { wait, .. }) => wait,
             _ => unreachable!(),
         };

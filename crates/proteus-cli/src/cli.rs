@@ -19,8 +19,9 @@ use std::sync::Arc;
 )]
 #[command(version)]
 pub struct Cli {
+    /// None only for bare `proteus`, which opens the home screen in a terminal.
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq, Eq)]
