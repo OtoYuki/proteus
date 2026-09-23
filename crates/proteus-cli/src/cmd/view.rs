@@ -457,6 +457,12 @@ fn run_viewer(
 }
 
 /// Listen for SIGTERM, SIGHUP and SIGINT; on the first, record its number and set `stop`.
+///
+/// If the viewer has not returned shortly after, restore the terminal and exit from here. Once
+/// the terminal is gone (a closed window, a dropped SSH session, a killed tmux pane) crossterm
+/// 0.29 retries the dead tty inside `event::poll` without ever returning, so the viewer never
+/// sees `stop` and the process would spin at full CPU with no terminal (the home screen's
+/// handler exits the same way, for the same reason).
 #[cfg(unix)]
 fn watch_termination_signals(
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -478,6 +484,15 @@ fn watch_termination_signals(
         };
         flag.store(n, Ordering::SeqCst);
         stop.store(true, Ordering::SeqCst);
+        // A viewer with a live terminal returns within a frame and exits on its own path.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
+        std::process::exit(128 + n);
     });
     Ok(received)
 }

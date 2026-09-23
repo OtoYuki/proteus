@@ -15,9 +15,9 @@ The release where Proteus gets a face.
   of structures measured as you move, and forms that show the command they run.
 - **Identity:** everything wears one identity, a s1re.sh sub-brand. The structure colours now
   stay apart for colour-blind readers.
-- **Bug hunt:** a review of all of this before release fixed 26 defects. Among them, a closed
-  terminal could leave `proteus` spinning at full CPU, and structures with disulfide bonds drew
-  an empty browser page.
+- **Bug hunt:** a review of all of this before release fixed 27 defects. Among them, a closed
+  terminal could leave the home screen or the 3-D viewer spinning at full CPU, and structures
+  with disulfide bonds drew an empty browser page.
 
 ### Added
 - A home screen. `proteus` with no command, in a terminal, opens a full-screen TUI (ratatui)
@@ -121,6 +121,14 @@ The release where Proteus gets a face.
     pass `COLORTERM` on. They are now known by `TERM`, as are `-direct` and `truecolor` names.
   - `TERM=dumb` received escape codes.
   - In 16 colours, the empty part of a progress bar was invisible black.
+
+  **Terminal viewer:**
+  - Closing the terminal left `proteus view --interactive` spinning at full CPU (also in
+    0.7.0). Its SIGHUP handler only set a flag, and the viewer loop never came back to read it:
+    crossterm 0.29 retries a dead tty inside `event::poll`. The handler now restores the
+    terminal and exits by itself when the viewer has not returned within 0.5 s.
+    `scripts/smoke.sh` closes a terminal under the viewer and under the home screen and fails
+    if either is still running.
 
   **Dashboard:**
   - Rows were cut mid-number ("coil 4" for 43 %). Whole items are now dropped instead.
