@@ -15,8 +15,9 @@ through mutagenesis, folding, all-atom validation, ranking and a columnar datase
 of one-off Python that nobody keeps. Proteus is that seam.
 
 It does two things the tools it sits between mostly do not. It refuses to rank a structure it
-could not really predict, and it checks every scientific number it prints against an
-implementation someone else wrote, on every push.
+could not really predict, and every number it prints that has an independent implementation
+elsewhere is compared against that implementation on every push — the numbers that have none
+are listed as such rather than left to look validated.
 
 ---
 
@@ -93,10 +94,13 @@ traces. Elliptic cross-sections, Richardson β-arrowheads, SSAO, cel-outlines, d
 
 Two things separate it from the other terminal viewers:
 
-- **It computes secondary structure rather than reading it.** Strip the `HELIX`/`SHEET` records
-  from a file and the picture does not change, because the assignment comes from Kabsch–Sander
-  DSSP on the coordinates. Predicted structures never carry those records, so this is the case
-  the tool exists for. Pinned by
+- **It always computes secondary structure, and ignores the file's.** Strip the
+  `HELIX`/`SHEET` records from a file and the picture does not change, because the assignment
+  comes from eight-state Kabsch–Sander DSSP on the coordinates (the same `proteus-dssp` that is
+  validated against mdtraj). ESMFold's PDB output carries no such records, and annotations
+  that are present need not match the coordinates. ProteinView and StrucTTY infer
+  secondary structure when a file has none, and pixelfold always computes it; what is less
+  common is using one validated eight-state assignment everywhere. Pinned by
   `secondary_structure_survives_a_file_that_does_not_declare_it`.
 - **It says when the picture cannot show what you asked for.** At 3.4 Å per pixel, consecutive
   residues 3.8 Å apart cannot be separated, so `view` prints the resolution and points at a
@@ -104,7 +108,8 @@ Two things separate it from the other terminal viewers:
 
 Backends: ANSI 24-bit half-block (1×2 px/cell), Braille (2×4 dots/cell), **DEC Sixel** (xterm,
 mlterm, foot, contour, WezTerm, Windows Terminal) and the kitty graphics protocol. Sixel is
-6–21× cheaper on the wire than kitty at the same resolution, which is what you want over SSH,
+6–21× cheaper on the wire than Proteus's own uncompressed kitty output at the same
+resolution, which is what you want over SSH,
 and its encoder is round-tripped through libsixel's own decoder in CI rather than eyeballed.
 
 Keys: arrows or `hjkl` orbit, `+`/`-` zoom, `Space` spin, `Tab` dashboard, `c` colour scheme,
@@ -112,10 +117,10 @@ Keys: arrows or `hjkl` orbit, `+`/`-` zoom, `Space` spin, `Tab` dashboard, `c` c
 
 ## 4. Check every number against someone else's implementation
 
-![make validate comparing 53 structures against mdtraj, FreeSASA, cctbx and PLIP](docs/media/validate.gif)
+![make validate comparing 53 structure files against mdtraj, FreeSASA, cctbx and PLIP](docs/media/validate.gif)
 
 ```bash
-make validate     # 53 structures: X-ray, NMR, cryo-EM, AlphaFold-DB; PDB and mmCIF
+make validate     # 53 files, 48 entries: X-ray, NMR, cryo-EM, AlphaFold DB; PDB and mmCIF
 ```
 
 This runs on every push (`.github/workflows/validate.yml`). Tolerances are the contract, in
@@ -123,13 +128,14 @@ This runs on every push (`.github/workflows/validate.yml`). Tolerances are the c
 
 | what | reference | result |
 |---|---|---|
-| φ/ψ, Cα radius of gyration, Kabsch RMSD | mdtraj | every angle within 0.1° |
-| Kabsch–Sander DSSP (`proteus-dssp`) | mdtraj | ≥ 98 % per residue |
-| MolProbity Ramachandran (Top8000 contours) | cctbx `ramalyze` | 100 % label agreement |
-| Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii) |
+| φ/ψ, Cα radius of gyration | mdtraj | every angle within 0.1°, Rg within 0.01 Å |
+| Kabsch–Sander DSSP (`proteus-dssp`) | mdtraj | 99.6 % of 30 335 residues on eight states, 99.96 % on three; worst non-exempt file 97.8 % |
+| MolProbity Ramachandran (Top8000 contours) | cctbx `ramalyze` | 100 % label agreement (collagen 1CAG has no reference: cctbx classifies none of its residues) |
+| Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii), two documented exceptions |
 | hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–76 % — heavy-atom criteria over-detect by 1.3–1.7× |
 | salt bridges, π–π stacking, cation–π | PLIP, intra-chain, 15 structures | salt bridges **97.7 %** precision / 72 % recall; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %** |
 | heavy-atom steric overlap | none exists with these definitions | labelled as ours, not compared |
+| Kabsch RMSD, contact density, burial, triage score | none | unit-tested only; the score is checked against decoys (40/40), not against experiment |
 
 Precision sits next to recall even where precision is the unflattering number. The salt-bridge
 cutoff is deliberately stricter than PLIP's (4.0 Å atom-to-atom against 5.5 Å centre-to-centre),
@@ -198,11 +204,11 @@ Same metric, same file, median wall-clock. Full table in [`bench/README.md`](ben
 
 | | vs |
 |---|---|
-| SASA, equal point count | 2.3–4.7× mdtraj's C++ kernel, ~33× Biopython |
+| SASA | 2.3–4.7× mdtraj's C++ kernel (960 points each), ~33× Biopython (96 vs 100 points) |
 | DSSP | 1.3–12× mdtraj |
 | φ/ψ + Ramachandran | 33–159× mdtraj's φ/ψ API |
 
-6VXX (22 812 atoms), full profile: 0.69 s. Crambin: ~8 ms.
+6VXX (22 812 atoms), full profile: 0.69 s. Crambin: ~9 ms.
 
 ## Install
 
@@ -228,7 +234,7 @@ their own; the other six are the application, and ship as the `proteus` binary.
 
 ```
 crates/
-├── proteus-dssp/       Kabsch–Sander DSSP, 8-state. Zero dependencies. Standalone.
+├── proteus-dssp/       Kabsch–Sander DSSP, 8-state. No dependencies by default.
 ├── proteus-esm/        ESM-2 masked-LM inference on candle. Standalone.
 ├── proteus-core/       Domain models, FASTA, DMS mutagenesis, all-atom biophysics
 ├── proteus-storage/    SQLite (SQLx WAL), BLAKE3 CAS, Parquet/CSV/JSON export
@@ -246,10 +252,12 @@ ghcr image, or `cargo install --git`.
 
 All-atom, pure Rust, O(N) through spatial cell lists.
 
-- **Hydrogen bonds** — Baker–Hubbard heavy-atom antecedent criteria, backbone and sidechain.
+- **Hydrogen bonds** — heavy-atom geometry (donor–acceptor distance and antecedent angles; no
+  hydrogens needed), backbone and sidechain, compared against mdtraj's Baker–Hubbard on
+  structures that do carry hydrogens.
 - **Salt bridges** — ≤ 4.0 Å between basic cations and acidic anions.
 - **π–π stacking** — parallel-displaced and T-shaped edge-to-face, with a 2.0 Å lateral ring
-  offset test (McGaughey 1998).
+  offset test (PLIP's criterion: benzene radius + 0.5 Å).
 - **Cation–π** — ≤ 6.0 Å with the cation within 45° of the ring normal.
 - **SASA** — Shrake–Rupley, 960-point Fibonacci sphere per atom, Bondi radii (mdtraj's default).
 - **Ramachandran** — the six Top8000 percentile contour grids (general, Gly, cis-Pro, trans-Pro,
@@ -268,7 +276,9 @@ All-atom, pure Rust, O(N) through spatial cell lists.
 
 `proteus-esm` re-implements `EsmForMaskedLM` on
 [candle](https://github.com/huggingface/candle). No Python, no PyTorch, one static binary. It
-loads any `facebook/esm2_*` checkpoint and produces zero-shot mutation scores — wild-type or
+loads `facebook/esm2_t6_8M` through `esm2_t33_650M` from the Hub (the 3B and 15B repositories
+publish only sharded PyTorch files; convert them to safetensors and load from disk) and
+produces zero-shot mutation scores — wild-type or
 masked marginals, following Meier et al. 2021 — and full deep mutational scans.
 
 ```bash
@@ -278,17 +288,18 @@ proteus mutate wt.fasta --mode saturation | proteus screen - --scorer hybrid --e
 ```
 
 - **Parity**: logits within 1e-2 and amino-acid log-probabilities within 5e-3 of
-  `transformers.EsmForMaskedLM` (fp32), on three proteins × two checkpoints, pinned in CI
-  against committed reference values.
+  `transformers.EsmForMaskedLM` (fp32), on three proteins × two checkpoints, against committed
+  reference values; CI runs the 8M checkpoint on every push, the 35M one is run by hand.
 - **Accuracy on real data**: ProteinGym v1.1 Spearman ρ over the five smallest single-mutant
   assays — mean |ρ| 0.42 with `esm2_t12_35M`, 0.24 with `esm2_t6_8M`
   ([`bench/README.md`](bench/README.md)).
-- **Where it is known to be unreliable**, from the published benchmarks rather than ours:
-  zero-shot ESM-2 is a reasonable triage signal for human and microbial proteins and a poor one
-  for viral proteins and long multi-domain sequences. `proteus esm` says so when it runs past
-  400 residues.
-- ESM-2 rather than ESM-3 because ESM-3's weights are non-commercial. ESM C 300M is
-  MIT-licensed and is the natural next checkpoint.
+- **Where it is weaker**, from ProteinGym's own per-taxon table rather than our five assays:
+  ESM-2 650M averages Spearman ρ 0.457 on human assays and 0.261 on viral ones (0.414 over all
+  217). Treat scores for viral proteins with particular caution. Past 400 residues
+  `proteus esm` suggests scoring known domains separately.
+- ESM-2 because it was the openly licensed family when this was written. ESM C and the open
+  ESM3 weights have since been released under MIT (mid-2026); they are different architectures
+  and not implemented here.
 
 ---
 
@@ -404,7 +415,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 scripts/smoke.sh                                       # every command end to end, with assertions
 scripts/smoke.sh --tes IMAGE                           # …and a real TES task in a container
-make validate                                          # the 53-structure corpus (needs uv, ~50 MB once)
+make validate                                          # the 53-file corpus (needs uv; ~50 MB of structures, ~650 MB of Python reference tools, once)
 bench/run.sh                                           # criterion + mdtraj/FreeSASA/Biopython
 ```
 
@@ -442,7 +453,7 @@ Excluding atoms in the same residue, backbone peptide linkages and proline ring 
 
 ### Non-covalent interactions
 
-- **Baker–Hubbard hydrogen bonds:**
+- **Hydrogen bonds** (heavy-atom criteria):
   $$2.4\,\text{Å} \le d(D, A) \le 3.5\,\text{Å}, \quad \theta(D_{\text{ante}}-D\cdots A) \ge 90^\circ, \quad \theta(A_{\text{ante}}-A\cdots D) \ge 90^\circ$$
 - **Salt bridges:**
   $$d(\text{cation}, \text{anion}) \le 4.0\,\text{Å} \quad\text{with}\quad (chain, res)_{\text{cat}} \neq (chain, res)_{\text{ani}}$$
@@ -475,15 +486,17 @@ check the work rather than trust it, so the work is set up to be checked.
 make validate
 ```
 
-Every scientific number is compared, structure by structure, against an implementation written
-by someone else, and the comparison runs on every push. Where no reference implementation exists
-the table above says so on the row rather than implying more validation than there is.
+Every scientific number that has a reference implementation is compared with it, structure by
+structure, on every push. CI compares against reference values committed under
+`validate/reference/`; `make reference` regenerates them from mdtraj, FreeSASA, cctbx and PLIP.
+Where no reference implementation exists the table above says so on the row rather than
+implying more validation than there is.
 `scripts/smoke.sh` exercises every command and the daemon end to end; the GA4GH TES compliance
-suite runs against the daemon in CI; the ESM-2 implementation is checked against `transformers`
-on every push.
+suite runs against the daemon in CI; the ESM-2 implementation (8M checkpoint) is checked against
+`transformers` reference logits on every push.
 
 That does not make the code good. It makes the claims falsifiable by a stranger in one command,
-which is the part that matters when nobody is going to audit 12 000 lines by eye.
+which is the part that matters when nobody is going to audit 18 000 lines by eye.
 
 The Python/Django/Celery undergraduate thesis prototype this grew out of (2025) is preserved
 under the git tag `v0.1.0-thesis`. Everything at the repository root is Rust.

@@ -102,7 +102,7 @@ single-mutant assays (≤ 60 residues), all mutants scored, CPU:
 | **mean \|ρ\|** | | | 0.235 | 0.222 | **0.418** |
 
 For scale, the published ESM-2 650M zero-shot average over all 217 ProteinGym substitution
-assays is ≈ 0.42 (Spearman). These five are stability assays on very short proteins, so the
+assays is 0.414 (Spearman; ProteinGym's own summary table). These five are stability assays on very short proteins, so the
 numbers are not comparable to that average — they show the Rust implementation reproduces the
 expected behaviour (bigger model ≫ smaller model; masked ≈ wild-type marginals on short
 sequences) on real experimental data, not that it beats anything.

@@ -18,6 +18,24 @@ All notable changes to this project are documented here. The format follows
   report; `--pdb` still works.
 
 ### Fixed
+- **Claims corrected after a line-by-line fact audit** (every number re-measured, external
+  facts re-checked at the source):
+  - `proteus-dssp`: agreement with mdtraj was stated as "≥ 98 % on eight states"; the 98 %
+    floor is for three states. Now: 99.6 % of 30 335 residues on eight states, 99.96 % on three,
+    worst non-exempt file 97.8 %, one documented exemption. The docs said π-helices only fill
+    unassigned residues; they may overwrite α (prefer-π, as mdtraj), which is what the code does.
+  - `proteus-esm`: loading "any" `facebook/esm2_*` checkpoint from the Hub was wrong for 3B and
+    15B, which publish no safetensors. "ESM-3 weights are non-commercial" is out of date — the
+    open ESM3 and ESM C weights are MIT since mid-2026. The unsourced "weak on long multi-domain
+    sequences" claim is replaced by ProteinGym's per-taxon numbers (human 0.457, virus 0.261).
+    Parity is checked in CI for the 8M checkpoint only; the README had said both.
+  - README: Kabsch RMSD was listed as validated against mdtraj (it is unit-tested only); corpus
+    is 53 files / 48 entries; `make validate` installs ~650 MB of Python tools, not ~50 MB;
+    crambin full profile is ~9 ms; the lateral π-offset test is PLIP's criterion, not
+    McGaughey's; H-bonds use heavy-atom criteria compared against Baker–Hubbard rather than
+    being Baker–Hubbard; Sixel's 6–21× is against Proteus's uncompressed kitty output; other
+    terminal viewers do infer secondary structure, so that is no longer claimed as a difference.
+  - Both crates now ship `LICENSE-MIT` and `LICENSE-APACHE` in the package.
 - `view --html` and `--web` were described as a Mol\* page in `--help`, the README and the
   smoke test; the page has been 3Dmol.js since 0.5.0. The smoke assertion had kept passing
   only because a licence comment inside the vendored 3Dmol.js mentions molstar; it now checks

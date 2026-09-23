@@ -111,16 +111,16 @@ fn score_mutations(model: &Esm2, wt: &str, muts: &[Mutation], masked: bool) -> R
 
 /// Say where a zero-shot ESM-2 score is known to be weak, once, at the point of use.
 ///
-/// These are the published limits (ProteinGym-scale benchmarks), not measurements of ours: the
-/// score is a reasonable triage signal for human and microbial proteins and a poor one for
-/// viral proteins and long multi-domain sequences. Printing it beats a reader discovering it
-/// in a paper after they have acted on a ranking.
+/// ProteinGym's per-taxon breakdown puts ESM-2 650M at Spearman ρ ≈ 0.46 on human assays and
+/// ≈ 0.26 on viral ones; taxon cannot be told from a sequence, so the README carries that. What
+/// can be told is length: on a long sequence the scores come from one context over several
+/// domains, and scoring each known domain on its own is the conservative choice.
 pub fn warn_if_outside_known_good(wt: &str) {
     const LONG_MULTI_DOMAIN: usize = 400;
     if wt.len() > LONG_MULTI_DOMAIN {
         eprintln!(
-            "note: {} residues — zero-shot ESM-2 scores degrade on long, multi-domain sequences. \
-             Treat the ranking as triage, and prefer per-domain scoring where the domains are known.",
+            "note: {} residues. Zero-shot ESM-2 scores are a triage signal; for a multi-domain \
+             protein, scoring each known domain separately is the conservative choice.",
             wt.len()
         );
     }

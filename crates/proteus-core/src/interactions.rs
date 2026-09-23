@@ -152,8 +152,8 @@ struct ExtractedAromaticRing {
     normal: Vector3<f64>,
 }
 
-/// Maximum lateral displacement of two stacked rings, in Å: the radius of benzene plus a
-/// little slack, as used by McGaughey et al. (1998) and by PLIP.
+/// Maximum lateral displacement of two stacked rings, in Å: the radius of benzene plus 0.5 Å,
+/// PLIP's `PISTACK_OFFSET_MAX`.
 const PI_OFFSET_MAX: f64 = 2.0;
 
 /// Lateral offset between two aromatic rings: how far each centroid sits from the other ring's
@@ -788,7 +788,7 @@ pub fn compute_interaction_network(pdb: &pdbtbx::PDB) -> InteractionNetwork {
                                     None
                                 };
 
-                                // Lateral displacement test (McGaughey 1998; PLIP uses the same
+                                // Lateral displacement test (PLIP's PISTACK_OFFSET_MAX,
                                 // 2.0 Å = benzene radius + 0.5). Without it two rings that are
                                 // parallel and within 6.5 Å but slid apart sideways count as a
                                 // stack when their π systems do not overlap at all. Measured
