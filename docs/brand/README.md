@@ -6,6 +6,7 @@ checked to be current by a test. Rewrite them with:
 ```bash
 UPDATE_BRAND_ASSETS=1 cargo test -p proteus-render --lib brand::assets
 magick -background none docs/brand/proteus-social.svg docs/brand/proteus-social.png
+magick -background none -density 400 docs/brand/proteus-mark.svg -resize 192x192 -depth 8 docs/brand/proteus-mark.png
 ```
 
 | file | use |
@@ -13,7 +14,10 @@ magick -background none docs/brand/proteus-social.svg docs/brand/proteus-social.
 | `proteus-mark.svg` | the mark, filled, for dark grounds |
 | `proteus-mark-outline.svg` | the mark, outlined, for light grounds |
 | `proteus-lockup-dark.svg`, `proteus-lockup-light.svg` | mark, dot-matrix wordmark and signature |
+| `proteus-mark.png` | the mark at 192 px, for places that do not render SVG (the crate READMEs on crates.io) |
 | `proteus-social.svg`, `proteus-social.png` | the 1280 × 640 link preview (GitHub: Settings → Social preview) |
+| `proteus-dark.conf` | the dark theme for kitty (`include proteus-dark.conf`): each ANSI colour a role uses at 16 colours holds that role's colour |
+| `proteus-dark.agg` | the same palette as an `agg --theme` value; `docs/media/record.sh` renders the README recordings with it |
 
 The system behind them, with every colour's measured contrast and colour-blind separation, is
 `docs/design/2026-09-23-proteus-identity-design.md`.

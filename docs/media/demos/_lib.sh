@@ -12,3 +12,17 @@ type_out() {
     printf '\n'
     sleep 0.4
 }
+
+# The binary under test: the release build in CARGO_TARGET_DIR (or ./target).
+REPO="$PWD"
+export PATH="${CARGO_TARGET_DIR:-$REPO/target}/release:$PATH"
+proteus --version >/dev/null || { echo "build first: cargo build --release -p proteus-cli" >&2; exit 1; }
+
+# A fresh home for the demo, so paths print as `~/…` and no real jobs show up.
+# PROTEUS_DEMO_ROOT defaults to ~/.cache/proteus-demo.
+demo_home() {
+    export HOME="${PROTEUS_DEMO_ROOT:-$HOME/.cache/proteus-demo}/$1"
+    rm -rf "$HOME"
+    mkdir -p "$HOME"
+    unset PROTEUS_DATA_DIR
+}

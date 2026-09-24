@@ -1,11 +1,12 @@
-sleep 4.5
+wait (jobs)
+sleep 2.5
 send j
 sleep 1.2
 send k
 sleep 1.5
 send 2
 sleep 1
-send jjjjjjjjjjjjjjjjjjjj
+send jjjjjj
 sleep 2.5
 send 3
 sleep 1.2

@@ -1,6 +1,10 @@
+<img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
+
 # proteus-cli
 
 The `proteus` command-line binary of [Proteus](https://github.com/OtoYuki/proteus).
+
+<img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/media/home.gif" alt="the home screen that bare proteus opens: jobs, a folder of structures measured as you move, and the fold form">
 
 ```
 proteus analyze 1crn.pdb                       # all-atom biophysics of a PDB/mmCIF file
@@ -8,7 +12,9 @@ proteus analyze models/ --export qc.parquet    # one row per structure, over a w
 proteus mutate wt.fasta --mode alanine         # in-silico variant library (stdout or --output)
 proteus screen lib.fasta --export out.parquet  # fold, score, rank; Parquet/CSV/JSON export
 proteus esm scan wt.fasta --export scan.csv    # ESM-2 deep mutational scan, pure Rust
+proteus                                        # the home screen: jobs, files, forms
 proteus view 1crn.pdb --interactive --dashboard
+proteus view 1crn.pdb --web                    # the same structure in a browser, offline
 proteus submit --file wt.fasta && proteus inspect <job>
 proteus serve --port 8080 --allow-image 'ghcr.io/otoyuki/*' --allow-dir /srv/tes
 ```

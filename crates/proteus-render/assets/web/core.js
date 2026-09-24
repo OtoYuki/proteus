@@ -156,7 +156,18 @@
     return mat3Mul(ry, rp);
   }
 
-  const api = { asU8, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
+  // A measurement line for a narrow panel: a number stays with the word before it and with its
+  // unit ("coil 32 %", never "coil 32" and a lone "%"), and a " · " separator never starts a
+  // line. Lines still wrap at the separators and between other words.
+  function keepUnits(s) {
+    const NB = '\u00a0';
+    return s
+      .replace(/(\S) (?=\d)/g, '$1' + NB)
+      .replace(/(\d) (?=\S)/g, '$1' + NB)
+      .replace(/ · /g, NB + '· ');
+  }
+
+  const api = { asU8, keepUnits, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
     vertexColors, fitScale, mat3Mul, yawPitch, MAGIC };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.ProteusCore = api;

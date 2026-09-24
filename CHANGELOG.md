@@ -47,6 +47,14 @@ The release where Proteus gets a face.
 
   The viewer's status bar shows a legend for the current colours. On an experimental file it
   says the pLDDT scheme is the B-factor column, not a confidence.
+- `screen`'s output wears the identity too: a `(leaderboard)` heading, a lighter table, the
+  best candidate with the `proteus view` command to open it, and the export path printed as
+  given rather than debug-quoted.
+- The home screen shows paths under your home directory as `~/…`, and a command it suggests
+  keeps the `~` expandable (`~/'my runs'`).
+- The README recordings are rendered in the identity's own terminal colours, which
+  `docs/brand/` also ships as a kitty theme (`proteus-dark.conf`); the README and the crate
+  READMEs show the browser page.
 - The browser viewer page wears the identity:
   - The mark and dot-matrix wordmark in the header.
   - The structure's name as the heading.
@@ -82,6 +90,8 @@ The release where Proteus gets a face.
   WebKit run.
 
   **Browser page:**
+  - A measurement could wrap between a number and its unit, leaving a lone "%" on the next
+    line of the panel. Numbers now stay with their units, and lines break at the separators.
   - A structure with a disulfide bond (1CRN, for one) drew an empty 3-D view. A variable was
     shadowed; this came in with the identity foundation. A real-browser test now runs in CI
     (`scripts/browser-check.mjs` in Chromium, Firefox and WebKit), and it fails on that page.

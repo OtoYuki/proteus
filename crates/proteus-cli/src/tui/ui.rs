@@ -311,7 +311,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
                 look.muted(),
             )));
             lines.push(Line::from(Span::styled(
-                format!("jobs live in {}", app.data_dir.display()),
+                format!("jobs live in {}", tilde(&app.data_dir.to_string_lossy())),
                 look.dim(),
             )));
         }
@@ -435,7 +435,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
                 lines.push(kv("error", format!("✗ {e}"), look.bad()));
             }
             if let Some(p) = &j.pdb_path {
-                lines.push(kv("file", p.clone(), look.dim()));
+                lines.push(kv("file", tilde(p), look.dim()));
             }
             f.render_widget(
                 Paragraph::new(lines)
@@ -449,6 +449,63 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
 
 // ---------------------------------------------------------------------------------------------
 // Structures
+
+/// A path under `$HOME` as `~/…`, the way a shell prompt shows it: shorter, and the same on
+/// every machine.
+pub fn tilde(p: &str) -> String {
+    tilde_in(p, std::env::var("HOME").ok().as_deref())
+}
+
+fn tilde_in(p: &str, home: Option<&str>) -> String {
+    match home.map(|h| h.trim_end_matches('/')) {
+        Some(h) if !h.is_empty() => match p.strip_prefix(h) {
+            Some("") => "~".into(),
+            Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+            _ => p.to_string(),
+        },
+        _ => p.to_string(),
+    }
+}
+
+/// A path for a command line the user may paste: `~/…` under `$HOME` (the tilde left unquoted
+/// so the shell still expands it), otherwise quoted as a whole.
+fn shell_path(p: &str) -> String {
+    shell_path_in(p, std::env::var("HOME").ok().as_deref())
+}
+
+fn shell_path_in(p: &str, home: Option<&str>) -> String {
+    let t = tilde_in(p, home);
+    match t.strip_prefix("~/") {
+        Some(rest) if t != p => format!("~/{}", super::app::shell_quote(rest)),
+        _ if t == "~" && t != p => t,
+        _ => super::app::shell_quote(p),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn a_pasted_path_keeps_its_tilde_expandable() {
+    let h = Some("/home/ada");
+    assert_eq!(shell_path_in("/home/ada/runs/a", h), "~/runs/a");
+    assert_eq!(shell_path_in("/home/ada/my runs", h), "~/'my runs'");
+    assert_eq!(shell_path_in("/home/ada", h), "~");
+    assert_eq!(shell_path_in("/srv/my runs", h), "'/srv/my runs'");
+    // A real directory named "~" is not the home directory.
+    assert_eq!(shell_path_in("~/x", h), "'~/x'");
+}
+
+#[cfg(test)]
+#[test]
+fn paths_under_home_are_shown_with_a_tilde() {
+    let h = Some("/home/ada");
+    assert_eq!(tilde_in("/home/ada/x.pdb", h), "~/x.pdb");
+    assert_eq!(tilde_in("/home/ada", h), "~");
+    assert_eq!(tilde_in("/home/adam/x.pdb", h), "/home/adam/x.pdb");
+    assert_eq!(tilde_in("/srv/x.pdb", h), "/srv/x.pdb");
+    assert_eq!(tilde_in("/home/ada/x.pdb", Some("/home/ada/")), "~/x.pdb");
+    assert_eq!(tilde_in("/x.pdb", Some("/")), "/x.pdb");
+    assert_eq!(tilde_in("/x.pdb", None), "/x.pdb");
+}
 
 fn human_size(n: u64) -> String {
     match n {
@@ -498,7 +555,10 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
         .block(section(
             look,
             "structures",
-            Some(format!("{n_files} in {}", files.dir.display())),
+            Some(format!(
+                "{n_files} in {}",
+                tilde(&files.dir.to_string_lossy())
+            )),
         ))
         .highlight_style(look.selected())
         .highlight_symbol(Line::from(Span::styled("▌", look.accent())));
@@ -525,7 +585,7 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(
                     format!(
                         "proteus analyze {} --export qc.parquet",
-                        super::app::shell_quote(&e.path.to_string_lossy())
+                        shell_path(&e.path.to_string_lossy())
                     ),
                     look.accent(),
                 ),

@@ -60,3 +60,13 @@ test('yawPitch is a proper rotation', () => {
   const id = C.mat3Mul(m, t);
   id.forEach((v, k) => assert.ok(Math.abs(v - (k % 4 === 0 ? 1 : 0)) < 1e-12));
 });
+
+test('panel lines keep numbers with their units and never start with a separator', () => {
+  const NB = '\u00a0';
+  assert.equal(C.keepUnits('helix 25 % · strand 43 % · coil 32 %'),
+    `helix${NB}25${NB}%${NB}· strand${NB}43${NB}%${NB}· coil${NB}32${NB}%`);
+  assert.equal(C.keepUnits('3733 Å² · hydrophobic burial 95 %'),
+    `3733${NB}Å²${NB}· hydrophobic burial${NB}95${NB}%`);
+  assert.equal(C.keepUnits('92.9 / 100'), `92.9${NB}/${NB}100`);
+  assert.equal(C.keepUnits('no numbers here'), 'no numbers here');
+});

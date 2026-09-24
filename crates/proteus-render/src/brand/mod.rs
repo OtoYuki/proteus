@@ -208,6 +208,22 @@ impl Role {
     }
 }
 
+/// The 16 ANSI colours of a terminal dressed in the identity, for a theme's ground: each slot a
+/// role uses in 16 colours ([`Role::ansi16`]) holds that role's colour, and the rest stay within
+/// the palette. The README recordings are rendered with it, and `docs/brand/` ships it as a
+/// kitty theme.
+pub fn terminal_palette(t: &Theme) -> [ColorRGB; 16] {
+    let cream = structure::COIL;
+    [
+        t.surface, // black: one step off the ground, so "black" text never vanishes
+        t.bad, t.muted, // green: Khaki, the palette's green-leaning neutral
+        t.accent, t.sea,  // blue
+        t.warm, // magenta
+        t.sea, cream, // white
+        t.dim, t.bad, t.muted, t.warm, t.sea, t.warm, t.sea, t.text,
+    ]
+}
+
 /// WCAG 2.x relative luminance and contrast ratio.
 pub fn contrast(a: ColorRGB, b: ColorRGB) -> f64 {
     let lum = |c: ColorRGB| {
@@ -307,6 +323,31 @@ mod tests {
         assert!((contrast(ColorRGB::BLACK, ColorRGB::WHITE) - 21.0).abs() < 1e-9);
         assert!((contrast(palette::CREAM, palette::ROOT) - 17.03).abs() < 0.01);
         assert!((contrast(palette::MOSS, palette::ROOT) - 2.65).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_terminal_palette_gives_each_role_its_own_colour() {
+        let p = terminal_palette(&DARK);
+        for role in [
+            Role::Dim,
+            Role::Line,
+            Role::Accent,
+            Role::Warm,
+            Role::Sea,
+            Role::Bad,
+        ] {
+            let i = role.ansi16().unwrap() as usize;
+            if role != Role::Line {
+                assert_eq!(p[i], role.rgb(&DARK), "{role:?} at index {i}");
+            }
+        }
+        for (i, c) in p.iter().enumerate().skip(1) {
+            assert!(
+                contrast(*c, DARK.ground) >= 3.0,
+                "ANSI {i} {} is readable on the ground",
+                css(*c)
+            );
+        }
     }
 
     #[test]
