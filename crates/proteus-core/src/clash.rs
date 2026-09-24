@@ -66,6 +66,32 @@ pub fn vdw_radius(element: &str, atom_name: &str) -> f64 {
     }
 }
 
+/// Hydrogen-bond roles of a heavy atom: (can donate, can accept). Backbone N donates (not in
+/// proline), backbone O and the C-terminal OXT accept; side chains as in the usual tables
+/// (hydroxyls and histidine both ways, amide N and the basic nitrogens donate, carboxylate and
+/// amide O accept). Waters both. Everything else neither.
+pub fn hbond_roles(res_name: &str, atom_name: &str) -> (bool, bool) {
+    match (res_name, atom_name) {
+        ("HOH" | "WAT" | "DOD", _) => (true, true),
+        ("PRO", "N") => (false, false),
+        (_, "N") => (true, false),
+        (_, "O" | "OXT") => (false, true),
+        ("SER", "OG") | ("THR", "OG1") | ("TYR", "OH") => (true, true),
+        ("HIS", "ND1" | "NE2") => (true, true),
+        ("ASN", "ND2") | ("GLN", "NE2") | ("TRP", "NE1") | ("LYS", "NZ") => (true, false),
+        ("ARG", "NE" | "NH1" | "NH2") => (true, false),
+        ("ASN", "OD1") | ("GLN", "OE1") => (false, true),
+        ("ASP", "OD1" | "OD2") | ("GLU", "OE1" | "OE2") => (false, true),
+        _ => (false, false),
+    }
+}
+
+/// Shortest donor–acceptor distance treated as a hydrogen bond rather than a clash, in Å.
+/// Heavy-atom radii (N 1.55, O 1.52) put every ordinary N–H···O bond (2.6–3.1 Å) past the
+/// 0.4 Å overlap line; MolProbity only avoids calling them clashes because it adds the
+/// hydrogens. 2.4 Å is below the shortest common hydrogen bonds.
+pub const HBOND_MIN_DISTANCE: f64 = 2.4;
+
 /// Internal representation of an atom for clash detection.
 struct ClashAtom {
     chain_id: String,
@@ -211,6 +237,15 @@ pub fn compute_steric_overlap(pdb: &pdbtbx::PDB) -> StericOverlapStats {
 
                             let dist = (atom_a.pos - atom_b.pos).norm();
 
+                            // Exclusion 4: a donor and an acceptor at hydrogen-bond distance.
+                            if dist >= HBOND_MIN_DISTANCE {
+                                let (da, aa) = hbond_roles(&atom_a.res_name, &atom_a.atom_name);
+                                let (db, ab) = hbond_roles(&atom_b.res_name, &atom_b.atom_name);
+                                if (da && ab) || (db && aa) {
+                                    continue;
+                                }
+                            }
+
                             let sum_radii = atom_a.radius + atom_b.radius;
                             let overlap = sum_radii - dist;
 
@@ -250,6 +285,35 @@ pub fn compute_steric_overlap(pdb: &pdbtbx::PDB) -> StericOverlapStats {
         worst_overlap,
         total_atoms_evaluated: total_atoms,
         clashes,
+    }
+}
+
+#[cfg(test)]
+mod hbond_tests {
+    use super::*;
+
+    fn two(res1: &str, a1: &str, res2: &str, a2: &str, el1: &str, el2: &str, d: f64) -> String {
+        format!(
+            "ATOM      1  {a1:<3} {res1} A   1       0.000   0.000   0.000  1.00 90.00           {el1}\n\
+             ATOM      2  {a2:<3} {res2} B  20    {d:>8.3}   0.000   0.000  1.00 90.00           {el2}\nEND\n"
+        )
+    }
+
+    #[test]
+    fn a_hydrogen_bond_is_not_a_clash_but_two_carbonyls_are() {
+        let open = |t: &str| crate::io::open_structure_bytes(t.as_bytes(), Some("x.pdb")).unwrap();
+        // Backbone N–H···O at 2.6 Å: overlap 0.47 Å by radii, and a hydrogen bond.
+        let hb = compute_steric_overlap(&open(&two("ALA", "N", "GLY", "O", "N", "O", 2.6)));
+        assert_eq!(hb.clash_count, 0);
+        // Lys NZ – Glu OE1 salt bridge at 2.5 Å.
+        let sb = compute_steric_overlap(&open(&two("LYS", "NZ", "GLU", "OE1", "N", "O", 2.5)));
+        assert_eq!(sb.clash_count, 0);
+        // Two carbonyl oxygens cannot hydrogen-bond: 2.5 Å is a clash.
+        let oo = compute_steric_overlap(&open(&two("ALA", "O", "GLY", "O", "O", "O", 2.5)));
+        assert_eq!(oo.clash_count, 1);
+        // Below 2.4 Å even a donor–acceptor pair is too close.
+        let close = compute_steric_overlap(&open(&two("ALA", "N", "GLY", "O", "N", "O", 2.2)));
+        assert_eq!(close.clash_count, 1);
     }
 }
 

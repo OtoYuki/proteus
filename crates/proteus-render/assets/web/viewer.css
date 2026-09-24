@@ -52,6 +52,13 @@ html, body { margin: 0; height: 100%; background: var(--ground); color: var(--te
 #panel .key.gradient i { flex: 1; height: 8px; display: block; }
 
 /* Findings: each list opens on demand, each item selects what it names. */
+#panel table.grid { border-collapse: collapse; font: 400 11px/1.5 var(--mono); font-variant-numeric: tabular-nums; margin-top: 2px; }
+#panel table.grid th { color: var(--dim); font-weight: 400; padding: 1px 7px 1px 0; text-align: left; }
+#panel table.grid td { color: var(--muted); padding: 1px 7px 1px 0; }
+#panel table.grid td.good { color: var(--text); }
+#panel table.grid td.bad { color: var(--warm); }
+#panel table.grid td.diag { text-decoration: underline dotted var(--line); }
+#panel table.models tr.shown td { color: var(--accent); }
 #panel .findings details { border-top: 1px solid var(--line); padding: 6px 0; }
 #panel .findings details:last-child { border-bottom: 1px solid var(--line); }
 #panel .findings summary { cursor: pointer; font: 400 11.5px/1.5 var(--mono); color: var(--text); list-style: none; }
@@ -105,6 +112,7 @@ html, body { margin: 0; height: 100%; background: var(--ground); color: var(--te
 #legend i { width: 10px; height: 10px; display: inline-block; }
 #legend .warn { color: var(--warm); }
 #legend .notice { color: var(--accent); }
+#legend .surface-key { color: var(--muted); }
 
 #keys { position: fixed; left: 20px; right: 340px; bottom: 16px; display: flex; flex-wrap: wrap;
   gap: 4px 16px; font: 400 11px/1.4 var(--mono); color: var(--dim); }
@@ -115,6 +123,13 @@ kbd { font: inherit; color: var(--accent); margin-right: 4px; }
   background: var(--surface); border: 1px solid var(--line); border-left: 2px solid var(--accent); }
 #tip b { font-weight: 500; color: var(--text); }
 #tip span { color: var(--muted); }
+
+/* Labels drawn over the canvas: measurements and pinned residues, placed each frame. */
+#overlay { position: fixed; inset: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+#overlay span { position: absolute; left: 0; top: 0; white-space: nowrap; padding: 1px 5px;
+  font: 500 11px/1.4 var(--mono); background: color-mix(in srgb, var(--ground) 80%, transparent); }
+#overlay .measure { color: var(--accent); border: 1px solid var(--accent); }
+#overlay .pin { color: var(--text); border-left: 2px solid var(--text); }
 
 #fallback { position: fixed; top: 50%; left: 20px; right: 340px; transform: translateY(-50%);
   text-align: center; font: 400 13px/1.6 var(--mono); color: var(--warm); }

@@ -120,6 +120,30 @@ for (const name of wanted) {
       return null;
     });
     if (finding && !finding.n) fail(where, `the finding "${finding.name}" selected nothing`);
+    // u builds a surface; a measurement is drawn and labelled; the view survives a reload.
+    const extra = await page.evaluate(async () => {
+      const V = window.ProteusViewer;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u' }));
+      const tris = V.surfaceTriangles;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'u' }));
+      V.measures.push([0, 1]);
+      V.finishMeasure();
+      V.state.zoom = 1.7;
+      V.render();
+      V.saveSessionNow();
+      return { tris, labels: document.querySelectorAll('#overlay .measure').length, hash: location.hash };
+    });
+    if (!extra.tris) fail(where, 'u drew no surface');
+    if (!extra.labels) fail(where, 'a measurement has no label');
+    if (!extra.hash.startsWith('#v=')) fail(where, 'the view is not kept in the URL');
+    else {
+      await page.reload();
+      await page.waitForFunction(() => window.ProteusViewer, null, { timeout: 30000 });
+      const back = await page.evaluate(() => ({ zoom: window.ProteusViewer.state.zoom, m: window.ProteusViewer.measures.length }));
+      if (back.zoom !== 1.7 || back.m !== 1) fail(where, `the view did not come back from its URL (${JSON.stringify(back)})`);
+    }
     // A page with PAE draws the map (not left blank) in the AlphaFold greens.
     const pae = await page.evaluate(() => {
       const c = document.getElementById('pae');

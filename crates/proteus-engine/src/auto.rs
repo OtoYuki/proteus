@@ -79,6 +79,16 @@ impl ComputeRunner for AutoRunner {
             },
         }
 
+        // A complex, a ligand or an MSA/sampling option only means something to Boltz: falling
+        // back to ESMFold or a helix would answer a different question.
+        if proteus_core::complex::ComplexSpec::is_spec(&sequence.fasta) {
+            return Err(EngineError::Pipeline(format!(
+                "this input (a complex, a ligand, or MSA/sampling options) needs the local \
+                 Boltz image: {}",
+                reasons.join("; ")
+            )));
+        }
+
         // 2. Try ESMFold API for fast/sota prediction if online. The API *is* ESMFold, so the
         //    fast tier is honoured by it; the sota (Boltz) tier is not.
         if job.tier == PipelineTier::FastScreening || job.tier == PipelineTier::HighFidelity {

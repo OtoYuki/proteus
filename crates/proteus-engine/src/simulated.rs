@@ -26,6 +26,13 @@ impl ComputeRunner for SimulatedRunner {
         sequence: &Sequence,
         work_dir: &Path,
     ) -> Result<RunResult, EngineError> {
+        if proteus_core::complex::ComplexSpec::is_spec(&sequence.fasta) {
+            return Err(EngineError::Pipeline(
+                "complexes, ligands, MSA options and several samples need the sota tier with \
+                 --runner oci; LABEL"
+                    .replace("LABEL", "the simulator draws one helix"),
+            ));
+        }
         info!(
             "SimulatedRunner executing job {} (Tier: {:?}) for sequence '{}'",
             job.id, job.tier, sequence.header

@@ -119,3 +119,54 @@ test('panel lines keep numbers with their units and never start with a separator
   assert.equal(C.keepUnits('92.9 / 100'), `92.9${NB}/${NB}100`);
   assert.equal(C.keepUnits('no numbers here'), 'no numbers here');
 });
+
+test('distances, angles and dihedrals', () => {
+  assert.equal(C.measure([[0, 0, 0], [3, 4, 0]]), 5);
+  assert.ok(Math.abs(C.measure([[1, 0, 0], [0, 0, 0], [0, 1, 0]]) - 90) < 1e-9);
+  // A trans dihedral is 180, a cis 0; sign follows IUPAC.
+  assert.ok(Math.abs(Math.abs(C.measure([[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, -1, 0]])) - 180) < 1e-9);
+  assert.ok(Math.abs(C.measure([[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0]])) < 1e-9);
+  assert.ok(Math.abs(C.measure([[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 0, 1]]) - -90) < 1e-9 ||
+    Math.abs(C.measure([[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 0, 1]]) - 90) < 1e-9);
+});
+
+test('a Gaussian surface around one atom is a closed shell near its van der Waals radius', () => {
+  const atoms = { n: 1, pos: new Float32Array([0, 0, 0]), el: new Uint8Array([0]), res: new Uint32Array([0]) };
+  const s = C.gaussianSurface(atoms, ['C'], () => true, 0.3);
+  assert.ok(s.n > 100 && s.nt > 100);
+  for (let i = 0; i < s.idx.length; i++) assert.ok(s.idx[i] < s.n);
+  let rmin = Infinity, rmax = 0;
+  for (let i = 0; i < s.n; i++) {
+    const r = Math.hypot(s.pos[3 * i], s.pos[3 * i + 1], s.pos[3 * i + 2]);
+    rmin = Math.min(rmin, r); rmax = Math.max(rmax, r);
+  }
+  assert.ok(rmin > 1.2 && rmax < 2.4, `shell radius ${rmin}–${rmax} Å for C (vdW 1.7)`);
+  // Euler characteristic of a sphere: V − E + F = 2.
+  const edges = new Set();
+  for (let t = 0; t < s.nt; t++) for (let k = 0; k < 3; k++) {
+    const a = s.idx[3 * t + k], b = s.idx[3 * t + (k + 1) % 3];
+    edges.add(a < b ? a + ',' + b : b + ',' + a);
+  }
+  assert.equal(s.n - edges.size + s.nt, 2);
+});
+
+test('the crambin surface encloses every atom', async () => {
+  const mesh = C.parseMesh(await C.gunzip(fs.readFileSync(here('1crn.mesh.gz'))));
+  const s = C.gaussianSurface(mesh.atoms, ['C', 'N', 'O', 'S', 'P', 'SE', 'H', 'X'], () => true, 1.0);
+  assert.ok(s.nt > 1000);
+  for (let i = 0; i < s.atom.length; i++) assert.ok(s.atom[i] < mesh.atoms.n);
+});
+
+test('Coulomb potential: positive near a lysine, negative near a glutamate', () => {
+  const pos = new Float32Array([0, 0, 0, 10, 0, 0]);
+  const q = C.formalCharges(['NZ', 'OE1'], ['LYS', 'GLU'], [0, 1]);
+  assert.deepEqual(q, [[0, 1], [1, -0.5]]);
+  assert.ok(C.coulomb([1.5, 0, 0], pos, q) > 0);
+  assert.ok(C.coulomb([8.5, 0, 0], pos, q) < 0);
+});
+
+test('a session survives the URL fragment', () => {
+  const v = { yaw: 0.5, sel: [1, 2, 300], scheme: 'plddt', m: [[10, 11]] };
+  assert.deepEqual(C.decodeSession(C.encodeSession(v)), v);
+  assert.equal(C.decodeSession('not base64 json'), null);
+});

@@ -313,6 +313,10 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         serde_json::json!({
             "ptm": c.ptm,
             "iptm": c.iptm,
+            "ligandIptm": c.ligand_iptm,
+            "score": c.confidence_score,
+            "chainPtm": c.chain_ptm,
+            "pairIptm": c.pair_iptm,
             "pae": c.pae.as_ref().map(|p| serde_json::json!({
                 "n": p.n,
                 "max": p.max,
@@ -374,6 +378,11 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             "cationPi": contacts(&a.cation_pi),
         },
         "confidence": confidence,
+        "models": s.models.iter().map(|m| serde_json::json!({
+            "rank": m.rank, "file": m.file, "score": m.score, "ptm": m.ptm, "iptm": m.iptm,
+            "plddt": m.plddt, "rmsd": m.rmsd_to_shown, "ligandRmsd": m.ligand_rmsd_to_shown,
+            "shown": m.shown,
+        })).collect::<Vec<_>>(),
         "compare": s.comparison.as_ref().map(|c| {
             let r2 = |v: f64| (v * 100.0).round() / 100.0;
             // Deviation on the score scale, 0 Å (blue) to at least 2 Å or the 98th percentile (red).
@@ -475,10 +484,11 @@ impl WebPage<'_> {
 <header id="head">{brand}<div id="subject"><h1 id="title"></h1><p id="caption"></p></div></header>
 <aside id="panel" aria-label="structure details"></aside>
 <div id="legend" aria-live="polite"></div>
+<div id="overlay" aria-hidden="true"></div>
 <div id="tip" role="tooltip" hidden></div>
 <section id="selbox" aria-live="polite" hidden></section>
 <nav id="seq" aria-label="sequence"></nav>
-<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>m</kbd> measure</span><span><kbd>l</kbd> label</span><span><kbd>u</kbd> surface</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
@@ -698,8 +708,9 @@ mod tests {
                 "page reaches outside itself: {forbidden}"
             );
         }
-        // Measured 2026-09-24: fonts 58 KB, viewer code 80 KB, crambin (mesh, 327 atoms) 76 KB.
-        assert!(html.len() < 240_000, "crambin page is {} bytes", html.len());
+        // Measured 2026-09-24: 264 KB = fonts 58 KB, viewer code 112 KB, crambin's mesh and 327
+        // atoms, and the embedded model file.
+        assert!(html.len() < 290_000, "crambin page is {} bytes", html.len());
     }
 
     #[test]
