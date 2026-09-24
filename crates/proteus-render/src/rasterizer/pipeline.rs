@@ -8,6 +8,8 @@ use nalgebra::Vector3;
 
 pub struct Rasterizer {
     pub color_scheme: ColorScheme,
+    /// Colour per residue index for [`ColorScheme::Scores`].
+    pub residue_colors: Vec<ColorRGB>,
     pub enable_ssao: bool,
     pub enable_outlines: bool,
     projected: Vec<Vector3<f32>>,
@@ -18,6 +20,7 @@ impl Rasterizer {
     pub fn new(color_scheme: ColorScheme) -> Self {
         Self {
             color_scheme,
+            residue_colors: Vec::new(),
             enable_ssao: true,
             enable_outlines: true,
             projected: Vec::new(),
@@ -96,6 +99,11 @@ impl Rasterizer {
                 }
                 ColorScheme::Rainbow => rainbow_color(v.residue_index, total_residues),
                 ColorScheme::Solid(c) => c,
+                ColorScheme::Scores => self
+                    .residue_colors
+                    .get(v.residue_index)
+                    .copied()
+                    .unwrap_or(super::shader::NO_SCORE),
             };
 
             let lit = shade_blinn_phong(base_color, view_normal);

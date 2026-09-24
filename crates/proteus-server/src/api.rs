@@ -429,14 +429,26 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
         }
     };
     // Building the mesh is CPU work (0.7 s for a 2 900-residue spike); keep it off the runtime.
+    let model_path = std::path::PathBuf::from(&pred.pdb_path);
     let rendered = tokio::task::spawn_blocking(move || {
-        proteus_render::parse_pdb_structure(&text).map(|structure| {
+        proteus_render::parse_pdb_structure(&text).map(|mut structure| {
+            // PAE and pTM the predictor wrote beside the model (Boltz), when it did.
+            if let Ok(c) = proteus_core::pae::read_confidence(&model_path, None) {
+                let _ = structure.attach_confidence(c);
+            }
             let scheme = structure.default_color_scheme();
+            let name = model_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("model.pdb")
+                .trim_end_matches(".gz")
+                .to_string();
             proteus_render::web::WebPage {
                 title: "Proteus structure viewer",
                 caption: &caption,
                 structure: &structure,
                 scheme,
+                source: Some((&name, &text)),
             }
             .render()
         })

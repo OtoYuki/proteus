@@ -106,6 +106,29 @@ impl Ansi {
         }
     }
 
+    /// `text` with a foreground and a background data colour (a half-block cell holds two
+    /// pixels). Only in 24-bit and 256 colours; otherwise the bare text, so callers pick glyphs
+    /// that read without colour.
+    pub fn paint_rgb_on(&self, fg: ColorRGB, bg: ColorRGB, text: &str) -> String {
+        match self.depth {
+            ColorDepth::TrueColor => format!(
+                "\x1b[38;2;{};{};{};48;2;{};{};{}m{text}{RESET}",
+                fg.r, fg.g, fg.b, bg.r, bg.g, bg.b
+            ),
+            ColorDepth::Ansi256 => format!(
+                "\x1b[38;5;{};48;5;{}m{text}{RESET}",
+                to_ansi256(fg),
+                to_ansi256(bg)
+            ),
+            _ => text.to_string(),
+        }
+    }
+
+    /// True when [`Ansi::paint_rgb_on`] can colour both halves of a cell.
+    pub fn backgrounds(&self) -> bool {
+        matches!(self.depth, ColorDepth::TrueColor | ColorDepth::Ansi256)
+    }
+
     pub fn bold(&self, text: &str) -> String {
         if self.plain {
             text.to_string()

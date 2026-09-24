@@ -1,6 +1,7 @@
 // Open viewer pages written by `proteus view --html` in real browsers and fail on anything a
 // reader would notice: a script error, no WebGL2, a blank canvas, a hover label for a residue
-// that does not exist, or keys that do nothing.
+// that does not exist, keys that do nothing, a click that selects nothing, a finding that
+// cannot be shown, or a PAE map that is not drawn.
 //
 //   node scripts/browser-check.mjs page.html [more.html …]
 //   BROWSERS=chromium,firefox,webkit (default: all three)
@@ -56,7 +57,8 @@ for (const name of wanted) {
       for (let y = 20; y < c.clientHeight; y += 20) for (let x = 20; x < c.clientWidth; x += 20) {
         const i = V.pickAt(x, y);
         if (i < 0) continue;
-        if (i < meta.residues) { valid++; seen.add(i); } else invalid++;
+        // Ligand k is picked as residues + k.
+        if (i < meta.residues + meta.ligands.length) { valid++; seen.add(i); } else invalid++;
       }
       return { started: true, drawn, samples, valid, invalid, distinct: seen.size, residues: meta.residues };
     }).catch((e) => ({ started: false, error: e.message.split('\n')[0] }));
@@ -81,7 +83,53 @@ for (const name of wanted) {
     const after = await page.evaluate(() => [window.ProteusViewer.state.yaw, window.ProteusViewer.scheme]);
     if (after[0] === before[0]) fail(where, 'ArrowRight did not rotate');
     if (after[1] === before[1]) fail(where, 'c did not change the colours');
-    console.log(`ok   ${where}: ${r.drawn}/${r.samples} drawn, ${r.distinct} of ${r.residues} residues picked`);
+    // d answers in the legend, including on a structure with no disulfides to show.
+    await page.keyboard.press('d');
+    const legend = await page.locator('#legend').textContent();
+    if (!/disulfides/.test(legend)) fail(where, `d gave no answer (legend: "${legend}")`);
+    // A click on the structure selects the residue under it, which draws sticks and fills the
+    // selection box; Escape clears it.
+    const hit = await page.evaluate(() => {
+      const V = window.ProteusViewer, c = document.getElementById('view');
+      for (let y = 40; y < c.clientHeight; y += 17) for (let x = 40; x < c.clientWidth - 320; x += 17) {
+        if (V.pickAt(x, y) >= 0) return [x, y];
+      }
+      return null;
+    });
+    if (hit) {
+      await page.mouse.click(hit[0], hit[1]);
+      await page.waitForTimeout(100);
+      const s = await page.evaluate(() => ({ n: window.ProteusViewer.sel.set.size, sticks: window.ProteusViewer.sticks,
+        box: !document.getElementById('selbox').hidden }));
+      if (s.n !== 1 || !s.box) fail(where, `a click selected ${s.n} residues (box shown: ${s.box})`);
+      if (!s.sticks) fail(where, 'a selected residue drew no sticks');
+      await page.keyboard.press('Escape');
+      if (await page.evaluate(() => window.ProteusViewer.sel.set.size)) fail(where, 'Escape did not clear the selection');
+    }
+    // The first finding with items shows itself: its residues selected, a line drawn for a contact.
+    const finding = await page.evaluate(async () => {
+      for (const d of document.querySelectorAll('#panel details')) {
+        d.open = true;
+        await new Promise((r) => setTimeout(r, 30));
+        const b = d.querySelector('li button');
+        if (!b) continue;
+        b.click();
+        await new Promise((r) => setTimeout(r, 60));
+        return { name: d.querySelector('summary').textContent, n: window.ProteusViewer.sel.set.size };
+      }
+      return null;
+    });
+    if (finding && !finding.n) fail(where, `the finding "${finding.name}" selected nothing`);
+    // A page with PAE draws the map (not left blank) in the AlphaFold greens.
+    const pae = await page.evaluate(() => {
+      const c = document.getElementById('pae');
+      if (!c) return null;
+      const g = c.getContext('2d').getImageData(c.width >> 1, c.height >> 1, 1, 1).data;
+      return [g[0], g[1], g[2], g[3]];
+    });
+    if (pae && !(pae[3] === 255 && pae[1] >= pae[0] && pae[1] >= pae[2])) fail(where, `the PAE map is not drawn (${pae})`);
+    console.log(`ok   ${where}: ${r.drawn}/${r.samples} drawn, ${r.distinct} of ${r.residues} residues picked` +
+      (finding ? `, "${finding.name}" shown` : '') + (pae ? ', PAE drawn' : ''));
     await page.close();
   }
   await browser.close();
