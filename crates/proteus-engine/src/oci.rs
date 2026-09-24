@@ -82,6 +82,20 @@ pub fn tier_image(tier: &PipelineTier) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// How long one tier container may run: `PROTEUS_OCI_TIMEOUT_SECS`, else 3 hours (a large
+/// complex with several samples on a laptop GPU is well under that).
+fn run_timeout() -> std::time::Duration {
+    let secs = std::env::var("PROTEUS_OCI_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|s| *s > 0)
+        .unwrap_or(3 * 3600);
+    std::time::Duration::from_secs(secs)
+}
+
+/// /dev/shm for tier containers: 2 GiB.
+const TIER_SHM_BYTES: i64 = 2 << 30;
+
 /// Where the NVIDIA Container Toolkit writes its CDI spec (`nvidia-ctk cdi generate`).
 const NVIDIA_CDI_SPECS: [&str; 2] = ["/etc/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml"];
 
@@ -108,6 +122,81 @@ pub fn input_fasta_for(tier: &PipelineTier, header: &str, sequence: &str) -> Str
         PipelineTier::HighFidelity => format!(">A|protein|empty\n{sequence}\n"),
         _ => format!(">{header}\n{sequence}\n"),
     }
+}
+
+/// A job's input as Boltz reads it, and what the container needs besides the FASTA.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoltzInput {
+    pub fasta: String,
+    /// `(host path, file name under /workspace/msa/)` for alignments the user supplied.
+    pub msa_files: Vec<(std::path::PathBuf, String)>,
+    pub use_msa_server: bool,
+    pub samples: usize,
+}
+
+/// Build Boltz's input from a stored job input (a bare monomer or a
+/// [`proteus_core::complex::ComplexSpec`]). An alignment file is copied into the work
+/// directory and referred to by its container path; the server option drops the MSA field,
+/// which is how Boltz asks `--use_msa_server` for one.
+pub fn boltz_input(stored: &str) -> Result<BoltzInput, EngineError> {
+    use proteus_core::complex::{ComplexSpec, Entity, MsaSource};
+    let spec = ComplexSpec::from_stored(stored)?;
+    let mut fasta = String::new();
+    let mut msa_files = Vec::new();
+    for c in &spec.chains {
+        match &c.entity {
+            Entity::Protein { sequence, msa } => {
+                let field = match msa {
+                    MsaSource::Empty => "|empty".to_string(),
+                    MsaSource::Server => String::new(),
+                    MsaSource::File(p) => {
+                        let host = std::path::PathBuf::from(p);
+                        let ext = host
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("a3m")
+                            .to_string();
+                        let name = format!("{}.{ext}", c.id);
+                        msa_files.push((host, name.clone()));
+                        format!("|/workspace/msa/{name}")
+                    }
+                };
+                fasta.push_str(&format!(">{}|protein{field}\n{sequence}\n", c.id));
+            }
+            Entity::Ccd(code) => fasta.push_str(&format!(">{}|ccd\n{code}\n", c.id)),
+            Entity::Smiles(smiles) => fasta.push_str(&format!(">{}|smiles\n{smiles}\n", c.id)),
+        }
+    }
+    Ok(BoltzInput {
+        fasta,
+        msa_files,
+        use_msa_server: spec.uses_msa_server(),
+        samples: spec.samples.max(1),
+    })
+}
+
+/// The structure file Boltz ranks first: `*_model_0.*` (models are sorted by confidence), else
+/// the first structure file found. Walks subdirectories, in name order so the choice is stable.
+fn best_model(work_dir: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut dirs = vec![work_dir.to_path_buf()];
+    while let Some(d) = dirs.pop() {
+        for entry in std::fs::read_dir(&d)? {
+            let p = entry?.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|e| e == "pdb" || e == "cif") {
+                found.push(p);
+            }
+        }
+    }
+    found.sort();
+    let zero = found.iter().find(|p| {
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| s.ends_with("_model_0"))
+    });
+    Ok(zero.or(found.first()).cloned())
 }
 
 /// Tiers the OCI runner can actually execute. Relaxation needs a structure, and a pipeline
@@ -147,18 +236,69 @@ impl ComputeRunner for OciRunner {
         tokio::fs::create_dir_all(work_dir).await?;
 
         let fasta_path = work_dir.join("input.fasta");
-        tokio::fs::write(
-            &fasta_path,
-            input_fasta_for(&job.tier, &sequence.header, &sequence.fasta),
-        )
-        .await?;
+        let is_spec = proteus_core::complex::ComplexSpec::is_spec(&sequence.fasta);
+        let boltz = if job.tier == PipelineTier::HighFidelity {
+            Some(boltz_input(&sequence.fasta)?)
+        } else if is_spec {
+            return Err(EngineError::Container(
+                "complexes, ligands, MSA options and several samples need the sota tier \
+                 (Boltz); this tier folds one chain"
+                    .into(),
+            ));
+        } else {
+            None
+        };
+        match &boltz {
+            Some(b) => {
+                tokio::fs::write(&fasta_path, &b.fasta).await?;
+                if !b.msa_files.is_empty() {
+                    let msa_dir = work_dir.join("msa");
+                    tokio::fs::create_dir_all(&msa_dir).await?;
+                    for (host, name) in &b.msa_files {
+                        tokio::fs::copy(host, msa_dir.join(name))
+                            .await
+                            .map_err(|e| {
+                                EngineError::Container(format!(
+                                    "cannot copy the alignment {}: {e}",
+                                    host.display()
+                                ))
+                            })?;
+                    }
+                }
+            }
+            None => {
+                tokio::fs::write(
+                    &fasta_path,
+                    input_fasta_for(&job.tier, &sequence.header, &sequence.fasta),
+                )
+                .await?
+            }
+        }
 
         let abs_work_dir = std::fs::canonicalize(work_dir)
             .map_err(|e| EngineError::Container(format!("Failed to canonicalize work_dir: {e}")))?;
 
         let bind_mount = format!("{}:/workspace:Z", abs_work_dir.to_string_lossy());
 
-        let cmd = match job.tier {
+        let samples = boltz.as_ref().map_or(1, |b| b.samples).to_string();
+        // Samples one at a time by default: Boltz's default of 5 in parallel runs a laptop GPU
+        // out of memory on a 250-token complex (it then skips the input and exits 0).
+        let parallel = std::env::var("PROTEUS_BOLTZ_PARALLEL_SAMPLES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1)
+            .to_string();
+        // MSA depth: Boltz's default of 8 192 sequences needs a 660 MB tensor for a 243-token
+        // complex, more than a 6 GB GPU has left; 1 024 (the subsample it already uses for the
+        // trunk) fits, measured on HIV protease + indinavir.
+        let max_msa = std::env::var("PROTEUS_BOLTZ_MAX_MSA_SEQS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(1024)
+            .to_string();
+        let mut cmd = match job.tier {
             PipelineTier::FastScreening => vec![
                 "python",
                 "-m",
@@ -177,6 +317,12 @@ impl ComputeRunner for OciRunner {
                 "--output_format",
                 "pdb",
                 "--override",
+                "--diffusion_samples",
+                samples.as_str(),
+                "--max_parallel_samples",
+                parallel.as_str(),
+                "--max_msa_seqs",
+                max_msa.as_str(),
             ],
             PipelineTier::FullValidation => vec![
                 "python",
@@ -191,12 +337,19 @@ impl ComputeRunner for OciRunner {
             ],
         };
 
+        if boltz.as_ref().is_some_and(|b| b.use_msa_server) {
+            // Sends the sequences to the public ColabFold MMseqs2 server: opted into per job.
+            cmd.push("--use_msa_server");
+        }
         // No `auto_remove`: an auto-removed container can vanish before `wait_container` is
         // polled, which surfaces as a 404 on Docker. The container is removed explicitly below.
         // Podman and Docker 25+ both take a CDI device through the `cdi` device-request driver.
         let gpu = gpu_device();
         let host_config = HostConfig {
             binds: Some(vec![bind_mount]),
+            // PyTorch's data-loader workers pass tensors through /dev/shm; the runtimes'
+            // 64 MB default fails a Boltz complex with "unable to allocate shared memory".
+            shm_size: Some(TIER_SHM_BYTES),
             device_requests: gpu.clone().map(|id| {
                 vec![DeviceRequest {
                     driver: Some("cdi".to_string()),
@@ -265,24 +418,58 @@ impl ComputeRunner for OciRunner {
             }),
         );
 
-        while let Some(log_item) = logs.next().await {
-            match log_item {
-                Ok(chunk) => {
-                    info!("[{}] {}", container_name, chunk.to_string().trim());
-                }
-                Err(e) => {
-                    warn!("Log stream error for {}: {}", container_name, e);
-                    break;
+        // The last lines of output, for the error when the run fails or hangs.
+        let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        let mut out_of_memory = false;
+        let limit = run_timeout();
+        let streamed = tokio::time::timeout(limit, async {
+            while let Some(log_item) = logs.next().await {
+                match log_item {
+                    Ok(chunk) => {
+                        let line = chunk.to_string();
+                        info!("[{}] {}", container_name, line.trim());
+                        if line.contains("ran out of memory") || line.contains("OutOfMemoryError") {
+                            out_of_memory = true;
+                        }
+                        tail.push_back(line.trim().to_string());
+                        if tail.len() > 6 {
+                            tail.pop_front();
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Log stream error for {}: {}", container_name, e);
+                        break;
+                    }
                 }
             }
-        }
-
-        // Wait for container completion
-        let mut wait_stream = self
-            .docker
-            .wait_container(&container_name, None::<WaitContainerOptions>);
-
-        let waited = wait_stream.next().await;
+            let mut wait_stream = self
+                .docker
+                .wait_container(&container_name, None::<WaitContainerOptions>);
+            wait_stream.next().await
+        })
+        .await;
+        let waited = match streamed {
+            Ok(w) => w,
+            Err(_) => {
+                // A crashed data-loader worker can leave the predictor waiting forever.
+                let _ = self
+                    .docker
+                    .remove_container(
+                        &container_name,
+                        Some(RemoveContainerOptions {
+                            force: true,
+                            ..Default::default()
+                        }),
+                    )
+                    .await;
+                return Err(EngineError::Container(format!(
+                    "the container ran past {} s and was stopped (PROTEUS_OCI_TIMEOUT_SECS \
+                     raises the limit); its last output: {}",
+                    limit.as_secs(),
+                    tail.iter().cloned().collect::<Vec<_>>().join(" | ")
+                )));
+            }
+        };
         let _ = self
             .docker
             .remove_container(
@@ -302,32 +489,21 @@ impl ComputeRunner for OciRunner {
             };
             if status_code != 0 {
                 return Err(EngineError::Container(format!(
-                    "Container exited with non-zero status code: {status_code}"
+                    "Container exited with non-zero status code: {status_code}; its last \
+                     output: {}",
+                    tail.iter().cloned().collect::<Vec<_>>().join(" | ")
                 )));
             }
         }
 
-        // Locate predicted PDB in work_dir (recursively scanning in case engine creates subdirectories)
-        let mut found_pdb: Option<PathBuf> = None;
-        let mut dirs = vec![work_dir.to_path_buf()];
-        while let Some(current_dir) = dirs.pop() {
-            let mut entries = tokio::fs::read_dir(&current_dir).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let path = entry.path();
-                if path.is_dir() {
-                    dirs.push(path);
-                } else if let Some(ext) = path.extension() {
-                    if ext == "pdb" || ext == "cif" {
-                        found_pdb = Some(path);
-                        break;
-                    }
-                }
-            }
-            if found_pdb.is_some() {
-                break;
-            }
+        let found_pdb = best_model(work_dir)?;
+        if found_pdb.is_none() && out_of_memory {
+            return Err(EngineError::Container(
+                "the GPU ran out of memory and the predictor skipped the input: fewer --samples, \
+                 a smaller complex, or a larger GPU"
+                    .into(),
+            ));
         }
-
         let pdb_path = found_pdb.ok_or_else(|| {
             EngineError::Container(format!(
                 "Container completed but no PDB found in {:?}",
@@ -342,6 +518,14 @@ impl ComputeRunner for OciRunner {
                 "engine": crate::runner::ENGINE_OCI,
                 "runner": "oci",
                 "image": image,
+                "samples": boltz.as_ref().map_or(1, |b| b.samples),
+                "msa": boltz.as_ref().map(|b| if b.use_msa_server {
+                    "server"
+                } else if b.msa_files.is_empty() {
+                    "none"
+                } else {
+                    "file"
+                }),
                 "socket": self.socket_path,
                 "gpu": gpu
             })),
@@ -370,6 +554,42 @@ mod tests {
             tier_image(&PipelineTier::HighFidelity),
             "ghcr.io/jwohlwend/boltz:latest"
         );
+    }
+
+    #[test]
+    fn boltz_input_from_a_complex_spec() {
+        let stored = "#proteus samples=3\n>A|protein|server\nMQIF\n>B|protein|/data/b.a3m\nKKLL\n>L|ccd\nATP\n";
+        let b = boltz_input(stored).unwrap();
+        assert_eq!(
+            b.fasta,
+            ">A|protein\nMQIF\n>B|protein|/workspace/msa/B.a3m\nKKLL\n>L|ccd\nATP\n"
+        );
+        assert!(b.use_msa_server);
+        assert_eq!(b.samples, 3);
+        assert_eq!(
+            b.msa_files,
+            vec![(std::path::PathBuf::from("/data/b.a3m"), "B.a3m".to_string())]
+        );
+        // A bare monomer is the single-sequence input it always was.
+        let m = boltz_input("MQIF").unwrap();
+        assert_eq!(m.fasta, ">A|protein|empty\nMQIF\n");
+        assert!(!m.use_msa_server);
+    }
+
+    #[test]
+    fn the_top_ranked_boltz_model_is_picked() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("boltz_results_input/predictions/input");
+        std::fs::create_dir_all(&p).unwrap();
+        for f in [
+            "input_model_2.pdb",
+            "input_model_0.pdb",
+            "input_model_1.pdb",
+        ] {
+            std::fs::write(p.join(f), "").unwrap();
+        }
+        let best = best_model(dir.path()).unwrap().unwrap();
+        assert!(best.ends_with("input_model_0.pdb"), "{best:?}");
     }
 
     #[test]

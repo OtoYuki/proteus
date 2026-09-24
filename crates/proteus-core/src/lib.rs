@@ -2,6 +2,7 @@
 
 pub mod backbone;
 pub mod clash;
+pub mod complex;
 pub mod confidence;
 pub mod error;
 pub mod interactions;

@@ -77,6 +77,67 @@ pub fn ca_rmsd(model: &pdbtbx::PDB, reference: &pdbtbx::PDB) -> Result<f64, Core
     crate::metrics::compute_kabsch_rmsd(&ca(model), &ca(reference))
 }
 
+/// Heavy-atom RMSD of the ligands of `model` against those of `reference`, after superposing on
+/// the protein C-alphas paired by chain and residue number: how far a predicted pose moved.
+/// Ligand atoms are paired by (residue name, atom name); Boltz writes every ligand as `LIG`, so
+/// that name matches any. `None` when there is no ligand or fewer than three C-alpha pairs.
+pub fn ligand_rmsd(model: &pdbtbx::PDB, reference: &pdbtbx::PDB) -> Option<f64> {
+    use nalgebra::Vector3;
+    use std::collections::HashMap;
+    type Key = (String, isize);
+    let ca = |pdb: &pdbtbx::PDB| -> HashMap<Key, Vector3<f64>> {
+        crate::backbone::extract_backbone(&crate::io::protein_heavy_atoms(pdb))
+            .into_iter()
+            .filter_map(|r| r.ca.map(|p| ((r.chain_id, r.seq_num), p)))
+            .collect()
+    };
+    let ligand = |pdb: &pdbtbx::PDB| -> Vec<(String, String, Vector3<f64>)> {
+        let mut out = Vec::new();
+        for residue in pdb.residues() {
+            let name = residue.name().unwrap_or("").trim().to_string();
+            if crate::io::is_protein_residue(residue)
+                || matches!(name.as_str(), "HOH" | "WAT" | "DOD")
+            {
+                continue;
+            }
+            if let Some(conf) = residue.conformers().next() {
+                for a in conf.atoms() {
+                    if crate::io::element_symbol(a).eq_ignore_ascii_case("H") {
+                        continue;
+                    }
+                    out.push((
+                        name.clone(),
+                        a.name().trim().to_string(),
+                        Vector3::new(a.x(), a.y(), a.z()),
+                    ));
+                }
+            }
+        }
+        out
+    };
+    let (ma, ra) = (ca(model), ca(reference));
+    let keys: Vec<&Key> = ma.keys().filter(|k| ra.contains_key(*k)).collect();
+    if keys.len() < 3 {
+        return None;
+    }
+    let p: Vec<Vector3<f64>> = keys.iter().map(|k| ma[*k]).collect();
+    let q: Vec<Vector3<f64>> = keys.iter().map(|k| ra[*k]).collect();
+    let sup = crate::metrics::compute_kabsch_superposition(&p, &q).ok()?;
+    let (ml, rl) = (ligand(model), ligand(reference));
+    let mut sum = 0.0;
+    let mut n = 0usize;
+    for (res, atom, pos) in &ml {
+        let partner = rl
+            .iter()
+            .find(|(r2, a2, _)| a2 == atom && (r2 == res || r2 == "LIG" || res == "LIG"));
+        if let Some((_, _, q)) = partner {
+            sum += (sup.rotation * pos + sup.translation - q).norm_squared();
+            n += 1;
+        }
+    }
+    (n > 0).then(|| (sum / n as f64).sqrt())
+}
+
 /// `name.pdb.gz` → `name`, `x.cif` → `x`, `model_0.ent` → `model_0`.
 pub fn model_name(path: &Path) -> String {
     let name = path

@@ -26,7 +26,32 @@ All notable changes to this project are documented here. The format follows
   deviation.
 - The page embeds the model and offers it, and its PAE, as downloads.
 
+- Complexes and ligands for the `sota` tier: multi-record FASTA, Boltz-style `>ID|protein|…`,
+  `>ID|ccd`, `>ID|smiles` headers; `--msa none|server|FILE` (server opt-in: it sends the
+  sequence to ColabFold's MMseqs2 server); `--samples N` with the top-ranked model picked
+  explicitly and `proteus view --model K` for the rest. Other tiers and runners refuse such an
+  input instead of folding something else.
+- Per-chain pTM, ipTM grid and ligand ipTM; PAE of a ligand job (one token per ligand atom) is
+  collapsed to one row per ligand instead of being dropped.
+- Model table: the samples' scores and their Cα and ligand RMSD to the one shown.
+- Browser: measuring (`m`: distance, angle, dihedral), pinned labels (`l`), surfaces (`u`: plain,
+  hydrophobicity, Coulombic), and the view saved in the page's URL.
+- Terminal viewer: `[` `]` step through the findings, highlighting and centring each.
+
+### Fixed
+- The heavy-atom overlap score counted hydrogen bonds and salt bridges as clashes: with
+  heavy-atom radii every N–H···O at 2.5–3.1 Å overlaps by > 0.4 Å. Donor–acceptor pairs at
+  ≥ 2.4 Å are now excluded. A Boltz ubiquitin model goes from 3 overlaps to 0, AF-P69905 from 4
+  to 0, 1HSG from 7 to 3; triage scores rise accordingly.
+- Tier containers got the runtime's 64 MB `/dev/shm`, which crashed Boltz on a complex; they get
+  2 GiB. A container that hangs is stopped after `PROTEUS_OCI_TIMEOUT_SECS` (3 h) instead of
+  holding the job forever, and a failed or out-of-memory run says so with its last output.
+- The Boltz image carries a C compiler: Triton compiles its kernels on first use for larger
+  inputs and failed without one.
+
 ### Changed
+- Boltz runs samples one at a time and caps the MSA at 1 024 sequences by default, so a
+  250-token complex fits a 6 GB GPU (overridable).
 - The page's geometry blob is `PRMESH2`: it adds every heavy atom, the bonds and an optional
   reference ribbon. Pages written by an older Proteus still open; a page's own decoder refuses
   a blob of the other version.

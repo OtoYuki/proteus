@@ -17,4 +17,9 @@ RUN pip install "boltz[cuda]==${BOLTZ_VERSION}"
 # (mols.tar and its extraction), the structure checkpoint and the affinity checkpoint.
 RUN mkdir -p /opt/boltz && python -c "from pathlib import Path; from boltz.main import download_boltz2; download_boltz2(Path('/opt/boltz'))"
 
+# Triton JIT-compiles Boltz's GPU kernels on first use for larger inputs (complexes, ligands)
+# and needs a C compiler to do it. Last, so the layers above stay cached.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /workspace

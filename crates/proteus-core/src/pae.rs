@@ -93,6 +93,15 @@ pub struct PredictionConfidence {
     pub ptm: Option<f64>,
     /// Interface pTM, 0–1, for complexes; absent (or 0 in Boltz's file) for one chain.
     pub iptm: Option<f64>,
+    /// pTM of each chain, in chain order (Boltz `chains_ptm`).
+    pub chain_ptm: Vec<f64>,
+    /// ipTM of each pair of chains, in chain order (Boltz `pair_chains_iptm`); the diagonal is
+    /// the chain's own pTM.
+    pub pair_iptm: Vec<Vec<f64>>,
+    /// ipTM over protein–ligand interfaces (Boltz `ligand_iptm`), when there are any.
+    pub ligand_iptm: Option<f64>,
+    /// Boltz's ranking score (0.8·complex pLDDT + 0.2·ipTM, or pTM for one chain).
+    pub confidence_score: Option<f64>,
     /// The files these came from, for provenance in the viewer.
     pub sources: Vec<PathBuf>,
 }
@@ -100,6 +109,35 @@ pub struct PredictionConfidence {
 impl PredictionConfidence {
     pub fn is_empty(&self) -> bool {
         self.pae.is_none() && self.ptm.is_none() && self.iptm.is_none()
+    }
+}
+
+impl PredictedAlignedError {
+    /// Collapse token groups: `groups[k]` lists the matrix indices that become output index `k`
+    /// (one residue each for a protein, every atom of a ligand for a ligand), averaging over
+    /// each block. How a Boltz/AF3 matrix with one token per ligand atom is shown per ligand.
+    pub fn collapse(&self, groups: &[Vec<usize>]) -> Option<Self> {
+        if groups.iter().flatten().any(|&i| i >= self.n) || groups.iter().any(Vec::is_empty) {
+            return None;
+        }
+        let m = groups.len();
+        let mut values = vec![0.0f32; m * m];
+        for (a, ga) in groups.iter().enumerate() {
+            for (b, gb) in groups.iter().enumerate() {
+                let mut sum = 0.0f32;
+                for &i in ga {
+                    for &j in gb {
+                        sum += self.get(i, j);
+                    }
+                }
+                values[a * m + b] = sum / (ga.len() * gb.len()) as f32;
+            }
+        }
+        Some(Self {
+            n: m,
+            values,
+            max: self.max,
+        })
     }
 }
 
@@ -338,6 +376,47 @@ fn scores_from_json(v: &Value) -> (Option<f64>, Option<f64>) {
     (ptm, iptm)
 }
 
+/// A JSON object keyed by chain index ("0", "1", …), in index order.
+fn indexed(o: &serde_json::Map<String, Value>) -> Vec<(usize, &Value)> {
+    let mut e: Vec<(usize, &Value)> = o
+        .iter()
+        .filter_map(|(k, x)| k.parse::<usize>().ok().map(|i| (i, x)))
+        .collect();
+    e.sort_by_key(|(i, _)| *i);
+    e
+}
+
+/// Boltz's per-chain scores: `chains_ptm` {"0": x, …} and `pair_chains_iptm` {"0": {"1": x}}.
+fn chain_scores_from_json(v: &Value) -> (Vec<f64>, Vec<Vec<f64>>) {
+    let chain_ptm = v
+        .get("chains_ptm")
+        .and_then(Value::as_object)
+        .map(|o| {
+            indexed(o)
+                .into_iter()
+                .filter_map(|(_, x)| x.as_f64())
+                .collect()
+        })
+        .unwrap_or_default();
+    let pair_iptm = v
+        .get("pair_chains_iptm")
+        .and_then(Value::as_object)
+        .map(|o| {
+            indexed(o)
+                .into_iter()
+                .filter_map(|(_, row)| row.as_object())
+                .map(|row| {
+                    indexed(row)
+                        .into_iter()
+                        .filter_map(|(_, x)| x.as_f64())
+                        .collect()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    (chain_ptm, pair_iptm)
+}
+
 /// The files a predictor writes next to a model, by naming convention. Only files that exist
 /// are returned. `(pae_file, scores_file)`.
 pub fn sidecar_files(structure: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
@@ -406,6 +485,14 @@ pub fn read_confidence(
         let v: Value = serde_json::from_slice(&bytes)
             .map_err(|e| parse_err(format!("{}: not JSON: {e}", p.display())))?;
         let (ptm, iptm) = scores_from_json(&v);
+        if out.chain_ptm.is_empty() {
+            let (chain_ptm, pair_iptm) = chain_scores_from_json(&v);
+            out.chain_ptm = chain_ptm;
+            out.pair_iptm = pair_iptm;
+        }
+        let get = |k: &str| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite());
+        out.ligand_iptm = out.ligand_iptm.or(get("ligand_iptm").filter(|x| *x > 0.0));
+        out.confidence_score = out.confidence_score.or(get("confidence_score"));
         if ptm.is_some() || iptm.is_some() {
             out.ptm = out.ptm.or(ptm);
             out.iptm = out.iptm.or(iptm);
@@ -559,6 +646,31 @@ mod tests {
         assert_eq!(pae.unwrap(), d.join("fold_y_full_data_0.json"));
         assert_eq!(scores.unwrap(), d.join("fold_y_summary_confidences_0.json"));
         assert_eq!(sidecar_files(&d.join("plain.pdb")), (None, None));
+    }
+
+    #[test]
+    fn ligand_tokens_collapse_to_one_row_and_column() {
+        // Two residues, then a three-atom ligand.
+        let mut v = vec![1.0f32; 25];
+        v[0] = 0.0;
+        v[6] = 0.0;
+        let p = PredictedAlignedError::new(5, v, None).unwrap();
+        let c = p.collapse(&[vec![0], vec![1], vec![2, 3, 4]]).unwrap();
+        assert_eq!(c.n, 3);
+        assert_eq!(c.get(0, 0), 0.0);
+        assert_eq!(c.get(2, 2), 1.0);
+        assert!(p.collapse(&[vec![0], vec![9]]).is_none());
+    }
+
+    #[test]
+    fn boltz_chain_scores_are_read_in_chain_order() {
+        let v = serde_json::json!({
+            "chains_ptm": {"1": 0.8, "0": 0.9},
+            "pair_chains_iptm": {"0": {"0": 0.9, "1": 0.7}, "1": {"0": 0.7, "1": 0.8}}
+        });
+        let (c, p) = chain_scores_from_json(&v);
+        assert_eq!(c, vec![0.9, 0.8]);
+        assert_eq!(p, vec![vec![0.9, 0.7], vec![0.7, 0.8]]);
     }
 
     #[test]

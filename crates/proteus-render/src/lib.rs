@@ -64,6 +64,26 @@ pub struct StructureRenderData {
     pub scores: Option<AttachedScores>,
     /// A reference structure superposed onto this one, when the caller attached it.
     pub comparison: Option<Comparison>,
+    /// The other models of the same prediction (Boltz samples), when the caller found them.
+    pub models: Vec<ModelSummary>,
+}
+
+/// One sampled model of a prediction, as the model table lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelSummary {
+    /// Rank as the predictor wrote it (`*_model_0` is its best).
+    pub rank: usize,
+    pub file: String,
+    /// The predictor's ranking score, pTM, ipTM, and mean pLDDT (0–100).
+    pub score: Option<f64>,
+    pub ptm: Option<f64>,
+    pub iptm: Option<f64>,
+    pub plddt: Option<f64>,
+    /// C-alpha RMSD to the model on screen, after superposition.
+    pub rmsd_to_shown: Option<f64>,
+    /// Ligand heavy-atom RMSD to the model on screen, after superposing on the protein.
+    pub ligand_rmsd_to_shown: Option<f64>,
+    pub shown: bool,
 }
 
 /// A reference structure moved onto this one: its ribbon, in this structure's frame, and how
@@ -412,6 +432,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         confidence: None,
         scores: None,
         comparison: None,
+        models: Vec::new(),
     })
 }
 
@@ -471,8 +492,22 @@ impl StructureRenderData {
         mut confidence: proteus_core::pae::PredictionConfidence,
     ) -> Option<String> {
         let mut note = None;
+        // Boltz and AlphaFold 3 give a ligand one token per heavy atom, after the polymer
+        // residues in input order: average each ligand's rows and columns into one.
+        let ligand_atoms: usize = self.ligands.iter().map(|l| l.atom_count).sum();
         if let Some(p) = &confidence.pae {
-            if p.n != self.num_residues {
+            if !self.ligands.is_empty() && p.n == self.num_residues + ligand_atoms {
+                let mut groups: Vec<Vec<usize>> = (0..self.num_residues).map(|i| vec![i]).collect();
+                let mut next = self.num_residues;
+                for l in &self.ligands {
+                    groups.push((next..next + l.atom_count).collect());
+                    next += l.atom_count;
+                }
+                confidence.pae = p.collapse(&groups);
+            }
+        }
+        if let Some(p) = &confidence.pae {
+            if p.n != self.num_residues && p.n != self.num_residues + self.ligands.len() {
                 note = Some(format!(
                     "note: the PAE matrix covers {} positions but the structure has {} \
                      residues; PAE is not shown",

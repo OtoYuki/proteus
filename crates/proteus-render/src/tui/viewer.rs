@@ -161,6 +161,101 @@ pub struct ViewerConfig {
     pub stop: Option<Arc<AtomicBool>>,
     /// Colours from an attached score table: `c` cycles to them and the legend names them.
     pub scores: Option<ScoreColors>,
+    /// What `[` and `]` step through: outliers, overlaps and contacts, each highlighted and
+    /// centred in turn.
+    pub findings: Vec<TerminalFinding>,
+}
+
+/// One finding the terminal viewer can show: its residues (ribbon indices), where to centre,
+/// and a line for the status bar.
+#[derive(Debug, Clone)]
+pub struct TerminalFinding {
+    pub label: String,
+    pub residues: Vec<usize>,
+    pub focus: nalgebra::Vector3<f32>,
+}
+
+impl TerminalFinding {
+    /// The structure's findings, worst kinds first: Ramachandran outliers, overlaps, salt
+    /// bridges, π interactions, hydrogen bonds.
+    pub fn of(s: &crate::StructureRenderData) -> Vec<Self> {
+        use proteus_core::structure::RamachandranRegion;
+        let ca = |r: u32| -> Option<nalgebra::Vector3<f32>> {
+            (0..s.atoms.names.len())
+                .find(|&i| s.atoms.residues[i] == r && s.atoms.names[i] == "CA")
+                .map(|i| s.atoms.positions[i])
+        };
+        let name = |r: u32| {
+            let l = &s.residue_labels[r as usize];
+            format!("{}{}", l.name, l.number)
+        };
+        let a = &s.annotations;
+        let mut out = Vec::new();
+        for (r, reg) in &a.rama {
+            if let Some(p) = ca(*r) {
+                let what = if *reg == RamachandranRegion::Outlier {
+                    "Ramachandran outlier"
+                } else {
+                    "Ramachandran allowed"
+                };
+                out.push(Self {
+                    label: format!("{what} {}", name(*r)),
+                    residues: vec![*r as usize],
+                    focus: p,
+                });
+            }
+        }
+        let contacts = |kind: &str, unit: &str, list: &[crate::atoms::Contact]| {
+            list.iter()
+                .map(|c| Self {
+                    label: format!("{kind} {} · {:.2} Å{unit}", c.label, c.value),
+                    residues: vec![c.residues[0] as usize, c.residues[1] as usize],
+                    focus: (c.points[0] + c.points[1]) / 2.0,
+                })
+                .collect::<Vec<_>>()
+        };
+        out.extend(contacts("overlap", " overlap", &a.clashes));
+        out.extend(contacts("salt bridge", "", &a.salt_bridges));
+        out.extend(contacts("π–π", "", &a.pi_stacks));
+        out.extend(contacts("cation–π", "", &a.cation_pi));
+        out.extend(contacts("H-bond", "", &a.hbonds));
+        out
+    }
+}
+
+/// One colour per residue for `scheme`, from the mesh's first vertex of each residue: what a
+/// highlight dims.
+fn residue_base_colors(
+    mesh: &TriangleMesh,
+    scheme: ColorScheme,
+    scores: Option<&ScoreColors>,
+) -> Vec<ColorRGB> {
+    use crate::rasterizer::shader::{plddt_to_color, rainbow_color, secondary_structure_to_color};
+    let total = mesh
+        .vertices
+        .iter()
+        .map(|v| v.residue_index)
+        .max()
+        .map_or(1, |m| m + 1);
+    let mut out = vec![ColorRGB::BLACK; total];
+    let mut seen = vec![false; total];
+    for v in &mesh.vertices {
+        let r = v.residue_index;
+        if seen[r] {
+            continue;
+        }
+        seen[r] = true;
+        out[r] = match scheme {
+            ColorScheme::Plddt => plddt_to_color(v.plddt),
+            ColorScheme::SecondaryStructure => secondary_structure_to_color(v.secondary_structure),
+            ColorScheme::Rainbow => rainbow_color(r, total),
+            ColorScheme::Solid(c) => c,
+            ColorScheme::Scores => scores
+                .and_then(|s| s.residue_colors.get(r).copied())
+                .unwrap_or(crate::rasterizer::shader::NO_SCORE),
+        };
+    }
+    out
 }
 
 /// Per-residue colours of a score column, for the terminal viewer.
@@ -197,6 +292,7 @@ impl Default for ViewerConfig {
             dashboard_data: None,
             stop: None,
             scores: None,
+            findings: Vec::new(),
         }
     }
 }
@@ -236,6 +332,8 @@ pub fn run_interactive_viewer(
     let mut auto_rotate = config.auto_rotate;
     let mut color_scheme = config.initial_color_scheme;
     let mut show_disulfides = config.disulfide_mesh.is_some();
+    // The finding on show, if any: its residues keep their colour, the rest dims.
+    let mut finding: Option<usize> = None;
 
     let mut out_buf = String::with_capacity(64 * 1024);
     let mut last_frame = Instant::now();
@@ -290,6 +388,23 @@ pub fn run_interactive_viewer(
                     KeyCode::Char('r') => {
                         camera.reset();
                     }
+                    KeyCode::Char(']') | KeyCode::Char('[') if !config.findings.is_empty() => {
+                        let n = config.findings.len();
+                        let forward = key.code == KeyCode::Char(']');
+                        finding = Some(match (finding, forward) {
+                            (None, true) => 0,
+                            (None, false) => n - 1,
+                            (Some(i), true) => (i + 1) % n,
+                            (Some(i), false) => (i + n - 1) % n,
+                        });
+                        auto_rotate = false;
+                        camera.zoom = camera.zoom.max(2.5);
+                    }
+                    KeyCode::Char('0') if finding.is_some() => {
+                        finding = None;
+                        camera.pan = nalgebra::Vector3::zeros();
+                        camera.zoom = 1.0;
+                    }
                     KeyCode::Left | KeyCode::Char('h') => camera.rotate(-0.15, 0.0),
                     KeyCode::Right | KeyCode::Char('l') => camera.rotate(0.15, 0.0),
                     KeyCode::Up | KeyCode::Char('k') => camera.rotate(0.0, 0.15),
@@ -334,7 +449,25 @@ pub fn run_interactive_viewer(
         if layout.view_cols > 0 && layout.view_rows > 0 {
             // Render frame
             fb.clear(ColorRGB::BLACK); // black = empty: the terminal's own background shows
-            rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme);
+            match finding.and_then(|i| config.findings.get(i)) {
+                Some(f) => {
+                    // Centre on the finding whatever the rotation, and dim everything else.
+                    let rot = camera.rotation_matrix();
+                    camera.pan = -(rot * (f.focus - camera.center));
+                    let scores_before = std::mem::take(&mut rasterizer.residue_colors);
+                    let mut colors =
+                        residue_base_colors(mesh, color_scheme, config.scores.as_ref());
+                    for (r, c) in colors.iter_mut().enumerate() {
+                        if !f.residues.contains(&r) {
+                            *c = c.scale(0.3);
+                        }
+                    }
+                    rasterizer.residue_colors = colors;
+                    rasterizer.rasterize_mesh(mesh, &camera, &mut fb, ColorScheme::Scores);
+                    rasterizer.residue_colors = scores_before;
+                }
+                None => rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme),
+            }
 
             // Render superimposed secondary mesh if present
             if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
@@ -499,6 +632,13 @@ pub fn run_interactive_viewer(
             format!("{}{dash_note}", toggle("dashboard", dash_state)),
             toggle("effects", Some(fx_on)),
             toggle("spin", Some(auto_rotate)),
+            match finding.and_then(|i| config.findings.get(i).map(|f| (i, f))) {
+                Some((i, f)) => ansi.paint(
+                    Role::Accent,
+                    &format!("{}/{} {}", i + 1, config.findings.len(), f.label),
+                ),
+                None => String::new(),
+            },
             ansi.paint(Role::Dim, &format!("{fps:.0} fps")),
         ]
         .into_iter()
@@ -522,6 +662,7 @@ pub fn run_interactive_viewer(
                 key("c", "colour"),
                 key("o", "effects"),
                 key("d", "disulfides"),
+                key("[ ]", "findings"),
                 key("r", "reset"),
                 key("q", "back"),
             ]
