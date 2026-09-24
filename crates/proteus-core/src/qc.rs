@@ -390,6 +390,35 @@ pub fn summary_rows(
             ),
         ]);
     }
+    if let Some(g) = m.covalent_geometry.as_ref() {
+        let rmsz = |v: Option<f64>| v.map_or_else(|| "–".to_string(), |v| format!("{v:.2}"));
+        rows.push([
+            "Covalent geometry".into(),
+            format!(
+                "bond RMSZ {} ({} > 4σ) · angle RMSZ {} ({} > 4σ)",
+                rmsz(g.bonds.rmsz),
+                g.bonds.outliers,
+                rmsz(g.angles.rmsz),
+                g.angles.outliers
+            ),
+        ]);
+        rows.push([
+            "Stereochemistry".into(),
+            format!(
+                "Cβ outliers {} · inverted centres {} · cis non-Pro {} · twisted {}",
+                g.cbeta_outliers, g.handedness_swaps, g.cis_nonproline, g.twisted
+            ),
+        ]);
+        if let Some(pct) = g.rotamer_outlier_pct() {
+            rows.push([
+                "Rotamers".into(),
+                format!(
+                    "outliers {pct:.1} % ({} of {}) · allowed {}",
+                    g.rotamer_outliers, g.rotamer_residues, g.rotamer_allowed
+                ),
+            ]);
+        }
+    }
     if let Some(net) = m.interaction_network.as_ref() {
         rows.push([
             "Interactions".into(),

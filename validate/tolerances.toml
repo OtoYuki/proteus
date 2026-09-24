@@ -50,3 +50,23 @@ reason = "A beta-2 adrenergic receptor with T4 lysozyme fused into the third int
 id = "1cag"
 checks = ["sasa_freesasa", "rama_labels"]
 reason = "Collagen. cctbx ramalyze classifies none of its residues (polyproline II with hydroxyproline is outside the Top8000 classes), so the reference is empty rather than disagreeing. FreeSASA's ProtOr radii diverge most on a thin triple helix that is almost entirely surface. Kept so that both facts stay visible instead of being discovered later."
+
+# Covalent geometry, Cβ deviation and ω vs cctbx (validate/geometry_ref.py,
+# tests/geometry_validation.rs). Restraint counts must be equal and the > 4σ outliers identical
+# except within `z_boundary` of the cutoff, where the fifth decimal of a coordinate decides.
+[geometry]
+z_boundary = 0.01
+# Bond/angle/chirality/planarity RMSZ, relative (observed 5e-6: the reference's rounding).
+rmsz_rel = 1e-4
+cbeta_abs = 0.001
+omega_abs_deg = 0.01
+# Per-restraint comparison against `--full` dumps (PROTEUS_GEOMETRY_FULL): target and σ, and
+# the model value (the dump rounds to 5 decimals).
+ideal_abs = 1e-4
+model_abs = 1e-3
+
+# Side-chain rotamers vs cctbx rotalyze (tests/rotamer_validation.rs); the reference rounds χ
+# to 3 and the percentile to 4 decimals. Observed max 5e-4° and 5e-5 %.
+[rotamer]
+chi_abs_deg = 0.01
+score_abs = 0.01

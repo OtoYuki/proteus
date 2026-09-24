@@ -5,6 +5,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
+
 ### Added
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
   NVIDIA CDI spec is installed; `PROTEUS_GPU=off` or a device name overrides it) and records
@@ -38,6 +40,43 @@ All notable changes to this project are documented here. The format follows
   hydrophobicity, Coulombic), and the view saved in the page's URL.
 - Terminal viewer: `[` `]` step through the findings, highlighting and centring each.
 
+- `proteus_core::geometry`: bond lengths, bond angles, chiral volumes and planar groups of the
+  20 amino acids and selenomethionine against Phenix's default restraint library (geostd
+  monomers, Conformation-Dependent Library v1.2 backbone, Engh & Huber 1999 cis-proline,
+  peptide links, C-terminal carboxylate, disulfides), with Phenix's renaming of symmetric
+  side-chain atoms; Cβ deviation (cbetadev) and cis/twisted peptide classification
+  (omegalyze). Per type: count, > 4σ outliers, RMSZ; inverted chiral centres; every outlier
+  located and ranked. `restraint_details` exposes every restraint with its target, σ, model
+  value and Z.
+- `proteus_core::rotamer`: MolProbity rotalyze on the Top8000 distributions (outlier < 0.3 %,
+  allowed < 2 %), with rotamer names.
+- Both are validated structure by structure against cctbx on the 53-file corpus and 13
+  committed ESMFold models: identical restraint counts and outliers, RMSZ within 5e-6, all
+  26 469 rotamers identical (`make validate`; `validate/geometry_reference.py`,
+  `validate/fetch_chem_data.sh`). 1AON (58 674 atoms) takes 0.07 s.
+- `validate/predicted/`: 13 unrelaxed ESMFold models and the same models after an
+  AlphaFold2-style Amber relaxation (`relax.py`). Every unrelaxed one has bond outliers, mostly
+  short peptide C–N bonds at pLDDT ≥ 70; no relaxed one has any, and no Cα moved more than
+  0.14 Å. A test holds that.
+- `proteus analyze` reports the geometry and rotamers and lists the ten worst outliers; the
+  multi-file table gains `bond Z` and `rota out %`; the browser page, home screen and dashboard
+  show them.
+
+### Changed
+- Boltz runs samples one at a time and caps the MSA at 1 024 sequences by default, so a
+  250-token complex fits a 6 GB GPU (overridable).
+- The page's geometry blob is `PRMESH2`: it adds every heavy atom, the bonds and an optional
+  reference ribbon. Pages written by an older Proteus still open; a page's own decoder refuses
+  a blob of the other version.
+- `StructureQc` / `analyze --export`: eleven new columns (`bond_rmsz`, `bond_outliers`,
+  `angle_rmsz`, `angle_outliers`, `chirality_outliers`, `handedness_swaps`,
+  `planarity_outliers`, `cbeta_outliers`, `cis_nonpro`, `twisted_peptides`,
+  `rotamer_outlier_pct`); `proteus.qc_schema_version = 2`.
+- Screening export: nullable `bond_rmsz`, `angle_rmsz`, `rotamer_outlier_pct` appended;
+  `proteus.schema_version = 5`.
+- `BiophysicalMetrics` gains `covalent_geometry` (at most the 100 worst outliers stored;
+  metrics saved before this read back without it).
+
 ### Fixed
 - `proteus_tasks_total{status="queued"}` counted TES tasks the server rejected with 400; it
   now counts only accepted tasks.
@@ -63,13 +102,8 @@ All notable changes to this project are documented here. The format follows
   holding the job forever, and a failed or out-of-memory run says so with its last output.
 - The Boltz image carries a C compiler: Triton compiles its kernels on first use for larger
   inputs and failed without one.
-
-### Changed
-- Boltz runs samples one at a time and caps the MSA at 1 024 sequences by default, so a
-  250-token complex fits a 6 GB GPU (overridable).
-- The page's geometry blob is `PRMESH2`: it adds every heavy atom, the bonds and an optional
-  reference ribbon. Pages written by an older Proteus still open; a page's own decoder refuses
-  a blob of the other version.
+- The README's sample `analyze` output for 1CRN predated earlier fixes (54 H-bonds shown,
+  53 computed); regenerated.
 
 ## [0.8.0] — 2026-09-23
 

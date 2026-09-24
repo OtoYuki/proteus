@@ -89,7 +89,8 @@ fn library(name: &str) -> Option<&'static ResidueDef> {
 impl Restraints {
     fn push_bond(&mut self, r: BondRestraint) {
         let [a, b] = r.atoms;
-        self.bond_index.insert((a.min(b), a.max(b)), self.bonds.len());
+        self.bond_index
+            .insert((a.min(b), a.max(b)), self.bonds.len());
         self.bonds.push(r);
     }
 
@@ -186,7 +187,10 @@ impl Restraints {
         }
         let mod_planes: &[PlaneDef] = if coo { COO.planes } else { &[] };
         for plane in def.planes.iter().chain(mod_planes) {
-            self.add_plane(plane.iter().map(|&(n, e)| (res.atom(n), e)), Origin::Residue);
+            self.add_plane(
+                plane.iter().map(|&(n, e)| (res.atom(n), e)),
+                Origin::Residue,
+            );
         }
     }
 

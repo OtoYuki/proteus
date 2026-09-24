@@ -610,7 +610,13 @@ fn print_geometry_outliers(g: &proteus_core::geometry::CovalentGeometry, n: usiz
     let mut table = Table::new();
     table.load_style(UTF8_FULL);
     crate::cli::fit_table(&mut table);
-    table.set_header(vec!["Worst geometry outliers", "Atoms", "Ideal", "Model", "Z"]);
+    table.set_header(vec![
+        "Worst geometry outliers",
+        "Atoms",
+        "Ideal",
+        "Model",
+        "Z",
+    ]);
     for o in g.outliers.iter().take(n) {
         let what = match o.kind {
             OutlierKind::Bond => "bond",

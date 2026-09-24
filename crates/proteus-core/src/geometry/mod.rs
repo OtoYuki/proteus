@@ -140,15 +140,30 @@ enum FlipTest {
 
 fn flip_rule(resname: &str) -> Option<(FlipTest, &'static [(&'static str, &'static str)])> {
     Some(match resname {
-        "ARG" => (FlipTest::Dihedral(["CD", "NE", "CZ", "NH1"]), &[("NH1", "NH2")]),
-        "ASP" => (FlipTest::Dihedral(["CA", "CB", "CG", "OD1"]), &[("OD1", "OD2")]),
-        "GLU" => (FlipTest::Dihedral(["CB", "CG", "CD", "OE1"]), &[("OE1", "OE2")]),
+        "ARG" => (
+            FlipTest::Dihedral(["CD", "NE", "CZ", "NH1"]),
+            &[("NH1", "NH2")],
+        ),
+        "ASP" => (
+            FlipTest::Dihedral(["CA", "CB", "CG", "OD1"]),
+            &[("OD1", "OD2")],
+        ),
+        "GLU" => (
+            FlipTest::Dihedral(["CB", "CG", "CD", "OE1"]),
+            &[("OE1", "OE2")],
+        ),
         "PHE" | "TYR" => (
             FlipTest::Dihedral(["CA", "CB", "CG", "CD1"]),
             &[("CD1", "CD2"), ("CE1", "CE2")],
         ),
-        "VAL" => (FlipTest::Chiral(["CB", "CA", "CG1", "CG2"]), &[("CG1", "CG2")]),
-        "LEU" => (FlipTest::Chiral(["CG", "CB", "CD1", "CD2"]), &[("CD1", "CD2")]),
+        "VAL" => (
+            FlipTest::Chiral(["CB", "CA", "CG1", "CG2"]),
+            &[("CG1", "CG2")],
+        ),
+        "LEU" => (
+            FlipTest::Chiral(["CG", "CB", "CD1", "CD2"]),
+            &[("CD1", "CD2")],
+        ),
         _ => return None,
     })
 }
@@ -221,7 +236,8 @@ pub enum OutlierKind {
     /// Chiral volume beyond 4σ but below the handedness-swap threshold: a distorted centre.
     Tetrahedral,
     /// Chiral volume of the wrong sign: the centre is the mirror image (a D-amino acid, or an
-    /// inverted Cβ of Ile/Thr).
+    /// inverted Cβ of Ile/Thr). Both-sign centres (none among the standard residues) never
+    /// count.
     HandednessSwap,
     /// The sign of a Val CB or Leu CG "centre" is swapped: the two methyls are misnamed.
     PseudochiralNaming,
@@ -381,13 +397,17 @@ impl CovalentGeometry {
     }
 }
 
-/// Chirality outlier type (`mmtbx/validation/restraints.py`, `chirality.outlier_type`).
-fn chirality_kind(model: &Model, centre: usize, score: f64) -> OutlierKind {
-    let res = &model.residues[model.atoms[centre].residue].name;
-    let limit = if res == "PRO" { 22.0 } else { 20.0 };
-    if score <= limit {
+/// Type of a chirality outlier. A centre is inverted when the model's chiral volume is on the
+/// opposite side of zero by at least half the ideal magnitude; a volume near zero is a
+/// flattened centre, not a mirror image, and stays a tetrahedral outlier. Val CB and Leu CG are not true centres, so their inversion
+/// means the two methyls are misnamed. cctbx (`chirality.outlier_type`) instead calls any
+/// |Z| > 20 (22 for Pro) a handedness swap, which also catches badly distorted centres of the
+/// right hand (4HHB D:47 Asp CA: +8.5 Å³ against +2.5 Å³); here those stay tetrahedral outliers.
+fn chirality_kind(model: &Model, centre: usize, ideal: f64, value: f64) -> OutlierKind {
+    if ideal * value >= 0.0 || value.abs() < ideal.abs() / 2.0 {
         return OutlierKind::Tetrahedral;
     }
+    let res = &model.residues[model.atoms[centre].residue].name;
     let name = model.atoms[centre].name.as_str();
     if (res == "VAL" && name == "CB") || (res == "LEU" && name == "CG") {
         OutlierKind::PseudochiralNaming
@@ -438,9 +458,8 @@ struct Evaluated {
 }
 
 fn evaluate(model: &Model, r: &restraints::Restraints) -> Vec<Evaluated> {
-    let mut out = Vec::with_capacity(
-        r.bonds.len() + r.angles.len() + r.chiralities.len() + r.planes.len(),
-    );
+    let mut out =
+        Vec::with_capacity(r.bonds.len() + r.angles.len() + r.chiralities.len() + r.planes.len());
     for b in &r.bonds {
         let (v, d) = restraints::bond_value(model, b);
         out.push(Evaluated {
@@ -545,7 +564,7 @@ pub fn analyze(pdb: &pdbtbx::PDB) -> CovalentGeometry {
             RestraintKind::Bond => OutlierKind::Bond,
             RestraintKind::Angle => OutlierKind::Angle,
             RestraintKind::Planarity => OutlierKind::Planarity,
-            RestraintKind::Chirality => chirality_kind(&model, e.atoms[0], e.z.abs()),
+            RestraintKind::Chirality => chirality_kind(&model, e.atoms[0], e.ideal, e.model),
         };
         if kind == OutlierKind::HandednessSwap {
             g.handedness_swaps += 1;

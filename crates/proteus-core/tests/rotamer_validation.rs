@@ -16,10 +16,21 @@ use std::time::Instant;
 use proteus_core::rotamer::{evaluate_rotamers, RotamerEvaluation, RotamerResult};
 use serde::Deserialize;
 
-/// χ within 0.01°, score within 0.01 (percent); the reference rounds χ to 3 and the score to 4
-/// decimals.
-const CHI_TOL: f64 = 0.01;
-const SCORE_TOL: f64 = 0.01;
+/// `[rotamer]` of validate/tolerances.toml: χ in degrees, score in percent.
+#[derive(Deserialize)]
+struct Tolerances {
+    chi_abs_deg: f64,
+    score_abs: f64,
+}
+
+fn tolerances() -> Tolerances {
+    #[derive(Deserialize)]
+    struct File {
+        rotamer: Tolerances,
+    }
+    let text = std::fs::read_to_string(root().join("tolerances.toml")).unwrap();
+    toml::from_str::<File>(&text).unwrap().rotamer
+}
 
 #[derive(Deserialize)]
 struct Reference {
@@ -93,6 +104,7 @@ struct Row {
 #[test]
 #[ignore]
 fn rotamers_match_cctbx_rotalyze() {
+    let tol = tolerances();
     let mut refs: Vec<PathBuf> = std::fs::read_dir(root().join("reference/geometry"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -166,7 +178,7 @@ fn rotamers_match_cctbx_rotalyze() {
             } else {
                 for (a, b) in got.chi.iter().zip(&want_chi) {
                     row.max_chi = row.max_chi.max(angle_diff(*a, *b));
-                    if angle_diff(*a, *b) > CHI_TOL {
+                    if angle_diff(*a, *b) > tol.chi_abs_deg {
                         failures.push(format!("{stem} {k}: chi {:?} vs {:?}", got.chi, want_chi));
                         break;
                     }
@@ -174,7 +186,7 @@ fn rotamers_match_cctbx_rotalyze() {
             }
             let ds = (got.score - want.score).abs();
             row.max_score = row.max_score.max(ds);
-            if ds > SCORE_TOL {
+            if ds > tol.score_abs {
                 failures.push(format!("{stem} {k}: score {} vs {}", got.score, want.score));
             }
             if evaluation_label(got.evaluation) != want.evaluation {
