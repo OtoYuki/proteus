@@ -37,6 +37,48 @@ test('the 1CRN blob written by Rust decodes to the same mesh', async () => {
   }
   for (let i = 0; i < r.n; i++) assert.ok(r.ss[i] <= 2);
   assert.equal(C.vertexColors(r, 'ss').length, r.n * 3);
+  // Heavy atoms and bonds ride in the same blob.
+  const a = mesh.atoms;
+  assert.equal(a.n, want.atoms);
+  assert.equal(a.nBonds, want.bonds);
+  assert.deepEqual([a.bonds[0], a.bonds[1]], want.firstBond);
+  for (let k = 0; k < a.nBonds; k++) {
+    const i = a.bonds[2 * k], j = a.bonds[2 * k + 1];
+    const d = Math.hypot(a.pos[3 * i] - a.pos[3 * j], a.pos[3 * i + 1] - a.pos[3 * j + 1], a.pos[3 * i + 2] - a.pos[3 * j + 2]);
+    assert.ok(d > 1.1 && d < 2.2, `bond ${k} is ${d} Å`);
+  }
+  assert.equal(mesh.reference.n, 0);
+});
+
+test('the PAE scale is AlphaFold DB\'s: dark green at 0, near white at the maximum', () => {
+  assert.deepEqual(C.paeColor(0, 31.75), [0, 68, 27]);
+  assert.deepEqual(C.paeColor(31.75, 31.75), [247, 252, 245]);
+  assert.deepEqual(C.paeColor(99, 31.75), [247, 252, 245]);
+  const mid = C.paeColor(15, 31.75);
+  assert.ok(mid[1] > 68 && mid[1] < 252);
+});
+
+test('sticks, neighbours and closest atoms on crambin', async () => {
+  const mesh = C.parseMesh(await C.gunzip(fs.readFileSync(here('1crn.mesh.gz'))));
+  const a = mesh.atoms;
+  const els = ['C', 'N', 'O', 'S', 'P', 'SE', 'H', 'X'];
+  // Cys3 and Cys40 form a disulfide (0-based residues 2 and 39).
+  const sticks = C.stickMesh(a, els, new Set([2, 39]), () => [200, 200, 200], 0.2);
+  assert.ok(sticks.nt > 0);
+  for (let i = 0; i < sticks.idx.length; i++) assert.ok(sticks.idx[i] < sticks.n);
+  for (let i = 0; i < sticks.n; i++) assert.ok(sticks.res[i] === 2 || sticks.res[i] === 39);
+  const near = C.neighbours(a, new Set([2]), 5);
+  assert.ok(near.has(2) && near.has(39), 'the disulfide partner is within 5 Å');
+  assert.ok(near.size < 20);
+  const [d] = C.closestAtoms(a, 2, 39);
+  assert.ok(d > 1.9 && d < 2.2, `SG–SG ${d} Å`);
+});
+
+test('PyMOL selections name chains and escape negative numbers', () => {
+  assert.equal(C.pymolSelection([{ chain: 'A', number: 43, icode: '' }, { chain: 'A', number: 44, icode: 'B' }]),
+    'chain A and resi 43+44B');
+  assert.equal(C.pymolSelection([{ chain: 'A', number: -2, icode: '' }, { chain: 'B', number: 7, icode: '' }]),
+    '(chain A and resi \\-2) or (chain B and resi 7)');
 });
 
 test('a blob with the wrong magic or trailing bytes is rejected', async () => {

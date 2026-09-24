@@ -43,7 +43,53 @@ html, body { margin: 0; height: 100%; background: var(--ground); color: var(--te
 #panel .key { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 7px; font: 400 11px/1.4 var(--mono);
   color: var(--muted); }
 #panel .note { font: 400 11px/1.55 var(--text-face); color: var(--dim); margin: 18px 0 0; }
+#panel .note.tight { margin-top: 8px; }
 #panel .warn { color: var(--warm); }
+#panel canvas.pae { height: auto; aspect-ratio: 1; cursor: crosshair; image-rendering: pixelated; }
+#panel canvas.rama { cursor: default; }
+#panel canvas.scan { height: auto; aspect-ratio: 268 / 100; cursor: pointer; image-rendering: pixelated; }
+#panel .key.gradient { align-items: center; gap: 8px; flex-wrap: nowrap; }
+#panel .key.gradient i { flex: 1; height: 8px; display: block; }
+
+/* Findings: each list opens on demand, each item selects what it names. */
+#panel .findings details { border-top: 1px solid var(--line); padding: 6px 0; }
+#panel .findings details:last-child { border-bottom: 1px solid var(--line); }
+#panel .findings summary { cursor: pointer; font: 400 11.5px/1.5 var(--mono); color: var(--text); list-style: none; }
+#panel .findings summary::before { content: "+ "; color: var(--accent); }
+#panel .findings details[open] summary::before { content: "− "; }
+#panel .findings .all { display: block; margin: 4px 0 2px; font: 400 10.5px/1.4 var(--mono); color: var(--muted); cursor: pointer; }
+#panel .findings .all input { accent-color: var(--accent); vertical-align: -2px; margin: 0 4px 0 0; }
+#panel .findings ul { list-style: none; margin: 4px 0 0; padding: 0; max-height: 220px; overflow-y: auto; }
+#panel .findings li.more { font: 400 10.5px/1.5 var(--mono); color: var(--dim); padding: 2px 0; }
+#panel .findings button { all: unset; display: block; width: 100%; cursor: pointer; padding: 2px 4px;
+  font: 400 11px/1.5 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#panel .findings button:hover, #panel .findings button:focus-visible { color: var(--text); background: var(--line); }
+#panel .findings button.bad { color: var(--bad); }
+#panel .findings button.warm { color: var(--warm); }
+
+/* The selection: what is selected and what lies between it. */
+#selbox { position: fixed; left: 20px; bottom: 76px; max-width: min(560px, calc(100vw - 380px)); z-index: 3; white-space: normal;
+  padding: 9px 12px; background: var(--surface); border: 1px solid var(--line); border-left: 2px solid var(--accent);
+  font: 400 11.5px/1.55 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#selbox b { font-weight: 400; color: var(--muted); letter-spacing: .04em; }
+#selbox .names { color: var(--text); margin: 2px 0; }
+#selbox .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+#selbox button { all: unset; cursor: pointer; padding: 1px 7px; border: 1px solid var(--line); color: var(--text);
+  font: 400 10.5px/1.6 var(--mono); }
+#selbox button:hover, #selbox button:focus-visible { border-color: var(--accent); color: var(--accent); }
+
+/* Sequence track: one letter per residue, coloured by DSSP, numbered every ten. */
+#seq { position: fixed; left: 20px; right: 340px; bottom: 40px; height: 30px; overflow-x: auto; overflow-y: hidden;
+  white-space: nowrap; font: 500 12px/1 var(--mono); padding-top: 12px; scrollbar-width: thin; z-index: 2; }
+#seq span { display: inline-block; position: relative; }
+#seq .r { width: 1ch; text-align: center; cursor: pointer; color: var(--muted); padding: 2px 0; }
+#seq .r.h { color: var(--warm); }
+#seq .r.e { color: var(--sea); }
+#seq .r:hover { color: var(--ground); background: var(--text); }
+#seq .r.on { color: var(--ground); background: var(--accent); }
+#seq .r[data-n]::before { content: attr(data-n); position: absolute; left: 0; top: -11px; font: 400 8.5px/1 var(--mono); color: var(--dim); }
+#seq .chain { margin: 0 6px 0 10px; color: var(--dim); font-weight: 400; }
+#seq .chain:first-child { margin-left: 0; }
 
 /* Legend for the current colours: swatch and word. */
 #legend { position: fixed; left: 20px; top: 76px; display: flex; flex-wrap: wrap; gap: 14px;
@@ -74,6 +120,8 @@ kbd { font: inherit; color: var(--accent); margin-right: 4px; }
   #panel { top: auto; left: 8px; right: 8px; width: auto; height: 38vh; }
   #legend { top: auto; bottom: calc(38vh + 24px); max-width: calc(100vw - 32px); }
   #keys { display: none; }
+  #seq { right: 16px; bottom: calc(38vh + 70px); }
+  #selbox { bottom: calc(38vh + 110px); max-width: calc(100vw - 32px); }
   #fallback { right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { #view { transition: none; } }

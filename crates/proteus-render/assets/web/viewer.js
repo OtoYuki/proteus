@@ -2,6 +2,11 @@
 // Geometry comes from proteus-render (the same ribbon the terminal draws); this file only draws
 // it. Shading ports rasterizer/shader.rs `shade_blinn_phong` and pipeline.rs depth cueing,
 // outlines and SSAO. Pure helpers live in core.js (ProteusCore).
+//
+// Everything the panel reports can be pointed at: a selection (click the structure, the
+// sequence, a Ramachandran point, the pLDDT strip, the PAE map or a finding) dims the rest of
+// the ribbon, draws the selected residues and their 5 Å neighbourhood as sticks, and says what
+// lies between them.
 (function () {
   'use strict';
   const C = window.ProteusCore;
@@ -10,23 +15,78 @@
   // The brand roles, read from the CSS variables the page declares (brand::css_vars).
   const css = getComputedStyle(document.documentElement);
   const role = (name) => css.getPropertyValue('--' + name).trim();
+  const rgbOf = (name) => { const s = role(name); return [1, 3, 5].map((k) => parseInt(s.slice(k, k + 2), 16)); };
+
+  const N = meta.residues;
+  const SS8 = { H: 'α-helix', G: '3₁₀-helix', I: 'π-helix', E: 'strand', B: 'bridge', T: 'turn', S: 'bend', '-': 'coil', ' ': 'coil' };
+  const ligands = meta.ligands || [];
+  const issues = meta.issues || { rama: [], clashes: [], hbonds: [], saltBridges: [], piStacks: [], cationPi: [] };
+  // Contact kinds: the list key in meta.issues, a name, and the brand role its lines are drawn in.
+  const KINDS = [
+    ['clashes', 'heavy-atom overlaps', 'bad', 'overlap'],
+    ['hbonds', 'hydrogen bonds', 'sea', ''],
+    ['saltBridges', 'salt bridges', 'warm', ''],
+    ['piStacks', 'π–π stacking', 'accent', ''],
+    ['cationPi', 'cation–π', 'accent', ''],
+  ];
 
   // ---------------------------------------------------------------- panels (no WebGL needed)
   // The brand already names the product: the heading is the structure, and the line under it
   // says what kind of file it is.
   $('title').textContent = meta.caption || meta.title;
-  $('caption').textContent = meta.residues + ' residues · ' +
-    (meta.predicted ? 'predicted model' : 'experimental structure');
+  $('caption').textContent = N + ' residues' + (ligands.length ? ' · ' + ligands.length + ' ligand' + (ligands.length > 1 ? 's' : '') : '') +
+    ' · ' + (meta.predicted ? 'predicted model' : 'experimental structure');
   // The tab and a saved PNG are named after the structure, not the generic page title.
   const subject = meta.caption.split(' · ')[0] || meta.title;
   document.title = subject + ' — Proteus';
-  buildPanel();
 
-  const SCHEMES = ['ss', 'plddt', 'rainbow'];
+  // With more than one chain a residue number alone is ambiguous: prefix the chain.
+  const multiChain = new Set(meta.labels.chain).size > 1;
+  function shortLabel(i) {
+    if (i >= N) return label(i);
+    return (multiChain ? meta.labels.chain[i] + ':' : '') + meta.labels.name[i] + meta.labels.number[i] + meta.labels.icode[i];
+  }
+
+  const scores = meta.scores;
+  const fmt = (v) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
+  const SCHEMES = scores ? ['ss', 'plddt', 'rainbow', 'score'] : ['ss', 'plddt', 'rainbow'];
   let scheme = SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss';
   let noticeText = '';
   let noticeTimer = 0;
+  let V = null; // the 3D view, once WebGL has started
+
+  // The selection: residue ids (ligand k is N + k), shown contacts, and a hover preview.
+  const sel = { set: new Set(), anchor: -1, neigh: true, contacts: [], preview: null, pae: null };
+  const showKinds = new Set();
+  let seqSpans = [];
+  let marked = new Set();
+
+  // PAE, 1/8 Å per byte (web.rs), decoded once the page has loaded.
+  let pae = null;
+  const paeInfo = meta.confidence && meta.confidence.pae;
+  if (paeInfo && $('proteus-pae').textContent.trim()) {
+    C.gunzip(C.b64ToBytes($('proteus-pae').textContent))
+      .then((bytes) => { pae = { n: paeInfo.n, max: paeInfo.max, v: bytes }; drawPae(); updateSelectionUI(); })
+      .catch(() => {});
+  }
+  const paeAt = (i, j) => pae.v[i * pae.n + j] / 8;
+
+  buildPanel();
+  buildSequence();
   showLegend();
+  updateSelectionUI();
+  // The key help wraps on narrow windows: stack the sequence track and the selection box on it.
+  function layoutBottom() {
+    const keys = $('keys'), seq = $('seq'), box = $('selbox');
+    // offsetParent is always null for a fixed element: ask the computed style instead.
+    if (getComputedStyle(keys).display === 'none') { seq.style.bottom = box.style.bottom = ''; return; }
+    const top = 16 + keys.offsetHeight + 6;
+    seq.style.bottom = top + 'px';
+    box.style.bottom = top + seq.offsetHeight + 8 + 'px';
+  }
+  layoutBottom();
+  window.addEventListener('resize', layoutBottom);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutBottom);
 
   function fail(msg) {
     const fb = $('fallback');
@@ -57,6 +117,8 @@
   layout(location=2) in vec3 aCol;
   // The residue index as a float, exact to 2^24 (see PICK_FS for why not an integer).
   layout(location=3) in float aRes;
+  // 1 for a selected (or undimmed) vertex, 0 for one outside the selection.
+  layout(location=4) in float aSel;
   uniform vec3 uLo, uSpan, uCenter;
   uniform mat3 uRot;
   uniform vec2 uScale, uPan, uOffset;
@@ -64,6 +126,7 @@
   out vec3 vNormal;
   out vec3 vColor;
   out float vDepth;
+  out float vSel;
   flat out float vRes;
   void main() {
     vec3 world = uLo + aPos * uSpan;
@@ -73,6 +136,7 @@
     vColor = aCol;
     vDepth = -view.z;          // camera.rs: smaller is closer, viewer at +Z
     vRes = aRes;
+    vSel = aSel;
     gl_Position = vec4(view.xy * uScale + uOffset, clamp(vDepth / uZ, -1.0, 1.0), 1.0);
   }`;
 
@@ -81,13 +145,17 @@
   // from the viewer is flipped toward it, which the CPU pipeline does not do (it leaves such a
   // surface at the 0.30 ambient). The rule uses the normal, not gl_FrontFacing, because the
   // ribbon's triangle winding is not consistent enough to say which side is the front.
+  // Outside an active selection the colour is pulled 62 % of the way to the background.
   const GEOM_FS = `#version 300 es
   precision highp float;
   in vec3 vNormal;
   in vec3 vColor;
   in float vDepth;
+  in float vSel;
   flat in float vRes;
   uniform float uFogLo, uFogHi;
+  uniform bool uSelActive;
+  uniform vec3 uBg;
   out vec4 outColor;
   void main() {
     vec3 n = length(vNormal) < 1e-3 ? vec3(0.0, 0.0, 1.0) : normalize(vNormal);
@@ -99,7 +167,9 @@
             + pow(max(dot(n, h), 0.0), 16.0) * 0.25;
     i = clamp(i, 0.0, 1.3);
     float frac = clamp((vDepth - uFogLo) / max(uFogHi - uFogLo, 1e-3), 0.0, 1.0);
-    outColor = vec4(min(vColor * i, vec3(1.0)) * (1.0 - 0.45 * frac), 1.0);
+    vec3 c = min(vColor * i, vec3(1.0)) * (1.0 - 0.45 * frac);
+    if (uSelActive && vSel < 0.5) c = mix(c, uBg, 0.62);
+    outColor = vec4(c, 1.0);
   }`;
 
   // The residue id (+1, so 0 is background) in red and green only, computed in float (exact
@@ -194,6 +264,7 @@
     const geom = program(GEOM_VS, GEOM_FS);
     const pick = program(GEOM_VS, PICK_FS);
     const post = program(POST_VS, POST_FS);
+    const bgRgb = meta.palette.ground; // brand::DARK.ground
 
     function vao(m, withAttrs) {
       const v = gl.createVertexArray();
@@ -208,23 +279,45 @@
       };
       buf(0, m.pos, 3, gl.UNSIGNED_SHORT, true);
       buf(1, m.nrm, 3, gl.BYTE, true);
-      let colorBuf = null;
+      let colorBuf = null, selBuf = null;
       if (withAttrs) {
-        colorBuf = buf(2, C.vertexColors(m, scheme), 3, gl.UNSIGNED_BYTE, true);
-        const rb = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, rb);
-        gl.bufferData(gl.ARRAY_BUFFER, Float32Array.from(m.res), gl.STATIC_DRAW);
-        gl.enableVertexAttribArray(3);
-        gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 0, 0);
+        colorBuf = buf(2, C.vertexColors(m, scheme, scores && scores.colors), 3, gl.UNSIGNED_BYTE, true);
+        buf(3, Float32Array.from(m.res), 1, gl.FLOAT, false);
+        selBuf = buf(4, new Float32Array(m.n).fill(1), 1, gl.FLOAT, false);
       }
       const ib = gl.createBuffer();
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
       gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.idx, gl.STATIC_DRAW);
       gl.bindVertexArray(null);
-      return { v, colorBuf, count: m.nt * 3 };
+      return { v, colorBuf, selBuf, count: m.nt * 3 };
+    }
+    // A mesh built on the page (sticks, contact lines): world-space floats.
+    function dynVao(m) {
+      const v = gl.createVertexArray();
+      gl.bindVertexArray(v);
+      const bufs = [];
+      const buf = (loc, data, size, type, norm) => {
+        const b = gl.createBuffer();
+        bufs.push(b);
+        gl.bindBuffer(gl.ARRAY_BUFFER, b);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(loc);
+        gl.vertexAttribPointer(loc, size, type, norm, 0, 0);
+      };
+      buf(0, m.pos, 3, gl.FLOAT, false);
+      buf(1, m.nrm, 3, gl.FLOAT, false);
+      buf(2, m.col, 3, gl.UNSIGNED_BYTE, true);
+      buf(3, m.res, 1, gl.FLOAT, false);
+      const ib = gl.createBuffer();
+      bufs.push(ib);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.idx, gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+      return { v, count: m.nt * 3, free() { gl.deleteVertexArray(v); for (const b of bufs) gl.deleteBuffer(b); } };
     }
     const ribbon = vao(mesh.ribbon, true);
     const ds = mesh.disulfides.n > 0 ? vao(mesh.disulfides, false) : null;
+    let sticks = null, lines = null;
 
     // Depth-cueing range: the view-space depth extent of the ribbon, like pipeline.rs, measured
     // on a subsample of vertices each frame.
@@ -232,6 +325,13 @@
     const world = [];
     for (let i = 0; i < mesh.ribbon.n; i += sampleStride) {
       world.push([0, 1, 2].map((k) => mesh.lo[k] + mesh.ribbon.pos[3 * i + k] / 65535 * mesh.span[k]));
+    }
+    // C-alpha of each residue: the ribbon vertex nearest the spline passes through it closely
+    // enough to aim the camera; the atom table has the real one when present.
+    const caOf = new Array(N);
+    for (let i = 0; i < mesh.atoms.n; i++) {
+      const r = mesh.atoms.res[i];
+      if (r < N && meta.atomNames[i] === 'CA') caOf[r] = [mesh.atoms.pos[3 * i], mesh.atoms.pos[3 * i + 1], mesh.atoms.pos[3 * i + 2]];
     }
 
     const cam = meta.camera;
@@ -294,8 +394,6 @@
 
     function setGeomUniforms(prog, rot) {
       const s = pxPerA();
-      gl.uniform3fv(prog.u.uLo, mesh.lo);
-      gl.uniform3fv(prog.u.uSpan, mesh.span);
       gl.uniform3fv(prog.u.uCenter, center);
       gl.uniformMatrix3fv(prog.u.uRot, true, rot);
       gl.uniform2f(prog.u.uScale, 2 * s / W, 2 * s / H);
@@ -306,8 +404,13 @@
     }
 
     function drawMeshes(prog, forPick) {
+      // Quantised meshes are in the blob's box; page-built ones are plain world coordinates.
+      const quantised = () => { gl.uniform3fv(prog.u.uLo, mesh.lo); gl.uniform3fv(prog.u.uSpan, mesh.span); };
+      const worldSpace = () => { gl.uniform3f(prog.u.uLo, 0, 0, 0); gl.uniform3f(prog.u.uSpan, 1, 1, 1); };
+      quantised();
       gl.bindVertexArray(ribbon.v);
       gl.drawElements(gl.TRIANGLES, ribbon.count, gl.UNSIGNED_INT, 0);
+      gl.vertexAttrib1f(4, 1);
       if (ds && state.ds && !forPick) {
         gl.bindVertexArray(ds.v);
         const dsColour = meta.palette.disulfide; // brand::structure::DISULFIDE
@@ -315,9 +418,19 @@
         gl.vertexAttrib1f(3, 0);
         gl.drawElements(gl.TRIANGLES, ds.count, gl.UNSIGNED_INT, 0);
       }
+      worldSpace();
+      if (sticks) {
+        gl.bindVertexArray(sticks.v);
+        gl.drawElements(gl.TRIANGLES, sticks.count, gl.UNSIGNED_INT, 0);
+      }
+      if (lines && !forPick) {
+        gl.bindVertexArray(lines.v);
+        gl.drawElements(gl.TRIANGLES, lines.count, gl.UNSIGNED_INT, 0);
+      }
       gl.bindVertexArray(null);
     }
 
+    let selActive = false;
     function render() {
       targets();
       const rot = rotation();
@@ -337,6 +450,8 @@
       setGeomUniforms(geom, rot);
       gl.uniform1f(geom.u.uFogLo, lo);
       gl.uniform1f(geom.u.uFogHi, hi);
+      gl.uniform1i(geom.u.uSelActive, selActive ? 1 : 0);
+      gl.uniform3f(geom.u.uBg, bgRgb[0] / 255, bgRgb[1] / 255, bgRgb[2] / 255);
       drawMeshes(geom, false);
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -348,8 +463,7 @@
       gl.uniform1f(post.u.uZ, zRange);
       gl.uniform1f(post.u.uStep, Math.max(1, Math.min(W, H) / 400));
       gl.uniform1i(post.u.uFx, state.fx ? 1 : 0);
-      const bg = meta.palette.ground; // brand::DARK.ground
-      gl.uniform3f(post.u.uBg, bg[0] / 255, bg[1] / 255, bg[2] / 255);
+      gl.uniform3f(post.u.uBg, bgRgb[0] / 255, bgRgb[1] / 255, bgRgb[2] / 255);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
@@ -373,7 +487,7 @@
         return px[0] + px[1] * 256;
       };
       let id = pass(false);
-      if (id !== 0 && meta.residues >= 65535) id += pass(true) * 65536;
+      if (id !== 0 && N + ligands.length >= 65535) id += pass(true) * 65536;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return id - 1;
     }
@@ -391,20 +505,110 @@
     requestAnimationFrame(() => requestAnimationFrame(() => canvas.classList.add('ready')));
     request();
 
+    // Per-residue colour of the current scheme (a residue's first ribbon vertex): carbons in
+    // the sticks take it.
+    let resColour = [];
+    function residueColours(colours) {
+      resColour = new Array(N);
+      for (let i = mesh.ribbon.n - 1; i >= 0; i--) {
+        const r = mesh.ribbon.res[i];
+        resColour[r] = [colours[3 * i], colours[3 * i + 1], colours[3 * i + 2]];
+      }
+    }
+    residueColours(C.vertexColors(mesh.ribbon, scheme, scores && scores.colors));
+
     function recolor() {
+      const colours = C.vertexColors(mesh.ribbon, scheme, scores && scores.colors);
       gl.bindBuffer(gl.ARRAY_BUFFER, ribbon.colorBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, C.vertexColors(mesh.ribbon, scheme), gl.STATIC_DRAW);
+      gl.bufferData(gl.ARRAY_BUFFER, colours, gl.STATIC_DRAW);
+      residueColours(colours);
+      rebuildSticks();
       showLegend();
       request();
     }
 
+    // ---------------------------------------------------------------- selection in 3D
+    const ligandCarbon = rgbOf('accent');
+    function rebuildSticks() {
+      if (sticks) { sticks.free(); sticks = null; }
+      if (lines) { lines.free(); lines = null; }
+      const shown = new Set(sel.neigh ? C.neighbours(mesh.atoms, sel.set, 5) : sel.set);
+      for (let k = 0; k < ligands.length; k++) shown.add(N + k);
+      for (const c of sel.contacts) { shown.add(c[0]); shown.add(c[1]); }
+      if (shown.size && mesh.atoms.n) {
+        const m = C.stickMesh(mesh.atoms, meta.elements, shown,
+          (r) => (r < N ? resColour[r] : ligandCarbon) || [200, 200, 200], 0.17);
+        if (m.nt) sticks = dynVao(m);
+      }
+      const b = C.meshBuilder();
+      const drawn = new Set();
+      const add = (c, colour) => {
+        const key = c[2].join() + c[3].join();
+        if (drawn.has(key)) return;
+        drawn.add(key);
+        b.dashes(c[2], c[3], 0.06, 0.22, 0.16, colour, c[0]);
+      };
+      for (const [key, , r] of KINDS) {
+        if (!showKinds.has(key)) continue;
+        const colour = rgbOf(r);
+        for (const c of issues[key]) add(c, colour);
+      }
+      for (const c of sel.contacts) add(c, rgbOf(c.role || 'text'));
+      const lm = b.build();
+      if (lm.nt) lines = dynVao(lm);
+    }
+
+    function applyDimming() {
+      const set = sel.preview || sel.set;
+      selActive = set.size > 0;
+      const f = new Float32Array(mesh.ribbon.n);
+      if (selActive) for (let i = 0; i < mesh.ribbon.n; i++) f[i] = set.has(mesh.ribbon.res[i]) ? 1 : 0;
+      else f.fill(1);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ribbon.selBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, f, gl.STATIC_DRAW);
+    }
+
+    // Centre the view on the selection (and zoom in to about 24 Å across when asked).
+    function focus(zoomIn) {
+      const pts = [];
+      for (const c of sel.contacts) pts.push(c[2], c[3]);
+      for (const r of sel.set) {
+        if (r < N && caOf[r]) pts.push(caOf[r]);
+        else if (r >= N) for (let i = 0; i < mesh.atoms.n; i++) if (mesh.atoms.res[i] === r) pts.push([mesh.atoms.pos[3 * i], mesh.atoms.pos[3 * i + 1], mesh.atoms.pos[3 * i + 2]]);
+      }
+      if (!pts.length) return;
+      const c = [0, 1, 2].map((k) => pts.reduce((s, p) => s + p[k], 0) / pts.length);
+      const rot = rotation();
+      const d = [c[0] - center[0], c[1] - center[1], c[2] - center[2]];
+      state.pan = [-(rot[0] * d[0] + rot[1] * d[1] + rot[2] * d[2]), -(rot[3] * d[0] + rot[4] * d[1] + rot[5] * d[2])];
+      if (zoomIn) {
+        let extent = 0;
+        for (const p of pts) extent = Math.max(extent, Math.hypot(p[0] - c[0], p[1] - c[1], p[2] - c[2]));
+        state.zoom = Math.min(50, Math.max(state.zoom, cam.radius / Math.max(12, extent + 8)));
+      }
+      request();
+    }
+
+    V = {
+      selectionChanged(opts) {
+        rebuildSticks();
+        applyDimming();
+        if (opts && opts.focus) focus(opts.zoom);
+        request();
+      },
+      previewChanged() { applyDimming(); request(); },
+      atoms: mesh.atoms,
+      caOf,
+    };
+
     // ---------------------------------------------------------------- input
     const pointers = new Map();
-    let pinch = null;
+    let pinch = null, down = null;
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('pointerdown', (e) => {
       canvas.setPointerCapture(e.pointerId);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey });
+      down = pointers.size === 1 && e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
       if (pointers.size === 2) {
         const [a, b] = [...pointers.values()];
         pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom: state.zoom };
@@ -427,7 +631,18 @@
       }
       request();
     });
-    const up = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; };
+    const up = (e) => {
+      // A press that did not move is a click: pick what is under it.
+      if (down && e.type === 'pointerup' && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) {
+        const r = canvas.getBoundingClientRect();
+        const i = pickAt(e.clientX - r.left, e.clientY - r.top);
+        clickResidue(i, e);
+        request();
+      }
+      down = null;
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinch = null;
+    };
     canvas.addEventListener('pointerup', up);
     canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('pointerleave', hideTip);
@@ -439,6 +654,7 @@
     canvas.addEventListener('dblclick', () => { reset(); request(); });
     window.addEventListener('keydown', (e) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
       switch (e.key) {
         case 'c': scheme = SCHEMES[(SCHEMES.indexOf(scheme) + 1) % SCHEMES.length]; recolor(); break;
         case 'o': state.fx = !state.fx; request(); break;
@@ -448,6 +664,16 @@
           notice('disulfides ' + (state.ds ? 'shown' : 'hidden') + ' (' + meta.disulfides + ')');
           request();
           break;
+        case 'n':
+          sel.neigh = !sel.neigh;
+          notice('neighbours within 5 Å ' + (sel.neigh ? 'shown' : 'hidden'));
+          select(sel.set);
+          break;
+        case 'f':
+          if (!sel.set.size) { notice('nothing selected to focus on'); break; }
+          focus(true);
+          break;
+        case 'Escape': select(new Set()); break;
         case ' ': state.spin = !state.spin; e.preventDefault(); request(); break;
         case 'r': reset(); request(); break;
         case 's': save(); break;
@@ -471,7 +697,7 @@
         const r = canvas.getBoundingClientRect();
         const i = pickAt(ev.clientX - r.left, ev.clientY - r.top);
         request();
-        if (i < 0 || i >= meta.residues) { hideTip(); return; }
+        if (i < 0 || i >= N + ligands.length) { hideTip(); return; }
         showTip(i, ev.clientX, ev.clientY);
       });
     }
@@ -486,35 +712,168 @@
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       });
     }
-    window.ProteusViewer = { state, render, pickAt, get scheme() { return scheme; } };
+    rebuildSticks();
+    window.ProteusViewer = { state, render, pickAt, sel, select, focus, get scheme() { return scheme; },
+      get sticks() { return sticks ? sticks.count / 3 : 0; }, get lines() { return lines ? lines.count / 3 : 0; } };
+  }
+
+  // ---------------------------------------------------------------- selection model
+  /**
+   * Replace the selection. `opts.contacts` are findings to draw (with `role` for colour),
+   * `opts.focus` centres the view on the result, `opts.pae` records a PAE box for the summary.
+   */
+  function select(set, opts) {
+    opts = opts || {};
+    sel.set = new Set(set);
+    sel.contacts = opts.contacts || [];
+    sel.pae = opts.pae || null;
+    sel.preview = null;
+    if (V) V.selectionChanged(opts);
+    updateSelectionUI();
+  }
+
+  function preview(set) {
+    sel.preview = set;
+    if (V) V.previewChanged();
+    markSequence(set || sel.set);
+  }
+
+  /** A click on residue `i` in any view: replace, extend (shift: range) or toggle (ctrl). */
+  function clickResidue(i, e) {
+    if (i < 0) { if (!e.shiftKey && !e.ctrlKey && !e.metaKey) select(new Set()); return; }
+    let next;
+    if ((e.ctrlKey || e.metaKey)) {
+      next = new Set(sel.set);
+      if (next.has(i)) next.delete(i); else next.add(i);
+    } else if (e.shiftKey && sel.anchor >= 0 && i < N && sel.anchor < N) {
+      next = new Set(sel.set);
+      const [a, b] = sel.anchor < i ? [sel.anchor, i] : [i, sel.anchor];
+      for (let r = a; r <= b; r++) next.add(r);
+    } else {
+      next = sel.set.size === 1 && sel.set.has(i) ? new Set() : new Set([i]);
+    }
+    sel.anchor = i;
+    select(next);
+  }
+
+  function label(i) {
+    if (i >= N) {
+      const l = ligands[i - N];
+      return l ? l.name + ' ' + (l.chain ? l.chain + ':' : '') + l.number : '?';
+    }
+    const L = meta.labels;
+    return L.name[i] + ' ' + (L.chain[i].trim() ? L.chain[i] + ':' : '') + L.number[i] + L.icode[i];
+  }
+
+  function updateSelectionUI() {
+    markSequence(sel.set);
+    const box = $('selbox');
+    const ids = [...sel.set].sort((a, b) => a - b);
+    box.hidden = ids.length === 0;
+    if (!ids.length) return;
+    box.textContent = '';
+    const h = document.createElement('b');
+    h.textContent = '(selection · ' + ids.length + ')';
+    const names = document.createElement('div');
+    names.className = 'names';
+    names.textContent = ids.slice(0, 10).map(shortLabel).join(' · ') + (ids.length > 10 ? ' · +' + (ids.length - 10) + ' more' : '');
+    box.append(h, names);
+    const facts = [];
+    if (ids.length === 2 && V) {
+      const [a, b] = ids;
+      if (a < N && b < N && V.caOf[a] && V.caOf[b]) {
+        const p = V.caOf[a], q = V.caOf[b];
+        facts.push('Cα–Cα ' + Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]).toFixed(1) + ' Å');
+      }
+      const [d, i, j] = C.closestAtoms(V.atoms, a, b);
+      if (isFinite(d)) facts.push('closest atoms ' + d.toFixed(2) + ' Å (' + meta.atomNames[i] + '–' + meta.atomNames[j] + ')');
+    }
+    if (pae && ids.length === 2 && ids[1] < N) {
+      const [a, b] = ids;
+      facts.push('PAE ' + paeAt(a, b).toFixed(1) + ' / ' + paeAt(b, a).toFixed(1) + ' Å');
+    }
+    if (pae && sel.pae) {
+      const { rows, cols } = sel.pae;
+      let s = 0, n = 0;
+      for (let i = rows[0]; i <= rows[1]; i++) for (let j = cols[0]; j <= cols[1]; j++) { s += (paeAt(i, j) + paeAt(j, i)) / 2; n++; }
+      facts.push('mean PAE between ' + shortLabel(rows[0]) + '–' + shortLabel(rows[1]) + ' and ' + shortLabel(cols[0]) + '–' + shortLabel(cols[1]) + ': ' + (s / n).toFixed(1) + ' Å');
+    }
+    for (const c of sel.contacts) facts.push(c[5] + ' · ' + c[4].toFixed(2) + ' Å' + (c.kind === 'clashes' ? ' overlap' : ''));
+    if (V && sel.neigh && ids.length <= 3) {
+      const near = [...C.neighbours(V.atoms, sel.set, 5)].filter((i) => !sel.set.has(i)).sort((a, b) => a - b);
+      if (near.length) facts.push('within 5 Å (' + near.length + '): ' + near.slice(0, 24).map(shortLabel).join(' ') + (near.length > 24 ? ' …' : ''));
+    }
+    if (ids.length === 1 && ids[0] < N) {
+      const i = ids[0];
+      const v = meta.perResidue[i];
+      facts.push((meta.dssp[i] ? SS8[meta.dssp[i]] || 'coil' : 'coil') + (v !== undefined ? ' · ' + (meta.predicted ? 'pLDDT ' : 'B-factor ') + v.toFixed(1) : ''));
+    }
+    for (const f of facts) { const p = document.createElement('div'); p.textContent = f; box.append(p); }
+    const row = document.createElement('div');
+    row.className = 'actions';
+    const btn = (text, fn, title) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; if (title) b.title = title; b.addEventListener('click', fn); row.append(b); };
+    btn(sel.neigh ? '5 Å neighbours: on' : '5 Å neighbours: off', () => { sel.neigh = !sel.neigh; select(sel.set, { contacts: sel.contacts, pae: sel.pae }); }, 'n');
+    btn('focus', () => { if (V) window.ProteusViewer.focus(true); }, 'f');
+    const residues = ids.filter((i) => i < N).map((i) => ({ chain: meta.labels.chain[i], number: meta.labels.number[i], icode: meta.labels.icode[i] }));
+    const ligs = ids.filter((i) => i >= N).map((i) => ligands[i - N]).filter(Boolean)
+      .map((l) => ({ chain: l.chain, number: l.number, icode: '' }));
+    const pymol = C.pymolSelection(residues.concat(ligs));
+    btn('copy PyMOL', () => {
+      const done = () => notice('copied: select sele, ' + pymol);
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText('select sele, ' + pymol).then(done, () => notice('select sele, ' + pymol));
+      else notice('select sele, ' + pymol);
+    });
+    btn('clear', () => select(new Set()), 'esc');
+    box.append(row);
   }
 
   // ---------------------------------------------------------------- panel helpers
-  const SS8 = { H: 'α-helix', G: '3₁₀-helix', I: 'π-helix', E: 'strand', B: 'bridge', T: 'turn', S: 'bend', '-': 'coil', ' ': 'coil' };
 
-  function showTip(i, x, y) {
-    const L = meta.labels;
+  function showTip(i, x, y, extra) {
     const tip = $('tip');
-    const value = meta.perResidue[i];
-    const conf = value === undefined ? '' : meta.predicted ? 'pLDDT ' + value.toFixed(1) : 'B-factor ' + value.toFixed(1);
     tip.textContent = '';
     const head = document.createElement('b');
-    head.textContent = L.name[i] + ' ' + L.chain[i] + L.number[i] + L.icode[i];
     const rest = document.createElement('span');
-    rest.textContent = (SS8[meta.dssp[i]] || 'coil') + ' · ' + (meta.dssp[i] || '-') + (conf ? ' · ' + conf : '');
+    if (i >= N) {
+      const l = ligands[i - N];
+      head.textContent = label(i);
+      rest.textContent = 'ligand · ' + l.atoms + ' heavy atoms';
+    } else {
+      const value = meta.perResidue[i];
+      const conf = value === undefined ? '' : meta.predicted ? 'pLDDT ' + value.toFixed(1) : 'B-factor ' + value.toFixed(1);
+      head.textContent = label(i);
+      const sv = scores && scores.values[i];
+      rest.textContent = (SS8[meta.dssp[i]] || 'coil') + ' · ' + (meta.dssp[i] || '-') + (conf ? ' · ' + conf : '') +
+        (sv !== undefined && sv !== null ? ' · ' + scores.column + ' ' + fmt(sv) : '');
+    }
     tip.append(head, document.createElement('br'), rest);
+    if (extra) { const e = document.createElement('span'); e.textContent = extra; tip.append(document.createElement('br'), e); }
+    placeTip(x, y);
+  }
+  function tipText(title, text, x, y) {
+    const tip = $('tip');
+    tip.textContent = '';
+    const head = document.createElement('b');
+    head.textContent = title;
+    const rest = document.createElement('span');
+    rest.textContent = text;
+    tip.append(head, document.createElement('br'), rest);
+    placeTip(x, y);
+  }
+  function placeTip(x, y) {
+    const tip = $('tip');
     tip.hidden = false;
-    tip.style.left = Math.min(x + 14, window.innerWidth - tip.offsetWidth - 8) + 'px';
-    tip.style.top = Math.min(y + 14, window.innerHeight - tip.offsetHeight - 8) + 'px';
+    tip.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+    tip.style.top = Math.max(8, Math.min(y + 14, window.innerHeight - tip.offsetHeight - 8)) + 'px';
   }
   function hideTip() { $('tip').hidden = true; }
 
-  function swatch(rgb, label) {
+  function swatch(rgb, text) {
     const s = document.createElement('span');
     s.className = 'sw';
     const d = document.createElement('i');
     d.style.background = 'rgb(' + rgb.join(',') + ')';
-    s.append(d, document.createTextNode(label));
+    s.append(d, document.createTextNode(text));
     return s;
   }
 
@@ -540,6 +899,14 @@
         w.textContent = '! not a confidence';
         el.append(w);
       }
+    } else if (scheme === 'score') {
+      const sc = scores.scale;
+      const [bad, good] = scores.higherIsWorse ? [sc.hi, sc.lo] : [sc.lo, sc.hi];
+      name.textContent = '(' + scores.column + ')';
+      const col = (v) => C.scoreColor(v, { lo: sc.lo, hi: sc.hi, higherIsWorse: scores.higherIsWorse }, scores.stops, scores.none);
+      el.append(name, swatch(col(bad), fmt(bad) + ' damaging'));
+      if (sc.diverging) el.append(swatch(col(0), '0'));
+      el.append(swatch(col(good), fmt(good) + ' tolerated'), swatch(scores.none, 'no score'));
     } else if (scheme === 'rainbow') {
       name.textContent = '(sequence position)';
       el.append(name, swatch(C.rainbowColor(0, 4), 'N-terminus'), swatch(C.rainbowColor(2, 4), 'middle'),
@@ -558,16 +925,52 @@
 
   function buildPanel() {
     const panel = $('panel');
-    const h = (text) => { const e = document.createElement('h2'); e.textContent = '(' + text + ')'; panel.append(e); };
-    if (meta.metrics.length) {
+    const h = (text) => { const e = document.createElement('h2'); e.textContent = '(' + text + ')'; panel.append(e); return e; };
+    const conf = meta.confidence;
+    const rows = meta.metrics.slice();
+    if (conf && (conf.ptm != null || conf.iptm != null)) {
+      const parts = [];
+      if (conf.ptm != null) parts.push('pTM ' + conf.ptm.toFixed(3));
+      if (conf.iptm != null) parts.push('ipTM ' + conf.iptm.toFixed(3));
+      rows.splice(Math.min(2, rows.length), 0, ['predicted TM-score', parts.join(' · ')]);
+    }
+    if (rows.length) {
       h('measurements');
       const dl = document.createElement('dl');
-      for (const [k, v] of meta.metrics) {
+      for (const [k, v] of rows) {
         const dt = document.createElement('dt'); dt.textContent = k;
         const dd = document.createElement('dd'); dd.textContent = C.keepUnits(v);
         dl.append(dt, dd);
       }
       panel.append(dl);
+    }
+    if (paeInfo) {
+      h('predicted aligned error');
+      const c = document.createElement('canvas');
+      c.className = 'pae';
+      c.id = 'pae';
+      c.setAttribute('aria-label', 'predicted aligned error heatmap');
+      panel.append(c);
+      const key = document.createElement('div');
+      key.className = 'key gradient';
+      const bar = document.createElement('i');
+      bar.style.background = 'linear-gradient(90deg,' + [0, 0.25, 0.5, 0.75, 1].map((t) => 'rgb(' + C.paeColor(t * paeInfo.max, paeInfo.max).join(',') + ')').join(',') + ')';
+      key.append(document.createTextNode('0'), bar, document.createTextNode(paeInfo.max.toFixed(1) + ' Å'));
+      panel.append(key);
+      const note = document.createElement('p');
+      note.className = 'note tight';
+      note.textContent = 'Expected error (Å) at the scored residue (x) when the model is aligned on residue (y); mean ' +
+        paeInfo.mean.toFixed(1) + ' Å. Dark blocks are parts placed confidently relative to each other. Drag a box to select two ranges.';
+      panel.append(note);
+    }
+    if (scores && scores.matrix) {
+      h('substitutions · ' + scores.column);
+      panel.append(scanMap());
+      const note = document.createElement('p');
+      note.className = 'note tight';
+      note.textContent = 'One column per residue, one row per amino acid (A at the top). Red is the damaging end; ' +
+        'dotted cells are the wild type. Positions matched by ' + scores.matchedBy + '.';
+      panel.append(note);
     }
     if (meta.rama.length) {
       h('ramachandran φ, ψ');
@@ -585,6 +988,7 @@
       }
       panel.append(key);
     }
+    buildFindings(h);
     if (meta.perResidue.length) {
       h(meta.predicted ? 'plddt along the chain' : 'b-factor along the chain');
       panel.append(residueStrip());
@@ -597,8 +1001,76 @@
     }
     const note = document.createElement('p');
     note.className = 'note';
-    note.textContent = 'Drawn by Proteus from its own ribbon geometry and DSSP. Nothing is fetched from the network.';
+    note.textContent = 'Drawn by Proteus from its own ribbon geometry and DSSP. Nothing is fetched from the network.' +
+      (conf && conf.sources && conf.sources.length ? ' Confidence read from ' + conf.sources.join(', ') + '.' : '');
     panel.append(note);
+  }
+
+  // The findings, each one a click away from being shown in 3D.
+  function buildFindings(h) {
+    const groups = [];
+    const rama = issues.rama || [];
+    if (rama.length || meta.rama.length) {
+      const outliers = rama.filter((x) => x[1] === 2).length;
+      groups.push({ title: 'Ramachandran: ' + outliers + ' outlier' + (outliers === 1 ? '' : 's') + ', ' + (rama.length - outliers) + ' allowed',
+        items: rama.map(([r, reg]) => ({ text: shortLabel(r) + ' · ' + (reg === 2 ? 'outlier' : 'allowed'), cls: reg === 2 ? 'bad' : 'warm', go: () => select(new Set([r]), { focus: true, zoom: true }) })) });
+    }
+    for (const [key, name, r, unit] of KINDS) {
+      const list = issues[key] || [];
+      if (!list.length && key !== 'clashes') continue;
+      groups.push({ title: name + ' (' + list.length + ')', kind: key, role: r,
+        items: list.map((c) => ({ text: c[5] + ' · ' + c[4].toFixed(2) + ' Å' + (unit ? ' ' + unit : ''),
+          go: () => { const x = c.slice(); x.role = r; x.kind = key; select(new Set([c[0], c[1]]), { contacts: [x], focus: true, zoom: true }); } })) });
+    }
+    if (ligands.length) {
+      groups.push({ title: 'ligands (' + ligands.length + ')',
+        items: ligands.map((l, k) => ({ text: l.name + ' ' + (l.chain ? l.chain + ':' : '') + l.number + ' · ' + l.atoms + ' atoms · binding site ≤ 5 Å',
+          go: () => { sel.neigh = true; select(new Set([N + k]), { focus: true, zoom: true }); } })) });
+    }
+    if (!groups.length) return;
+    h('findings');
+    const wrap = document.createElement('div');
+    wrap.className = 'findings';
+    for (const g of groups) {
+      const d = document.createElement('details');
+      const s = document.createElement('summary');
+      s.textContent = g.title;
+      d.append(s);
+      if (g.kind && g.items.length) {
+        const lab = document.createElement('label');
+        lab.className = 'all';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.addEventListener('change', () => {
+          if (cb.checked) showKinds.add(g.kind); else showKinds.delete(g.kind);
+          if (V) V.selectionChanged();
+        });
+        lab.append(cb, document.createTextNode(' draw all'));
+        d.append(lab);
+      }
+      // Built on first open: a large structure has thousands of hydrogen bonds.
+      d.addEventListener('toggle', () => {
+        if (!d.open || d.dataset.built) return;
+        d.dataset.built = '1';
+        const ul = document.createElement('ul');
+        const LIMIT = 400;
+        for (const it of g.items.slice(0, LIMIT)) {
+          const li = document.createElement('li');
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.textContent = it.text;
+          if (it.cls) b.className = it.cls;
+          b.addEventListener('click', it.go);
+          li.append(b);
+          ul.append(li);
+        }
+        if (g.items.length > LIMIT) { const li = document.createElement('li'); li.className = 'more'; li.textContent = '+' + (g.items.length - LIMIT) + ' more (draw all shows them in 3D)'; ul.append(li); }
+        if (!g.items.length) { const li = document.createElement('li'); li.className = 'more'; li.textContent = 'none'; ul.append(li); }
+        d.append(ul);
+      });
+      wrap.append(d);
+    }
+    $('panel').append(wrap);
   }
 
   function ramaPlot() {
@@ -631,6 +1103,27 @@
     }
     g.fillStyle = role('dim'); g.font = "10px 'Geist Mono', ui-monospace, monospace";
     g.fillText('φ →', px - 28, px - 6); g.fillText('ψ ↑', 6, 14);
+    // Hover names the residue under the pointer; a click selects it.
+    const nearest = (e) => {
+      const r = c.getBoundingClientRect(), k = px / r.width;
+      const x = (e.clientX - r.left) * k, y = (e.clientY - r.top) * k;
+      let best = null, bd = 7 * 7;
+      for (const p of meta.rama) {
+        if (p[3] < 0) continue;
+        const dx = to(p[0]) - x, dy = px - to(p[1]) - y, d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = p; }
+      }
+      return best;
+    };
+    c.addEventListener('mousemove', (e) => {
+      const p = nearest(e);
+      c.style.cursor = p ? 'pointer' : 'default';
+      if (!p) { hideTip(); preview(null); return; }
+      showTip(p[3], e.clientX, e.clientY, 'φ ' + p[0].toFixed(0) + '° ψ ' + p[1].toFixed(0) + '° · ' + ['favoured', 'allowed', 'outlier'][p[2]]);
+      preview(new Set([p[3]]));
+    });
+    c.addEventListener('mouseleave', () => { hideTip(); preview(null); });
+    c.addEventListener('click', (e) => { const p = nearest(e); if (p) { sel.anchor = p[3]; select(new Set([p[3]]), { focus: true, zoom: true }); } });
     return c;
   }
 
@@ -652,6 +1145,186 @@
       g.fillStyle = 'rgb(' + rgb.join(',') + ')';
       g.fillRect(i / n * w, 0, Math.max(w / n, 1), h);
     }
+    const at = (e) => {
+      const r = c.getBoundingClientRect();
+      return Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
+    };
+    c.style.cursor = 'pointer';
+    c.addEventListener('mousemove', (e) => { const i = at(e); showTip(i, e.clientX, e.clientY); preview(new Set([i])); });
+    c.addEventListener('mouseleave', () => { hideTip(); preview(null); });
+    c.addEventListener('click', (e) => { const i = at(e); clickResidue(i, e); });
     return c;
+  }
+
+  // The substitution map of a mutational scan: residues across, amino acids down.
+  function scanMap() {
+    const c = document.createElement('canvas');
+    c.className = 'scan';
+    const n = N, rows = 20, w = 268, cellH = 5, h = rows * cellH, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    c.width = w * dpr; c.height = h * dpr;
+    const off = document.createElement('canvas');
+    off.width = n; off.height = rows;
+    const img = new ImageData(n, rows);
+    const sc = { lo: scores.scale.lo, hi: scores.scale.hi, higherIsWorse: scores.higherIsWorse };
+    const seq = meta.sequence || '';
+    for (let i = 0; i < n; i++) for (let k = 0; k < rows; k++) {
+      const row = scores.matrix[i];
+      const v = row ? row[k] : null;
+      const rgb = C.scoreColor(v, sc, scores.stops, scores.none);
+      const o = 4 * (k * n + i);
+      img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+    }
+    off.getContext('2d').putImageData(img, 0, 0);
+    const g = c.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(off, 0, 0, w, h);
+    // Wild-type cells, when a column is wide enough to mark.
+    if (w / n >= 2.5) {
+      g.fillStyle = role('ground');
+      for (let i = 0; i < n; i++) {
+        const k = scores.aa.indexOf(seq[i]);
+        if (k >= 0) g.fillRect((i + 0.5) * w / n - 0.75, (k + 0.5) * cellH - 0.75, 1.5, 1.5);
+      }
+    }
+    const at = (e) => {
+      const r = c.getBoundingClientRect();
+      return [Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n))),
+        Math.max(0, Math.min(rows - 1, Math.floor((e.clientY - r.top) / r.height * rows)))];
+    };
+    c.addEventListener('mousemove', (e) => {
+      const [i, k] = at(e);
+      const v = scores.matrix[i] && scores.matrix[i][k];
+      const name = (seq[i] || '?') + meta.labels.number[i] + meta.labels.icode[i] + scores.aa[k];
+      tipText(name, (v === null || v === undefined ? 'no score' : scores.column + ' ' + fmt(v)) +
+        (scores.values[i] !== null ? ' · position mean ' + fmt(scores.values[i]) : ''), e.clientX, e.clientY);
+      preview(new Set([i]));
+    });
+    c.addEventListener('mouseleave', () => { hideTip(); preview(null); });
+    c.addEventListener('click', (e) => { const [i] = at(e); clickResidue(i, e); });
+    return c;
+  }
+
+  // The PAE map: N×N pixels scaled without smoothing. Hover reads a cell; a click selects its
+  // two residues; a drag selects two ranges and reports the mean error between them.
+  function drawPae() {
+    const c = $('pae');
+    if (!c || !pae) return;
+    const n = pae.n, px = 268, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    c.width = px * dpr; c.height = px * dpr;
+    const img = new ImageData(n, n);
+    for (let i = 0; i < n * n; i++) {
+      const rgb = C.paeColor(pae.v[i] / 8, pae.max);
+      img.data[4 * i] = rgb[0]; img.data[4 * i + 1] = rgb[1]; img.data[4 * i + 2] = rgb[2]; img.data[4 * i + 3] = 255;
+    }
+    const off = document.createElement('canvas');
+    off.width = n; off.height = n;
+    off.getContext('2d').putImageData(img, 0, 0);
+    const g = c.getContext('2d');
+    let box = null;
+    const paint = () => {
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.imageSmoothingEnabled = false;
+      g.drawImage(off, 0, 0, px, px);
+      // Chain boundaries.
+      g.strokeStyle = role('warm'); g.lineWidth = 1;
+      for (let i = 1; i < n; i++) if (meta.labels.chain[i] !== meta.labels.chain[i - 1]) {
+        const t = i / n * px;
+        g.beginPath(); g.moveTo(t, 0); g.lineTo(t, px); g.moveTo(0, t); g.lineTo(px, t); g.stroke();
+      }
+      if (box) {
+        const [i0, j0, i1, j1] = box;
+        g.strokeStyle = role('accent'); g.lineWidth = 1.5;
+        g.strokeRect(Math.min(j0, j1) / n * px, Math.min(i0, i1) / n * px, (Math.abs(j1 - j0) + 1) / n * px, (Math.abs(i1 - i0) + 1) / n * px);
+      }
+    };
+    paint();
+    const cell = (e) => {
+      const r = c.getBoundingClientRect();
+      const j = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
+      const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientY - r.top) / r.height * n)));
+      return [i, j];
+    };
+    let drag = null;
+    c.addEventListener('mousedown', (e) => { drag = cell(e); box = [drag[0], drag[1], drag[0], drag[1]]; paint(); e.preventDefault(); });
+    c.addEventListener('mousemove', (e) => {
+      const [i, j] = cell(e);
+      if (drag) { box = [drag[0], drag[1], i, j]; paint(); }
+      tipText('aligned ' + shortLabel(i) + ' · scored ' + shortLabel(j), paeAt(i, j).toFixed(1) + ' Å (reverse ' + paeAt(j, i).toFixed(1) + ' Å)', e.clientX, e.clientY);
+      preview(new Set([i, j]));
+    });
+    c.addEventListener('mouseleave', () => { hideTip(); preview(null); });
+    window.addEventListener('mouseup', (e) => {
+      if (!drag) return;
+      const [i, j] = cell(e);
+      const [i0, j0] = drag;
+      drag = null;
+      if (i === i0 && j === j0) {
+        box = null; paint();
+        select(new Set([i, j]), { focus: true });
+        return;
+      }
+      const rows = [Math.min(i0, i), Math.max(i0, i)], cols = [Math.min(j0, j), Math.max(j0, j)];
+      const set = new Set();
+      for (let r = rows[0]; r <= rows[1]; r++) set.add(r);
+      for (let r = cols[0]; r <= cols[1]; r++) set.add(r);
+      select(set, { pae: { rows, cols } });
+    });
+  }
+
+  // ---------------------------------------------------------------- sequence track
+  function buildSequence() {
+    const track = $('seq');
+    if (!track || !N) return;
+    const letters = meta.sequence || '';
+    const frag = document.createDocumentFragment();
+    const ssClass = { H: 'h', G: 'h', I: 'h', E: 'e', B: 'e' };
+    seqSpans = new Array(N);
+    for (let i = 0; i < N; i++) {
+      if (i > 0 && meta.labels.chain[i] !== meta.labels.chain[i - 1]) {
+        const gap = document.createElement('span');
+        gap.className = 'chain';
+        gap.textContent = meta.labels.chain[i] || '·';
+        frag.append(gap);
+      } else if (i === 0 && meta.labels.chain[0].trim()) {
+        const gap = document.createElement('span');
+        gap.className = 'chain';
+        gap.textContent = meta.labels.chain[0];
+        frag.append(gap);
+      }
+      const s = document.createElement('span');
+      s.className = 'r ' + (ssClass[meta.dssp[i]] || 'c');
+      s.textContent = letters[i] || 'X';
+      s.dataset.i = i;
+      if (meta.labels.number[i] % 10 === 0) s.dataset.n = meta.labels.number[i];
+      seqSpans[i] = s;
+      frag.append(s);
+    }
+    track.append(frag);
+    track.addEventListener('mouseover', (e) => {
+      const t = e.target;
+      if (!t.dataset || t.dataset.i === undefined) return;
+      const i = +t.dataset.i;
+      const r = t.getBoundingClientRect();
+      showTip(i, r.left, r.top - 60);
+      preview(new Set([i]));
+    });
+    track.addEventListener('mouseleave', () => { hideTip(); preview(null); });
+    track.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t.dataset || t.dataset.i === undefined) return;
+      clickResidue(+t.dataset.i, e);
+    });
+  }
+  function markSequence(set) {
+    for (const i of marked) if (seqSpans[i]) seqSpans[i].classList.remove('on');
+    marked = new Set();
+    for (const i of set) if (i < N && seqSpans[i]) { seqSpans[i].classList.add('on'); marked.add(i); }
+    // Bring the first selected residue into view when the selection did not come from the track.
+    const first = [...set].filter((i) => i < N).sort((a, b) => a - b)[0];
+    if (first !== undefined && seqSpans[first] && !sel.preview) {
+      const track = $('seq'), s = seqSpans[first];
+      if (s.offsetLeft < track.scrollLeft || s.offsetLeft > track.scrollLeft + track.clientWidth - 20) track.scrollLeft = s.offsetLeft - track.clientWidth / 3;
+    }
   }
 })();
