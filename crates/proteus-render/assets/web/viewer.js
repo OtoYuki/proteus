@@ -24,6 +24,8 @@
 
   const SCHEMES = ['ss', 'plddt', 'rainbow'];
   let scheme = SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss';
+  let noticeText = '';
+  let noticeTimer = 0;
   showLegend();
 
   function fail(msg) {
@@ -440,7 +442,12 @@
       switch (e.key) {
         case 'c': scheme = SCHEMES[(SCHEMES.indexOf(scheme) + 1) % SCHEMES.length]; recolor(); break;
         case 'o': state.fx = !state.fx; request(); break;
-        case 'd': state.ds = !state.ds; request(); break;
+        case 'd':
+          if (!meta.disulfides) { notice('no disulfides in this structure'); break; }
+          state.ds = !state.ds;
+          notice('disulfides ' + (state.ds ? 'shown' : 'hidden') + ' (' + meta.disulfides + ')');
+          request();
+          break;
         case ' ': state.spin = !state.spin; e.preventDefault(); request(); break;
         case 'r': reset(); request(); break;
         case 's': save(); break;
@@ -511,6 +518,14 @@
     return s;
   }
 
+  // A key that changes nothing visible still answers, in the legend (aria-live) for a moment.
+  function notice(text) {
+    noticeText = text;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => { noticeText = ''; showLegend(); }, 2500);
+    showLegend();
+  }
+
   function showLegend() {
     const el = $('legend');
     el.textContent = '';
@@ -532,6 +547,12 @@
     } else {
       name.textContent = '(secondary structure · dssp)';
       el.append(name, swatch(C.ssColor(0), 'helix'), swatch(C.ssColor(1), 'strand'), swatch(C.ssColor(2), 'coil'));
+    }
+    if (noticeText) {
+      const n = document.createElement('span');
+      n.className = 'notice';
+      n.textContent = noticeText;
+      el.append(n);
     }
   }
 

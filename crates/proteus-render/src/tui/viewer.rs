@@ -440,10 +440,15 @@ pub fn run_interactive_viewer(
                 ansi.paint(Role::Text, &config.title)
             ),
             legend,
-            toggle(
-                "disulfides",
-                config.disulfide_mesh.as_ref().map(|_| show_disulfides),
-            ),
+            // `d` is always in the key help, so a structure without disulfides says so here.
+            match config.disulfide_mesh {
+                Some(_) => toggle("disulfides", Some(show_disulfides)),
+                None => format!(
+                    "{} {}",
+                    ansi.paint(Role::Dim, "disulfides"),
+                    ansi.paint(Role::Dim, "none")
+                ),
+            },
             format!("{}{dash_note}", toggle("dashboard", dash_state)),
             toggle("effects", Some(fx_on)),
             toggle("spin", Some(auto_rotate)),

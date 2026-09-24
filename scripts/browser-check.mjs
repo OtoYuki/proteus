@@ -81,6 +81,10 @@ for (const name of wanted) {
     const after = await page.evaluate(() => [window.ProteusViewer.state.yaw, window.ProteusViewer.scheme]);
     if (after[0] === before[0]) fail(where, 'ArrowRight did not rotate');
     if (after[1] === before[1]) fail(where, 'c did not change the colours');
+    // d answers in the legend, including on a structure with no disulfides to show.
+    await page.keyboard.press('d');
+    const legend = await page.locator('#legend').textContent();
+    if (!/disulfides/.test(legend)) fail(where, `d gave no answer (legend: "${legend}")`);
     console.log(`ok   ${where}: ${r.drawn}/${r.samples} drawn, ${r.distinct} of ${r.residues} residues picked`);
     await page.close();
   }
