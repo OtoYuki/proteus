@@ -149,13 +149,13 @@ pub struct PageGeometry<'a> {
 }
 
 impl<'a> PageGeometry<'a> {
-    /// The geometry of one structure, without a reference.
+    /// The geometry of one structure, with its superposed reference when it has one.
     pub fn of(s: &'a StructureRenderData) -> Self {
         Self {
             ribbon: &s.ribbon_mesh,
             disulfides: s.disulfide_mesh.as_ref(),
             atoms: &s.atoms,
-            reference: None,
+            reference: s.comparison.as_ref().map(|c| &c.reference_mesh),
         }
     }
 }
@@ -329,7 +329,12 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         "caption": page.caption,
         "residues": s.num_residues,
         "disulfides": s.num_disulfides,
-        "scheme": scheme_name(page.scheme),
+        // A comparison opens on its deviation colours, unless scores were asked for.
+        "scheme": if s.comparison.is_some() && page.scheme != ColorScheme::Scores {
+            "deviation"
+        } else {
+            scheme_name(page.scheme)
+        },
         "predicted": s.is_predicted(),
         "camera": {
             "rotation": rows,
@@ -369,6 +374,32 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             "cationPi": contacts(&a.cation_pi),
         },
         "confidence": confidence,
+        "compare": s.comparison.as_ref().map(|c| {
+            let r2 = |v: f64| (v * 100.0).round() / 100.0;
+            // Deviation on the score scale, 0 Å (blue) to at least 2 Å or the 98th percentile (red).
+            let fit = crate::rasterizer::shader::ScoreScale::fit(&c.deviation, true);
+            let scale = crate::rasterizer::shader::ScoreScale {
+                lo: 0.0,
+                hi: fit.hi.max(2.0),
+                diverging: false,
+                higher_is_worse: true,
+            };
+            let rgb = |x: crate::rasterizer::buffer::ColorRGB| [x.r, x.g, x.b];
+            serde_json::json!({
+                "name": c.name,
+                "rmsd": r2(c.stats.rmsd),
+                "paired": c.stats.paired,
+                "referenceResidues": c.stats.reference_residues,
+                "mismatched": c.stats.mismatched_names,
+                "pairing": c.stats.pairing,
+                "deviation": c.deviation.iter().map(|v| v.map(r2)).collect::<Vec<_>>(),
+                "colors": c.deviation.iter().map(|v| rgb(scale.color(*v))).collect::<Vec<_>>(),
+                "max": r2(scale.hi),
+                "stops": crate::rasterizer::shader::SCORE_STOPS.map(rgb),
+                "none": rgb(crate::rasterizer::shader::NO_SCORE),
+                "colour": rgb(crate::brand::structure::REFERENCE),
+            })
+        }),
         "scores": s.scores.as_ref().map(|a| {
             let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
             let sc = &a.scores;
@@ -402,6 +433,9 @@ pub struct WebPage<'a> {
     pub structure: &'a StructureRenderData,
     /// Colour scheme the page opens with (`c` cycles through all three).
     pub scheme: ColorScheme,
+    /// The structure file itself, `(file name, text)`, embedded so the page can hand it back
+    /// (the "model" download); `None` leaves it out.
+    pub source: Option<(&'a str, &'a str)>,
 }
 
 impl WebPage<'_> {
@@ -444,11 +478,12 @@ impl WebPage<'_> {
 <div id="tip" role="tooltip" hidden></div>
 <section id="selbox" aria-live="polite" hidden></section>
 <nav id="seq" aria-label="sequence"></nav>
-<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
 <script id="proteus-pae" type="application/octet-stream">{pae}</script>
+<script id="proteus-source" type="application/octet-stream" data-name="{source_name}">{source}</script>
 <script>{core}</script>
 <script>{viewer}</script>
 </body>
@@ -462,6 +497,11 @@ impl WebPage<'_> {
             meta = meta,
             mesh = mesh_b64,
             pae = pae_b64,
+            source_name = escape_html(self.source.map_or("", |(n, _)| n)),
+            source = self
+                .source
+                .map(|(_, t)| base64::engine::general_purpose::STANDARD.encode(gzip(t.as_bytes())))
+                .unwrap_or_default(),
             core = CORE_JS,
             viewer = VIEWER_JS,
         )
@@ -646,6 +686,7 @@ mod tests {
             caption: "X-ray",
             structure: &s,
             scheme: s.default_color_scheme(),
+            source: Some(("1crn.pdb", CRAMBIN)),
         }
         .render();
         assert!(html.contains("id=\"proteus-mesh\""));
@@ -670,12 +711,13 @@ mod tests {
             caption: "y",
             structure: &s,
             scheme: ColorScheme::SecondaryStructure,
+            source: Some(("\"><b>x.pdb", "</script>")),
         }
         .render();
-        // The page's own five script elements, and no more.
+        // The page's own six script elements, and no more.
         assert_eq!(
             html.matches("</script>").count(),
-            5,
+            6,
             "a string closed a script"
         );
         assert!(!html.contains("<b>x"));
@@ -723,7 +765,27 @@ mod tests {
                 })
             })
             .collect();
-        let fixture = serde_json::json!({ "plddt": plddt, "ss": ss, "rainbow": rainbow });
+        use crate::rasterizer::shader::{ScoreScale, SCORE_STOPS};
+        let mut score = Vec::new();
+        for (lo, hi, diverging) in [(-8.0, 8.0, true), (0.05, 0.99, false), (-1.0, 3.5, false)] {
+            for worse in [false, true] {
+                let scale = ScoreScale {
+                    lo,
+                    hi,
+                    diverging,
+                    higher_is_worse: worse,
+                };
+                for k in 0..=60 {
+                    let v = lo - 1.0 + (hi - lo + 2.0) * k as f64 / 60.0;
+                    let c = scale.color(Some(v));
+                    score.push(serde_json::json!([v, lo, hi, worse, c.r, c.g, c.b]));
+                }
+            }
+        }
+        let fixture = serde_json::json!({
+            "plddt": plddt, "ss": ss, "rainbow": rainbow, "score": score,
+            "scoreStops": SCORE_STOPS.map(|c| [c.r, c.g, c.b]),
+        });
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/web/test/colors.json");
         let text = serde_json::to_string(&fixture).unwrap() + "\n";
         if std::env::var_os("UPDATE_WEB_FIXTURES").is_some() {

@@ -428,6 +428,41 @@ reports how many that was. The RMSD is marked `✓` when the two are the same se
 residue, and `!` with a warning otherwise, since the number then describes only the paired part.
 `--web` and `--html` draw one structure and refuse `--compare`.
 
+```bash
+proteus view <job> --web                                       # PAE and pTM found beside the model
+proteus view AF-P69905-F1-model_v6.pdb --pae pae.json --web    # or named explicitly
+proteus view model.pdb --color-by scan.csv --web               # an `esm scan --export` matrix
+proteus view model.pdb --color-by AF-P69905-F1-aa-substitutions.csv:am_pathogenicity --web
+proteus view model.pdb --compare reference.pdb --web           # coloured by how far each residue moved
+```
+
+The browser page points at what it measures:
+
+- **Confidence.** pTM (and ipTM for a complex) and the PAE map, in AlphaFold DB's colours, read
+  from Boltz's `pae_*.npz`/`confidence_*.json`, AlphaFold DB's `*-predicted_aligned_error_v*.json`,
+  ColabFold's `*_scores_*.json` or AlphaFold 3's `*_full_data_*.json`, found beside the model by
+  name or given with `--pae`. Hover reads a cell; drag a box to select two ranges and get the
+  mean error between them. The terminal dashboard shows pTM and a half-block PAE map.
+- **Selection.** Click the structure, the sequence track, a Ramachandran point, the pLDDT strip
+  or the PAE map. The rest of the ribbon dims, the selection and everything within 5 Å are drawn
+  as sticks, and a box gives Cα–Cα and closest-atom distances, PAE both ways, the residues
+  within 5 Å and a PyMOL selection. `n` toggles the neighbourhood, `f` focuses, `Esc` clears.
+- **Findings.** Ramachandran outliers, heavy-atom overlaps, hydrogen bonds, salt bridges and
+  π interactions are listed; each one selects its residues and draws a dashed line between the
+  atoms, and "draw all" shows a whole kind at once.
+- **Ligands.** Non-water HETATM groups are drawn as sticks; selecting one shows its binding
+  site.
+- **Scores.** `--color-by FILE[:COLUMN]` colours residues by a mutational scan or a variant
+  effect table (one row per `L43A`, as AlphaMissense and `proteus screen` exports write) or
+  per-residue values, in both viewers, with a residue × amino-acid map in the browser. Red is
+  the damaging end: low for fitness and ESM scores, high for columns named like pathogenicity or
+  ΔΔG (`--higher-is-worse`/`--lower-is-worse` override). Positions are matched by residue
+  number or sequence index, whichever the table's wild-type letters agree with; a table for
+  another sequence is refused.
+- **Comparison.** `--compare` in the browser keeps the model where it is, draws the reference
+  (`x` hides it) and colours each residue by its Cα deviation.
+- **Files.** The page carries the model and hands it back, with its PAE as AlphaFold DB JSON.
+
 ### `proteus analyze` — one structure in full, or a table over many
 
 ```bash

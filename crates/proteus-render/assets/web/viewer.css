@@ -67,6 +67,11 @@ html, body { margin: 0; height: 100%; background: var(--ground); color: var(--te
 #panel .findings button.bad { color: var(--bad); }
 #panel .findings button.warm { color: var(--warm); }
 
+#panel .files { display: flex; flex-wrap: wrap; gap: 6px; }
+#panel .files button { all: unset; cursor: pointer; padding: 2px 8px; border: 1px solid var(--line); color: var(--text);
+  font: 400 10.5px/1.6 var(--mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#panel .files button:hover, #panel .files button:focus-visible { border-color: var(--accent); color: var(--accent); }
+
 /* The selection: what is selected and what lies between it. */
 #selbox { position: fixed; left: 20px; bottom: 76px; max-width: min(560px, calc(100vw - 380px)); z-index: 3; white-space: normal;
   padding: 9px 12px; background: var(--surface); border: 1px solid var(--line); border-left: 2px solid var(--accent);

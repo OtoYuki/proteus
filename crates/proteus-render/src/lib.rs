@@ -62,6 +62,20 @@ pub struct StructureRenderData {
     /// Scores from a table (a mutational scan, a variant-effect predictor), placed on the
     /// residues, when the caller attached them.
     pub scores: Option<AttachedScores>,
+    /// A reference structure superposed onto this one, when the caller attached it.
+    pub comparison: Option<Comparison>,
+}
+
+/// A reference structure moved onto this one: its ribbon, in this structure's frame, and how
+/// far each residue sits from its partner.
+#[derive(Debug, Clone)]
+pub struct Comparison {
+    pub name: String,
+    pub reference_mesh: TriangleMesh,
+    /// C-alpha distance to the paired reference residue after superposition, per residue of
+    /// this structure; `None` for an unpaired residue.
+    pub deviation: Vec<Option<f64>>,
+    pub stats: SuperpositionStats,
 }
 
 /// A score table placed on a structure, with the direction its colours run in.
@@ -397,6 +411,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         annotations,
         confidence: None,
         scores: None,
+        comparison: None,
     })
 }
 
@@ -470,6 +485,92 @@ impl StructureRenderData {
             self.confidence = Some(confidence);
         }
         note
+    }
+
+    /// Superpose `reference_pdb` onto this structure (parsed from `self_pdb`) and keep its ribbon
+    /// and the per-residue deviation. The reference moves; this structure, its atoms and its
+    /// findings stay where they are.
+    pub fn attach_comparison(
+        &mut self,
+        self_pdb: &str,
+        reference_pdb: &str,
+        name: &str,
+    ) -> Result<SuperpositionStats, RenderError> {
+        let tgt_pdb = proteus_core::io::open_structure_bytes(self_pdb.as_bytes(), None)
+            .map_err(|e| RenderError::PdbParse(e.to_string()))?;
+        let ref_pdb = proteus_core::io::open_structure_bytes(reference_pdb.as_bytes(), None)
+            .map_err(|e| RenderError::PdbParse(format!("Reference structure parse failed: {e}")))?;
+        let tgt = trace_of(&tgt_pdb);
+        let refr = trace_of(&ref_pdb);
+        if tgt.ca.len() != self.num_residues {
+            return Err(RenderError::Geometry(
+                "the structure text does not match this bundle".into(),
+            ));
+        }
+        let (pairs, pairing) = pair_best(&tgt, &refr);
+        if pairs.len() < MIN_SUPERPOSITION_PAIRS {
+            return Err(RenderError::Geometry(format!(
+                "only {} residue(s) could be paired with the reference, and at least \
+                 {MIN_SUPERPOSITION_PAIRS} are needed to superpose",
+                pairs.len()
+            )));
+        }
+        let paired_tgt: Vec<Vector3<f64>> = pairs.iter().map(|&(i, _)| tgt.ca[i]).collect();
+        let paired_ref: Vec<Vector3<f64>> = pairs.iter().map(|&(_, j)| refr.ca[j]).collect();
+        // Fit the reference onto the target, so the target keeps its own frame.
+        let sup = proteus_core::metrics::compute_kabsch_superposition(&paired_ref, &paired_tgt)
+            .map_err(|e| RenderError::Geometry(e.to_string()))?;
+        let moved: Vec<Vector3<f64>> = refr
+            .ca
+            .iter()
+            .map(|p| sup.rotation * p + sup.translation)
+            .collect();
+        let guides: Vec<Option<Vector3<f64>>> = refr
+            .guides
+            .iter()
+            .map(|g| g.map(|g| sup.rotation * g))
+            .collect();
+        let ref_ss =
+            assign_secondary_structure(&proteus_core::backbone::extract_backbone(&refr.protein));
+        let reference_mesh = segmented_cartoon_mesh(
+            &moved,
+            &ref_ss.assignment,
+            &refr.plddts,
+            &refr.breaks,
+            &guides,
+        );
+        let mut deviation = vec![None; self.num_residues];
+        for &(i, j) in &pairs {
+            deviation[i] = Some((tgt.ca[i] - moved[j]).norm());
+        }
+        let stats = SuperpositionStats {
+            rmsd: sup.rmsd,
+            paired: pairs.len(),
+            target_residues: tgt.ca.len(),
+            reference_residues: refr.ca.len(),
+            mismatched_names: pairs
+                .iter()
+                .filter(|&&(i, j)| tgt.names[i] != refr.names[j])
+                .count(),
+            pairing,
+        };
+        // Frame both: widen the camera to the reference's reach.
+        let c = self.camera.center;
+        let c64 = Vector3::new(c.x as f64, c.y as f64, c.z as f64);
+        let reach = moved
+            .iter()
+            .map(|p| (p - c64).norm())
+            .fold(0.0f64, f64::max) as f32;
+        if reach > self.camera.bounding_radius {
+            self.camera.bounding_radius = reach;
+        }
+        self.comparison = Some(Comparison {
+            name: name.to_string(),
+            reference_mesh,
+            deviation,
+            stats,
+        });
+        Ok(stats)
     }
 
     /// Place a score table on this structure's residues (see

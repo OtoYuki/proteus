@@ -51,6 +51,58 @@ pub const SCORE_STOPS: [ColorRGB; 7] = [
     },
 ];
 
+/// ColorBrewer Greens, reversed: AlphaFold DB's PAE colours, 0 Å darkest.
+pub const PAE_STOPS: [ColorRGB; 9] = [
+    ColorRGB { r: 0, g: 68, b: 27 },
+    ColorRGB {
+        r: 0,
+        g: 109,
+        b: 44,
+    },
+    ColorRGB {
+        r: 35,
+        g: 139,
+        b: 69,
+    },
+    ColorRGB {
+        r: 65,
+        g: 171,
+        b: 93,
+    },
+    ColorRGB {
+        r: 116,
+        g: 196,
+        b: 118,
+    },
+    ColorRGB {
+        r: 161,
+        g: 217,
+        b: 155,
+    },
+    ColorRGB {
+        r: 199,
+        g: 233,
+        b: 192,
+    },
+    ColorRGB {
+        r: 229,
+        g: 245,
+        b: 224,
+    },
+    ColorRGB {
+        r: 247,
+        g: 252,
+        b: 245,
+    },
+];
+
+/// A PAE value on AlphaFold DB's scale, 0 → `max` Å.
+pub fn pae_color(v: f32, max: f32) -> ColorRGB {
+    let t = (v / max.max(1e-3)).clamp(0.0, 1.0) * (PAE_STOPS.len() - 1) as f32;
+    let i = (t.floor() as usize).min(PAE_STOPS.len() - 2);
+    ColorRGB::lerp(PAE_STOPS[i], PAE_STOPS[i + 1], t - i as f32)
+}
+
 /// A residue with no score: a neutral grey that no end of the scale uses.
 pub const NO_SCORE: ColorRGB = ColorRGB {
     r: 96,

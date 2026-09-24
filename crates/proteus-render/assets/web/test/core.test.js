@@ -18,6 +18,13 @@ test('secondary-structure colours match secondary_structure_to_color', () => {
   for (const [code, r, g, b] of colors.ss) assert.deepEqual(C.ssColor(code), [r, g, b], `code ${code}`);
 });
 
+test('score colours match ScoreScale::color exactly', () => {
+  for (const [v, lo, hi, worse, r, g, b] of colors.score) {
+    assert.deepEqual(C.scoreColor(v, { lo, hi, higherIsWorse: worse }, colors.scoreStops, [96, 96, 90]), [r, g, b], `${v} in ${lo}..${hi}`);
+  }
+  assert.deepEqual(C.scoreColor(null, { lo: 0, hi: 1 }, colors.scoreStops, [96, 96, 90]), [96, 96, 90]);
+});
+
 test('rainbow colours match rainbow_color exactly', () => {
   for (const [i, n, r, g, b] of colors.rainbow) assert.deepEqual(C.rainbowColor(i, n), [r, g, b], `${i}/${n}`);
 });

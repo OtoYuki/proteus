@@ -21,8 +21,9 @@ pub struct Args {
 
     /// Reference structure to superpose onto, with C-alpha RMSD. Residues are paired by
     /// chain ID and number, by number alone for two single-chain files, or by sequence
-    /// alignment, whichever matches most; the two are drawn in fixed colours, so --color and
-    /// --dashboard do not apply
+    /// alignment, whichever matches most. In the terminal the two are drawn in fixed colours,
+    /// so --color and --dashboard do not apply; the browser page (--web, --html) colours this
+    /// structure by how far each residue moved and keeps everything else
     #[arg(long, conflicts_with_all = ["color", "dashboard"])]
     compare: Option<PathBuf>,
 
@@ -219,6 +220,21 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let mut structure = proteus_render::parse_pdb_structure(&pdb_content)
             .context("Failed to parse structure for the browser viewer")?;
         attach(&mut structure)?;
+        if let Some(ref_path) = &compare {
+            let ref_text = proteus_core::io::read_structure_text(ref_path)
+                .with_context(|| format!("Failed to read reference structure at {:?}", ref_path))?;
+            let ref_name = ref_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("reference");
+            let stats = structure
+                .attach_comparison(&pdb_content, &ref_text, ref_name)
+                .context("Failed to superpose the reference")?;
+            eprintln!("{}", superposition_summary(&stats));
+            if let Some(warning) = superposition_warning(&stats) {
+                eprintln!("{warning}");
+            }
+        }
         let scheme = if scores_scheme {
             proteus_render::rasterizer::ColorScheme::Scores
         } else {
@@ -226,11 +242,18 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 .map(Into::into)
                 .unwrap_or_else(|| structure.default_color_scheme())
         };
+        let source_name = structure_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model.pdb")
+            .trim_end_matches(".gz")
+            .to_string();
         let html_content = proteus_render::web::WebPage {
             title: "Proteus structure viewer",
             caption: &title,
             structure: &structure,
             scheme,
+            source: Some((&source_name, &pdb_content)),
         }
         .render();
 
@@ -400,6 +423,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             metrics: structure_data.metrics,
             plddts: structure_data.plddts,
             ramachandran_points: structure_data.ramachandran_points,
+            confidence: structure_data.confidence.clone(),
         });
 
         let config = proteus_render::tui::ViewerConfig {

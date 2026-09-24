@@ -49,7 +49,8 @@
 
   const scores = meta.scores;
   const fmt = (v) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
-  const SCHEMES = scores ? ['ss', 'plddt', 'rainbow', 'score'] : ['ss', 'plddt', 'rainbow'];
+  const compare = meta.compare;
+  const SCHEMES = ['ss', 'plddt', 'rainbow'].concat(scores ? ['score'] : [], compare ? ['deviation'] : []);
   let scheme = SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss';
   let noticeText = '';
   let noticeTimer = 0;
@@ -281,7 +282,7 @@
       buf(1, m.nrm, 3, gl.BYTE, true);
       let colorBuf = null, selBuf = null;
       if (withAttrs) {
-        colorBuf = buf(2, C.vertexColors(m, scheme, scores && scores.colors), 3, gl.UNSIGNED_BYTE, true);
+        colorBuf = buf(2, C.vertexColors(m, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors), 3, gl.UNSIGNED_BYTE, true);
         buf(3, Float32Array.from(m.res), 1, gl.FLOAT, false);
         selBuf = buf(4, new Float32Array(m.n).fill(1), 1, gl.FLOAT, false);
       }
@@ -317,6 +318,7 @@
     }
     const ribbon = vao(mesh.ribbon, true);
     const ds = mesh.disulfides.n > 0 ? vao(mesh.disulfides, false) : null;
+    const refRibbon = mesh.reference.n > 0 ? vao(mesh.reference, false) : null;
     let sticks = null, lines = null;
 
     // Depth-cueing range: the view-space depth extent of the ribbon, like pipeline.rs, measured
@@ -338,7 +340,7 @@
     const base = cam.rotation.flat();
     const center = cam.center;
     const zRange = cam.radius * 1.5 + 12;
-    const state = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0], fx: true, ds: true, spin: false };
+    const state = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0], fx: true, ds: true, ref: true, spin: false };
     const reset = () => Object.assign(state, { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0] });
 
     // Offscreen targets: colour + depth for the post pass, colour + depth for picking.
@@ -417,6 +419,15 @@
         gl.vertexAttrib3f(2, dsColour[0] / 255, dsColour[1] / 255, dsColour[2] / 255);
         gl.vertexAttrib1f(3, 0);
         gl.drawElements(gl.TRIANGLES, ds.count, gl.UNSIGNED_INT, 0);
+      }
+      if (refRibbon && state.ref && !forPick) {
+        gl.bindVertexArray(refRibbon.v);
+        const c = compare.colour; // brand::structure::REFERENCE
+        gl.vertexAttrib3f(2, c[0] / 255, c[1] / 255, c[2] / 255);
+        gl.vertexAttrib1f(3, 0);
+        gl.vertexAttrib1f(4, selActive ? 0 : 1);
+        gl.drawElements(gl.TRIANGLES, refRibbon.count, gl.UNSIGNED_INT, 0);
+        gl.vertexAttrib1f(4, 1);
       }
       worldSpace();
       if (sticks) {
@@ -515,10 +526,10 @@
         resColour[r] = [colours[3 * i], colours[3 * i + 1], colours[3 * i + 2]];
       }
     }
-    residueColours(C.vertexColors(mesh.ribbon, scheme, scores && scores.colors));
+    residueColours(C.vertexColors(mesh.ribbon, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors));
 
     function recolor() {
-      const colours = C.vertexColors(mesh.ribbon, scheme, scores && scores.colors);
+      const colours = C.vertexColors(mesh.ribbon, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors);
       gl.bindBuffer(gl.ARRAY_BUFFER, ribbon.colorBuf);
       gl.bufferData(gl.ARRAY_BUFFER, colours, gl.STATIC_DRAW);
       residueColours(colours);
@@ -662,6 +673,12 @@
           if (!meta.disulfides) { notice('no disulfides in this structure'); break; }
           state.ds = !state.ds;
           notice('disulfides ' + (state.ds ? 'shown' : 'hidden') + ' (' + meta.disulfides + ')');
+          request();
+          break;
+        case 'x':
+          if (!refRibbon) { notice('no reference: open with --compare REF'); break; }
+          state.ref = !state.ref;
+          notice('reference ' + compare.name + (state.ref ? ' shown' : ' hidden'));
           request();
           break;
         case 'n':
@@ -842,9 +859,11 @@
       const value = meta.perResidue[i];
       const conf = value === undefined ? '' : meta.predicted ? 'pLDDT ' + value.toFixed(1) : 'B-factor ' + value.toFixed(1);
       head.textContent = label(i);
+      const dv = compare && compare.deviation[i];
       const sv = scores && scores.values[i];
       rest.textContent = (SS8[meta.dssp[i]] || 'coil') + ' · ' + (meta.dssp[i] || '-') + (conf ? ' · ' + conf : '') +
-        (sv !== undefined && sv !== null ? ' · ' + scores.column + ' ' + fmt(sv) : '');
+        (sv !== undefined && sv !== null ? ' · ' + scores.column + ' ' + fmt(sv) : '') +
+        (dv !== undefined && dv !== null ? ' · moved ' + dv.toFixed(2) + ' Å' : '');
     }
     tip.append(head, document.createElement('br'), rest);
     if (extra) { const e = document.createElement('span'); e.textContent = extra; tip.append(document.createElement('br'), e); }
@@ -907,6 +926,12 @@
       el.append(name, swatch(col(bad), fmt(bad) + ' damaging'));
       if (sc.diverging) el.append(swatch(col(0), '0'));
       el.append(swatch(col(good), fmt(good) + ' tolerated'), swatch(scores.none, 'no score'));
+    } else if (scheme === 'deviation') {
+      name.textContent = '(Cα deviation from ' + compare.name + ')';
+      const col = (v) => C.scoreColor(v, { lo: 0, hi: compare.max, higherIsWorse: true }, compare.stops, compare.none);
+      el.append(name, swatch(col(0), '0 Å'), swatch(col(compare.max / 2), fmt(compare.max / 2) + ' Å'),
+        swatch(col(compare.max), '≥ ' + fmt(compare.max) + ' Å'), swatch(compare.none, 'unpaired'),
+        swatch(compare.colour, 'reference'));
     } else if (scheme === 'rainbow') {
       name.textContent = '(sequence position)';
       el.append(name, swatch(C.rainbowColor(0, 4), 'N-terminus'), swatch(C.rainbowColor(2, 4), 'middle'),
@@ -933,6 +958,10 @@
       if (conf.ptm != null) parts.push('pTM ' + conf.ptm.toFixed(3));
       if (conf.iptm != null) parts.push('ipTM ' + conf.iptm.toFixed(3));
       rows.splice(Math.min(2, rows.length), 0, ['predicted TM-score', parts.join(' · ')]);
+    }
+    if (compare) {
+      rows.unshift(['superposed on ' + compare.name, 'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å over ' + compare.paired +
+        ' pairs (' + compare.pairing + ')' + (compare.mismatched ? ' · ' + compare.mismatched + ' differ in residue' : '')]);
     }
     if (rows.length) {
       h('measurements');
@@ -998,6 +1027,31 @@
         w.textContent = '! An experimental B-factor measures motion and disorder, not confidence.';
         panel.append(w);
       }
+    }
+    // Files: the model this page was drawn from, and its PAE in AlphaFold DB's JSON layout.
+    const src = $('proteus-source');
+    const files = [];
+    if (src && src.textContent.trim()) files.push(['model · ' + src.dataset.name, () =>
+      C.gunzip(C.b64ToBytes(src.textContent)).then((b) => download(src.dataset.name, b, 'chemical/x-pdb'))]);
+    if (paeInfo) files.push(['PAE · json', () => {
+      if (!pae) return;
+      const rows = [];
+      for (let i = 0; i < pae.n; i++) rows.push(Array.from(pae.v.subarray(i * pae.n, (i + 1) * pae.n), (x) => x / 8));
+      const name = (src && src.dataset.name ? src.dataset.name.replace(/\.[^.]+$/, '') : subject) + '-predicted_aligned_error.json';
+      download(name, new TextEncoder().encode(JSON.stringify([{ predicted_aligned_error: rows, max_predicted_aligned_error: pae.max }])), 'application/json');
+    }]);
+    if (files.length) {
+      h('files');
+      const row = document.createElement('div');
+      row.className = 'files';
+      for (const [text, fn] of files) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = '↓ ' + text;
+        b.addEventListener('click', fn);
+        row.append(b);
+      }
+      panel.append(row);
     }
     const note = document.createElement('p');
     note.className = 'note';
@@ -1207,6 +1261,14 @@
 
   // The PAE map: N×N pixels scaled without smoothing. Hover reads a cell; a click selects its
   // two residues; a drag selects two ranges and reports the mean error between them.
+  function download(name, bytes, type) {
+    const a = document.createElement('a');
+    a.download = name;
+    a.href = URL.createObjectURL(new Blob([bytes], { type }));
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
   function drawPae() {
     const c = $('pae');
     if (!c || !pae) return;

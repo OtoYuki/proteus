@@ -437,11 +437,18 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 let _ = structure.attach_confidence(c);
             }
             let scheme = structure.default_color_scheme();
+            let name = model_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("model.pdb")
+                .trim_end_matches(".gz")
+                .to_string();
             proteus_render::web::WebPage {
                 title: "Proteus structure viewer",
                 caption: &caption,
                 structure: &structure,
                 scheme,
+                source: Some((&name, &text)),
             }
             .render()
         })
