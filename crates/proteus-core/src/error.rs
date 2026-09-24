@@ -13,4 +13,8 @@ pub enum CoreError {
 
     #[error("Analysis error: {0}")]
     AnalysisError(String),
+
+    /// A predictor's side file (PAE matrix, scores) or a per-residue data file.
+    #[error("{0}")]
+    ParseError(String),
 }

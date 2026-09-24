@@ -55,7 +55,7 @@ fn brand_header() -> String {
 
 /// Magic bytes and version of the mesh blob. Bump the digit when the layout changes; the page
 /// refuses a blob it does not know.
-pub const MESH_MAGIC: &[u8; 8] = b"PRMESH1\0";
+pub const MESH_MAGIC: &[u8; 8] = b"PRMESH2\0";
 
 /// Code of a secondary-structure state in the blob and in `core.js`.
 pub fn ss_code(ss: SecondaryStructure) -> u8 {
@@ -71,6 +71,7 @@ pub fn scheme_name(scheme: ColorScheme) -> &'static str {
     match scheme {
         ColorScheme::Plddt => "plddt",
         ColorScheme::Rainbow => "rainbow",
+        ColorScheme::Scores => "score",
         _ => "ss",
     }
 }
@@ -82,14 +83,16 @@ fn pad4(buf: &mut Vec<u8>) {
 }
 
 /// Quantisation box shared by both meshes: minimum corner and extent per axis, in Å.
-fn bounds(meshes: &[&TriangleMesh]) -> ([f32; 3], [f32; 3]) {
+fn bounds(meshes: &[&TriangleMesh], points: &[nalgebra::Vector3<f32>]) -> ([f32; 3], [f32; 3]) {
     let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for m in meshes {
-        for v in &m.vertices {
-            for k in 0..3 {
-                lo[k] = lo[k].min(v.position[k]);
-                hi[k] = hi[k].max(v.position[k]);
-            }
+    let all = meshes
+        .iter()
+        .flat_map(|m| m.vertices.iter().map(|v| v.position))
+        .chain(points.iter().copied());
+    for p in all {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
         }
     }
     if lo[0] > hi[0] {
@@ -102,10 +105,7 @@ fn bounds(meshes: &[&TriangleMesh]) -> ([f32; 3], [f32; 3]) {
 fn push_mesh(buf: &mut Vec<u8>, m: &TriangleMesh, lo: [f32; 3], span: [f32; 3], full: bool) {
     for v in &m.vertices {
         for k in 0..3 {
-            let q = ((v.position[k] - lo[k]) / span[k] * 65535.0)
-                .round()
-                .clamp(0.0, 65535.0) as u16;
-            buf.extend(q.to_le_bytes());
+            buf.extend(quantise(v.position[k], lo[k], span[k]).to_le_bytes());
         }
     }
     pad4(buf);
@@ -139,38 +139,88 @@ fn push_mesh(buf: &mut Vec<u8>, m: &TriangleMesh, lo: [f32; 3], span: [f32; 3], 
     }
 }
 
-/// Encode the ribbon and the (optional) disulfide mesh into the page's binary format,
-/// uncompressed. Little-endian throughout:
+/// The geometry a page ships: the ribbon, the disulfide sticks, every heavy atom with its bonds
+/// (for side-chain and ligand sticks), and optionally a superposed reference ribbon.
+pub struct PageGeometry<'a> {
+    pub ribbon: &'a TriangleMesh,
+    pub disulfides: Option<&'a TriangleMesh>,
+    pub atoms: &'a crate::atoms::AtomTable,
+    pub reference: Option<&'a TriangleMesh>,
+}
+
+impl<'a> PageGeometry<'a> {
+    /// The geometry of one structure, with its superposed reference when it has one.
+    pub fn of(s: &'a StructureRenderData) -> Self {
+        Self {
+            ribbon: &s.ribbon_mesh,
+            disulfides: s.disulfide_mesh.as_ref(),
+            atoms: &s.atoms,
+            reference: s.comparison.as_ref().map(|c| &c.reference_mesh),
+        }
+    }
+}
+
+/// Encode a page's geometry into its binary format, uncompressed. Little-endian throughout:
 ///
 /// ```text
-/// magic[8]  u32 nv  u32 nt  u32 ds_nv  u32 ds_nt  f32 lo[3]  f32 span[3]
+/// magic[8]  u32 nv  u32 nt  u32 ds_nv  u32 ds_nt  u32 n_atoms  u32 n_bonds  u32 ref_nv
+///           u32 ref_nt  f32 lo[3]  f32 span[3]
 /// ribbon:    u16 pos[3·nv] (pad4)  i8 nrm[3·nv] (pad4)  u32 res[nv]  f32 plddt[nv]
 ///            u8 ss[nv] (pad4)  u32 idx[3·nt]
 /// disulfide: u16 pos[3·ds_nv] (pad4)  i8 nrm[3·ds_nv] (pad4)  u32 idx[3·ds_nt]
+/// atoms:     u16 pos[3·n_atoms] (pad4)  u8 element[n_atoms] (pad4)  u32 res[n_atoms]
+///            u32 bond[2·n_bonds]
+/// reference: laid out as the ribbon (ref_nv, ref_nt)
 /// ```
 ///
-/// Positions are quantised to 16 bits over the shared bounding box (≤ 0.0015 Å error on an
-/// 8 000-residue assembly); normals to 8 bits.
-pub fn encode_meshes(ribbon: &TriangleMesh, disulfides: Option<&TriangleMesh>) -> Vec<u8> {
+/// Positions are quantised to 16 bits over one bounding box of everything (≤ 0.0015 Å error
+/// on an 8 000-residue assembly); normals to 8 bits. Element codes are [`crate::atoms::ELEMENTS`].
+pub fn encode_page(g: &PageGeometry<'_>) -> Vec<u8> {
     let empty = TriangleMesh::new();
-    let ds = disulfides.unwrap_or(&empty);
-    let (lo, span) = bounds(&[ribbon, ds]);
-    let mut buf = Vec::with_capacity(ribbon.vertex_count() * 32 + 64);
+    let ds = g.disulfides.unwrap_or(&empty);
+    let reference = g.reference.unwrap_or(&empty);
+    let (lo, span) = bounds(&[g.ribbon, ds, reference], &g.atoms.positions);
+    let a = g.atoms;
+    let mut buf = Vec::with_capacity(g.ribbon.vertex_count() * 32 + a.positions.len() * 16 + 64);
     buf.extend_from_slice(MESH_MAGIC);
     for n in [
-        ribbon.vertex_count(),
-        ribbon.triangle_count(),
+        g.ribbon.vertex_count(),
+        g.ribbon.triangle_count(),
         ds.vertex_count(),
         ds.triangle_count(),
+        a.positions.len(),
+        a.bonds.len(),
+        reference.vertex_count(),
+        reference.triangle_count(),
     ] {
         buf.extend((n as u32).to_le_bytes());
     }
     for x in lo.iter().chain(span.iter()) {
         buf.extend(x.to_le_bytes());
     }
-    push_mesh(&mut buf, ribbon, lo, span, true);
+    push_mesh(&mut buf, g.ribbon, lo, span, true);
     push_mesh(&mut buf, ds, lo, span, false);
+    for p in &a.positions {
+        for k in 0..3 {
+            buf.extend(quantise(p[k], lo[k], span[k]).to_le_bytes());
+        }
+    }
+    pad4(&mut buf);
+    buf.extend(&a.elements);
+    pad4(&mut buf);
+    for r in &a.residues {
+        buf.extend(r.to_le_bytes());
+    }
+    for [x, y] in &a.bonds {
+        buf.extend(x.to_le_bytes());
+        buf.extend(y.to_le_bytes());
+    }
+    push_mesh(&mut buf, reference, lo, span, true);
     buf
+}
+
+fn quantise(x: f32, lo: f32, span: f32) -> u16 {
+    ((x - lo) / span * 65535.0).round().clamp(0.0, 65535.0) as u16
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -230,18 +280,61 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
     let rows: Vec<[f32; 3]> = (0..3)
         .map(|r| [base[(r, 0)], base[(r, 1)], base[(r, 2)]])
         .collect();
-    let rama: Vec<[f64; 3]> = s
+    // [φ, ψ, region, ribbon residue]. The analysis's points follow the backbone list, which is
+    // the ribbon's order when every residue has a C-alpha; the index is dropped (-1) otherwise.
+    let aligned = s.ramachandran_points.len() == s.num_residues;
+    let rama: Vec<[f64; 4]> = s
         .ramachandran_points
         .iter()
-        .filter_map(|(phi, psi, reg)| Some([(*phi)?, (*psi)?, region_code(*reg) as f64]))
+        .enumerate()
+        .filter_map(|(i, (phi, psi, reg))| {
+            Some([
+                (*phi)?,
+                (*psi)?,
+                region_code(*reg) as f64,
+                if aligned { i as f64 } else { -1.0 },
+            ])
+        })
         .collect();
+    let contact = |c: &crate::atoms::Contact| {
+        let r1 = |x: f32| (x * 1000.0).round() / 1000.0;
+        serde_json::json!([
+            c.residues[0],
+            c.residues[1],
+            [r1(c.points[0].x), r1(c.points[0].y), r1(c.points[0].z)],
+            [r1(c.points[1].x), r1(c.points[1].y), r1(c.points[1].z)],
+            (c.value * 100.0).round() / 100.0,
+            c.label
+        ])
+    };
+    let a = &s.annotations;
+    let contacts = |v: &[crate::atoms::Contact]| v.iter().map(contact).collect::<Vec<_>>();
+    let confidence = s.confidence.as_ref().map(|c| {
+        serde_json::json!({
+            "ptm": c.ptm,
+            "iptm": c.iptm,
+            "pae": c.pae.as_ref().map(|p| serde_json::json!({
+                "n": p.n,
+                "max": p.max,
+                "mean": (p.mean() * 100.0).round() / 100.0,
+            })),
+            "sources": c.sources.iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+                .collect::<Vec<_>>(),
+        })
+    });
     let per_residue: Vec<f64> = s.plddts.iter().map(|v| (v * 10.0).round() / 10.0).collect();
     serde_json::json!({
         "title": page.title,
         "caption": page.caption,
         "residues": s.num_residues,
         "disulfides": s.num_disulfides,
-        "scheme": scheme_name(page.scheme),
+        // A comparison opens on its deviation colours, unless scores were asked for.
+        "scheme": if s.comparison.is_some() && page.scheme != ColorScheme::Scores {
+            "deviation"
+        } else {
+            scheme_name(page.scheme)
+        },
         "predicted": s.is_predicted(),
         "camera": {
             "rotation": rows,
@@ -266,6 +359,67 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         },
         "perResidue": per_residue,
         "rama": rama,
+        "sequence": s.residue_labels.iter().map(|l| crate::atoms::one_letter(&l.name)).collect::<String>(),
+        "elements": crate::atoms::ELEMENTS,
+        "atomNames": s.atoms.names,
+        "ligands": s.ligands.iter().map(|l| serde_json::json!({
+            "name": l.name, "chain": l.chain, "number": l.number, "atoms": l.atom_count,
+        })).collect::<Vec<_>>(),
+        "issues": {
+            "rama": a.rama.iter().map(|(r, reg)| [*r as u64, region_code(*reg) as u64]).collect::<Vec<_>>(),
+            "clashes": contacts(&a.clashes),
+            "hbonds": contacts(&a.hbonds),
+            "saltBridges": contacts(&a.salt_bridges),
+            "piStacks": contacts(&a.pi_stacks),
+            "cationPi": contacts(&a.cation_pi),
+        },
+        "confidence": confidence,
+        "compare": s.comparison.as_ref().map(|c| {
+            let r2 = |v: f64| (v * 100.0).round() / 100.0;
+            // Deviation on the score scale, 0 Å (blue) to at least 2 Å or the 98th percentile (red).
+            let fit = crate::rasterizer::shader::ScoreScale::fit(&c.deviation, true);
+            let scale = crate::rasterizer::shader::ScoreScale {
+                lo: 0.0,
+                hi: fit.hi.max(2.0),
+                diverging: false,
+                higher_is_worse: true,
+            };
+            let rgb = |x: crate::rasterizer::buffer::ColorRGB| [x.r, x.g, x.b];
+            serde_json::json!({
+                "name": c.name,
+                "rmsd": r2(c.stats.rmsd),
+                "paired": c.stats.paired,
+                "referenceResidues": c.stats.reference_residues,
+                "mismatched": c.stats.mismatched_names,
+                "pairing": c.stats.pairing,
+                "deviation": c.deviation.iter().map(|v| v.map(r2)).collect::<Vec<_>>(),
+                "colors": c.deviation.iter().map(|v| rgb(scale.color(*v))).collect::<Vec<_>>(),
+                "max": r2(scale.hi),
+                "stops": crate::rasterizer::shader::SCORE_STOPS.map(rgb),
+                "none": rgb(crate::rasterizer::shader::NO_SCORE),
+                "colour": rgb(crate::brand::structure::REFERENCE),
+            })
+        }),
+        "scores": s.scores.as_ref().map(|a| {
+            let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
+            let sc = &a.scores;
+            let scale = crate::rasterizer::shader::ScoreScale::fit(&sc.values, a.higher_is_worse);
+            let rgb = |c: crate::rasterizer::buffer::ColorRGB| [c.r, c.g, c.b];
+            serde_json::json!({
+                "column": sc.column,
+                "higherIsWorse": a.higher_is_worse,
+                "scale": { "lo": r3(scale.lo), "hi": r3(scale.hi), "diverging": scale.diverging },
+                "stops": crate::rasterizer::shader::SCORE_STOPS.map(rgb),
+                "none": rgb(crate::rasterizer::shader::NO_SCORE),
+                "colors": sc.values.iter().map(|v| rgb(scale.color(*v))).collect::<Vec<_>>(),
+                "matchedBy": sc.matched_by,
+                "values": sc.values.iter().map(|v| v.map(r3)).collect::<Vec<_>>(),
+                "aa": proteus_core::scores::AMINO_ACIDS.iter().collect::<String>(),
+                "matrix": sc.matrix.as_ref().map(|m| m.iter()
+                    .map(|row| row.iter().map(|v| v.map(|x| r3(x as f64))).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()),
+            })
+        }),
         "metrics": s.metrics.as_ref().map_or_else(Vec::new, |m| proteus_core::qc::summary_rows(m, s.num_residues)),
     })
 }
@@ -279,18 +433,33 @@ pub struct WebPage<'a> {
     pub structure: &'a StructureRenderData,
     /// Colour scheme the page opens with (`c` cycles through all three).
     pub scheme: ColorScheme,
+    /// The structure file itself, `(file name, text)`, embedded so the page can hand it back
+    /// (the "model" download); `None` leaves it out.
+    pub source: Option<(&'a str, &'a str)>,
 }
 
 impl WebPage<'_> {
     /// The complete, self-contained HTML document.
     pub fn render(&self) -> String {
-        let blob = encode_meshes(
-            &self.structure.ribbon_mesh,
-            self.structure.disulfide_mesh.as_ref(),
-        );
+        let blob = encode_page(&PageGeometry::of(self.structure));
         use base64::Engine;
         let mesh_b64 = base64::engine::general_purpose::STANDARD.encode(gzip(&blob));
         let meta = script_safe_json(&metadata(self));
+        // PAE in 1/8 Å steps (AlphaFold's own bins are 0.25–0.5 Å): one byte per pair.
+        let pae_b64 = self
+            .structure
+            .confidence
+            .as_ref()
+            .and_then(|c| c.pae.as_ref())
+            .map(|p| {
+                let q: Vec<u8> = p
+                    .values
+                    .iter()
+                    .map(|v| (v * 8.0).round().clamp(0.0, 255.0) as u8)
+                    .collect();
+                base64::engine::general_purpose::STANDARD.encode(gzip(&q))
+            })
+            .unwrap_or_default();
         format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -307,10 +476,14 @@ impl WebPage<'_> {
 <aside id="panel" aria-label="structure details"></aside>
 <div id="legend" aria-live="polite"></div>
 <div id="tip" role="tooltip" hidden></div>
-<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<section id="selbox" aria-live="polite" hidden></section>
+<nav id="seq" aria-label="sequence"></nav>
+<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
+<script id="proteus-pae" type="application/octet-stream">{pae}</script>
+<script id="proteus-source" type="application/octet-stream" data-name="{source_name}">{source}</script>
 <script>{core}</script>
 <script>{viewer}</script>
 </body>
@@ -323,6 +496,12 @@ impl WebPage<'_> {
             signature = crate::brand::SIGNATURE,
             meta = meta,
             mesh = mesh_b64,
+            pae = pae_b64,
+            source_name = escape_html(self.source.map_or("", |(n, _)| n)),
+            source = self
+                .source
+                .map(|(_, t)| base64::engine::general_purpose::STANDARD.encode(gzip(t.as_bytes())))
+                .unwrap_or_default(),
             core = CORE_JS,
             viewer = VIEWER_JS,
         )
@@ -350,21 +529,23 @@ mod tests {
         idx: Vec<u32>,
         ds_nv: usize,
         ds_idx: Vec<u32>,
+        atom_pos: Vec<[f32; 3]>,
+        elements: Vec<u8>,
+        atom_res: Vec<u32>,
+        bonds: Vec<[u32; 2]>,
+        ref_nv: usize,
     }
 
     fn decode(b: &[u8]) -> Decoded {
         assert_eq!(&b[..8], MESH_MAGIC);
         let u32_at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
         let f32_at = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-        let (nv, nt, ds_nv, ds_nt) = (
-            u32_at(8) as usize,
-            u32_at(12) as usize,
-            u32_at(16) as usize,
-            u32_at(20) as usize,
-        );
-        let lo = [f32_at(24), f32_at(28), f32_at(32)];
-        let span = [f32_at(36), f32_at(40), f32_at(44)];
-        let mut o = 48;
+        let h = |k: usize| u32_at(8 + 4 * k) as usize;
+        let (nv, nt, ds_nv, ds_nt) = (h(0), h(1), h(2), h(3));
+        let (n_atoms, n_bonds, ref_nv, ref_nt) = (h(4), h(5), h(6), h(7));
+        let lo = [f32_at(40), f32_at(44), f32_at(48)];
+        let span = [f32_at(52), f32_at(56), f32_at(60)];
+        let mut o = 64;
         let up4 = |o: usize| o.div_ceil(4) * 4;
         let read_mesh = |o: &mut usize, n: usize, full: bool| {
             let pos: Vec<[f32; 3]> = (0..n)
@@ -401,6 +582,25 @@ mod tests {
         let _ = read_mesh(&mut o, ds_nv, false);
         let ds_idx: Vec<u32> = (0..ds_nt * 3).map(|i| u32_at(o + i * 4)).collect();
         o += ds_nt * 12;
+        let atom_pos: Vec<[f32; 3]> = (0..n_atoms)
+            .map(|i| {
+                [0, 1, 2].map(|k| {
+                    let at = o + (i * 3 + k) * 2;
+                    lo[k] + u16::from_le_bytes([b[at], b[at + 1]]) as f32 / 65535.0 * span[k]
+                })
+            })
+            .collect();
+        o = up4(o + n_atoms * 6);
+        let elements = b[o..o + n_atoms].to_vec();
+        o = up4(o + n_atoms);
+        let atom_res: Vec<u32> = (0..n_atoms).map(|i| u32_at(o + i * 4)).collect();
+        o += n_atoms * 4;
+        let bonds: Vec<[u32; 2]> = (0..n_bonds)
+            .map(|i| [u32_at(o + i * 8), u32_at(o + i * 8 + 4)])
+            .collect();
+        o += n_bonds * 8;
+        let (ref_pos, _, _, _, _) = read_mesh(&mut o, ref_nv, true);
+        o += ref_nt * 12;
         assert_eq!(o, b.len(), "trailing bytes in the blob");
         Decoded {
             pos,
@@ -411,17 +611,22 @@ mod tests {
             idx,
             ds_nv,
             ds_idx,
+            atom_pos,
+            elements,
+            atom_res,
+            bonds,
+            ref_nv: ref_pos.len(),
         }
     }
 
     #[test]
     fn the_mesh_round_trips_through_the_page_format() {
         let s = crambin();
-        let blob = encode_meshes(&s.ribbon_mesh, s.disulfide_mesh.as_ref());
+        let blob = encode_page(&PageGeometry::of(&s));
         let d = decode(&blob);
         let m = &s.ribbon_mesh;
         assert_eq!(d.pos.len(), m.vertex_count());
-        let (_, span) = bounds(&[m]);
+        let (_, span) = bounds(&[m], &s.atoms.positions);
         let bound = span.iter().cloned().fold(0.0f32, f32::max) / 65535.0;
         for (v, p) in m.vertices.iter().zip(&d.pos) {
             for (a, b) in v.position.iter().zip(p) {
@@ -460,6 +665,17 @@ mod tests {
         let ds = s.disulfide_mesh.as_ref().unwrap();
         assert_eq!(d.ds_nv, ds.vertex_count());
         assert_eq!(d.ds_idx.len(), ds.triangle_count() * 3);
+        // Every heavy atom and bond travels too, to the same precision.
+        assert_eq!(d.atom_pos.len(), s.atoms.positions.len());
+        for (a, p) in s.atoms.positions.iter().zip(&d.atom_pos) {
+            for k in 0..3 {
+                assert!((a[k] - p[k]).abs() <= bound, "atom quantisation");
+            }
+        }
+        assert_eq!(d.elements, s.atoms.elements);
+        assert_eq!(d.atom_res, s.atoms.residues);
+        assert_eq!(d.bonds, s.atoms.bonds);
+        assert_eq!(d.ref_nv, 0);
     }
 
     #[test]
@@ -470,6 +686,7 @@ mod tests {
             caption: "X-ray",
             structure: &s,
             scheme: s.default_color_scheme(),
+            source: Some(("1crn.pdb", CRAMBIN)),
         }
         .render();
         assert!(html.contains("id=\"proteus-mesh\""));
@@ -481,7 +698,8 @@ mod tests {
                 "page reaches outside itself: {forbidden}"
             );
         }
-        assert!(html.len() < 200_000, "crambin page is {} bytes", html.len());
+        // Measured 2026-09-24: fonts 58 KB, viewer code 80 KB, crambin (mesh, 327 atoms) 76 KB.
+        assert!(html.len() < 240_000, "crambin page is {} bytes", html.len());
     }
 
     #[test]
@@ -493,12 +711,13 @@ mod tests {
             caption: "y",
             structure: &s,
             scheme: ColorScheme::SecondaryStructure,
+            source: Some(("\"><b>x.pdb", "</script>")),
         }
         .render();
-        // The page's own four script elements, and no more.
+        // The page's own six script elements, and no more.
         assert_eq!(
             html.matches("</script>").count(),
-            4,
+            6,
             "a string closed a script"
         );
         assert!(!html.contains("<b>x"));
@@ -546,7 +765,27 @@ mod tests {
                 })
             })
             .collect();
-        let fixture = serde_json::json!({ "plddt": plddt, "ss": ss, "rainbow": rainbow });
+        use crate::rasterizer::shader::{ScoreScale, SCORE_STOPS};
+        let mut score = Vec::new();
+        for (lo, hi, diverging) in [(-8.0, 8.0, true), (0.05, 0.99, false), (-1.0, 3.5, false)] {
+            for worse in [false, true] {
+                let scale = ScoreScale {
+                    lo,
+                    hi,
+                    diverging,
+                    higher_is_worse: worse,
+                };
+                for k in 0..=60 {
+                    let v = lo - 1.0 + (hi - lo + 2.0) * k as f64 / 60.0;
+                    let c = scale.color(Some(v));
+                    score.push(serde_json::json!([v, lo, hi, worse, c.r, c.g, c.b]));
+                }
+            }
+        }
+        let fixture = serde_json::json!({
+            "plddt": plddt, "ss": ss, "rainbow": rainbow, "score": score,
+            "scoreStops": SCORE_STOPS.map(|c| [c.r, c.g, c.b]),
+        });
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/web/test/colors.json");
         let text = serde_json::to_string(&fixture).unwrap() + "\n";
         if std::env::var_os("UPDATE_WEB_FIXTURES").is_some() {
@@ -563,7 +802,7 @@ mod tests {
     #[test]
     fn mesh_fixture_is_current() {
         let s = crambin();
-        let blob = gzip(&encode_meshes(&s.ribbon_mesh, s.disulfide_mesh.as_ref()));
+        let blob = gzip(&encode_page(&PageGeometry::of(&s)));
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/web/test/1crn.mesh.gz");
         let summary_path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -577,6 +816,9 @@ mod tests {
             "firstIndex": m.indices[0],
             "lastResidue": m.vertices.last().unwrap().residue_index,
             "firstPlddt": m.vertices[0].plddt,
+            "atoms": s.atoms.positions.len(),
+            "bonds": s.atoms.bonds.len(),
+            "firstBond": s.atoms.bonds[0],
         });
         let summary_text = serde_json::to_string(&summary).unwrap() + "\n";
         if std::env::var_os("UPDATE_WEB_FIXTURES").is_some() {
@@ -590,7 +832,7 @@ mod tests {
         std::io::Read::read_to_end(&mut d, &mut raw).unwrap();
         assert_eq!(
             raw,
-            encode_meshes(&s.ribbon_mesh, s.disulfide_mesh.as_ref()),
+            encode_page(&PageGeometry::of(&s)),
             "assets/web/test/1crn.mesh.gz is stale; rerun with UPDATE_WEB_FIXTURES=1"
         );
         assert_eq!(std::fs::read_to_string(summary_path).unwrap(), summary_text);

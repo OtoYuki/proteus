@@ -1,6 +1,6 @@
 use crate::error::EngineError;
 use crate::runner::{ComputeRunner, RunResult};
-use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::models::{ContainerCreateBody, DeviceRequest, HostConfig};
 use bollard::query_parameters::{
     CreateContainerOptions, LogsOptions, RemoveContainerOptions, StartContainerOptions,
     WaitContainerOptions,
@@ -80,6 +80,25 @@ pub fn tier_image(tier: &PipelineTier) -> String {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+/// Where the NVIDIA Container Toolkit writes its CDI spec (`nvidia-ctk cdi generate`).
+const NVIDIA_CDI_SPECS: [&str; 2] = ["/etc/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml"];
+
+/// The CDI device a tier container is given, from `PROTEUS_GPU`: `off` runs on CPU, any
+/// other value is a CDI device name (`nvidia.com/gpu=0`), and unset means
+/// `nvidia.com/gpu=all` when an NVIDIA CDI spec is installed, else CPU.
+pub fn gpu_device() -> Option<String> {
+    let installed = NVIDIA_CDI_SPECS.iter().any(|p| Path::new(p).exists());
+    gpu_device_for(std::env::var("PROTEUS_GPU").ok().as_deref(), installed)
+}
+
+fn gpu_device_for(setting: Option<&str>, nvidia_cdi_installed: bool) -> Option<String> {
+    match setting.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) if s.eq_ignore_ascii_case("off") => None,
+        Some(s) => Some(s.to_string()),
+        None => nvidia_cdi_installed.then(|| "nvidia.com/gpu=all".to_string()),
+    }
 }
 
 /// The FASTA handed to the tier's container. Boltz requires `>CHAIN|ENTITY|MSA` headers
@@ -174,8 +193,17 @@ impl ComputeRunner for OciRunner {
 
         // No `auto_remove`: an auto-removed container can vanish before `wait_container` is
         // polled, which surfaces as a 404 on Docker. The container is removed explicitly below.
+        // Podman and Docker 25+ both take a CDI device through the `cdi` device-request driver.
+        let gpu = gpu_device();
         let host_config = HostConfig {
             binds: Some(vec![bind_mount]),
+            device_requests: gpu.clone().map(|id| {
+                vec![DeviceRequest {
+                    driver: Some("cdi".to_string()),
+                    device_ids: Some(vec![id]),
+                    ..Default::default()
+                }]
+            }),
             ..Default::default()
         };
 
@@ -187,7 +215,11 @@ impl ComputeRunner for OciRunner {
             ..Default::default()
         };
 
-        info!("Creating OCI container: {}", container_name);
+        info!(
+            "Creating OCI container: {} (gpu: {})",
+            container_name,
+            gpu.as_deref().unwrap_or("none")
+        );
         self.docker
             .create_container(
                 Some(CreateContainerOptions {
@@ -310,7 +342,8 @@ impl ComputeRunner for OciRunner {
                 "engine": crate::runner::ENGINE_OCI,
                 "runner": "oci",
                 "image": image,
-                "socket": self.socket_path
+                "socket": self.socket_path,
+                "gpu": gpu
             })),
         })
     }
@@ -336,6 +369,22 @@ mod tests {
         assert_eq!(
             tier_image(&PipelineTier::HighFidelity),
             "ghcr.io/jwohlwend/boltz:latest"
+        );
+    }
+
+    #[test]
+    fn gpu_follows_the_cdi_spec_unless_proteus_gpu_says_otherwise() {
+        assert_eq!(
+            gpu_device_for(None, true).as_deref(),
+            Some("nvidia.com/gpu=all")
+        );
+        assert_eq!(gpu_device_for(None, false), None);
+        assert_eq!(gpu_device_for(Some(" "), false), None);
+        assert_eq!(gpu_device_for(Some("off"), true), None);
+        assert_eq!(gpu_device_for(Some("OFF"), true), None);
+        assert_eq!(
+            gpu_device_for(Some("nvidia.com/gpu=0"), false).as_deref(),
+            Some("nvidia.com/gpu=0")
         );
     }
 

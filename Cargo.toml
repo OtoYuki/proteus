@@ -69,6 +69,8 @@ candle-nn = "0.11"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 pdbtbx = "0.12"
 flate2 = "1"
+# Reads .npz arrays (Boltz PAE); the same major as candle-core's, with deflate added.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
 nalgebra = "0.35"
 
 # CLI & UX

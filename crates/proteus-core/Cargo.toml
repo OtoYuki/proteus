@@ -19,6 +19,7 @@ pdbtbx = { workspace = true }
 flate2 = { workspace = true }
 nalgebra = { workspace = true }
 proteus-dssp = { workspace = true, features = ["serde"] }
+zip = { workspace = true }
 utoipa = { workspace = true, optional = true }
 
 [features]

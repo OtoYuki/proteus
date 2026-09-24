@@ -5,6 +5,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
+  NVIDIA CDI spec is installed; `PROTEUS_GPU=off` or a device name overrides it) and records
+  the device in the prediction's metadata.
+- `containers/boltz/Containerfile` builds the `sota` tier's Boltz-2 image with its weights.
+- PAE and pTM: read from Boltz, AlphaFold DB, ColabFold and AlphaFold 3 files beside a model or
+  `--pae FILE`; shown as a map in the browser (hover, box selection with the mean error between
+  two ranges) and in the terminal dashboard. The job server's pages carry them too.
+- Browser viewer selection: click the structure, sequence track, Ramachandran plot, pLDDT strip
+  or PAE map; the rest dims, the selection and its 5 Å neighbourhood are drawn as sticks, and a
+  box gives distances, PAE, the neighbours and a PyMOL selection.
+- Findings list: Ramachandran outliers, overlaps, H-bonds, salt bridges and π interactions, each
+  shown on the structure with its atoms and a dashed line.
+- Ligands are drawn (they were dropped from the page) and select their binding site.
+- `--color-by FILE[:COLUMN]` colours by an `esm scan` matrix, a per-variant table (AlphaMissense,
+  `screen` exports) or per-residue values, in both viewers, with a substitution map in the
+  browser.
+- `--compare` works in the browser: the reference is drawn and residues are coloured by Cα
+  deviation.
+- The page embeds the model and offers it, and its PAE, as downloads.
+
+### Changed
+- The page's geometry blob is `PRMESH2`: it adds every heavy atom, the bonds and an optional
+  reference ribbon. Pages written by an older Proteus still open; a page's own decoder refuses
+  a blob of the other version.
+
 ## [0.8.0] — 2026-09-23
 
 The release where Proteus gets a face.

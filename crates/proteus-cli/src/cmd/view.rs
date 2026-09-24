@@ -21,8 +21,9 @@ pub struct Args {
 
     /// Reference structure to superpose onto, with C-alpha RMSD. Residues are paired by
     /// chain ID and number, by number alone for two single-chain files, or by sequence
-    /// alignment, whichever matches most; the two are drawn in fixed colours, so --color and
-    /// --dashboard do not apply
+    /// alignment, whichever matches most. In the terminal the two are drawn in fixed colours,
+    /// so --color and --dashboard do not apply; the browser page (--web, --html) colours this
+    /// structure by how far each residue moved and keeps everything else
     #[arg(long, conflicts_with_all = ["color", "dashboard"])]
     compare: Option<PathBuf>,
 
@@ -60,6 +61,43 @@ pub struct Args {
     /// Write that self-contained page to a file instead of opening it
     #[arg(long, conflicts_with_all = TERMINAL_ONLY)]
     html: Option<PathBuf>,
+
+    /// Predicted aligned error to show with the model (.npz, .npy or .json). Without it the
+    /// files a predictor writes next to its model are found by name: Boltz `pae_*.npz` and
+    /// `confidence_*.json`, AlphaFold DB `*-predicted_aligned_error_v*.json`, ColabFold
+    /// `*_scores_*.json`, AlphaFold 3 `*_full_data_*.json`
+    #[arg(long)]
+    pae: Option<PathBuf>,
+
+    /// Colour residues by a score table: FILE or FILE:COLUMN. Reads `proteus esm scan
+    /// --export` matrices, one-row-per-variant tables (L43A names: AlphaMissense, `proteus
+    /// screen` exports) and per-residue tables (a position column and a value), as CSV, TSV or
+    /// JSON. A position's colour is the mean over its substitutions; red is the damaging end
+    #[arg(long, value_name = "FILE[:COLUMN]")]
+    color_by: Option<String>,
+
+    /// With --color-by: high values are the damaging end (pathogenicity, ΔΔG). The default
+    /// guesses from the column name and otherwise takes low as damaging (fitness, ESM scores)
+    #[arg(long, requires = "color_by", conflicts_with = "lower_is_worse")]
+    higher_is_worse: bool,
+
+    /// With --color-by: low values are the damaging end
+    #[arg(long, requires = "color_by")]
+    lower_is_worse: bool,
+}
+
+/// `FILE` or `FILE:COLUMN`; a path that exists as written wins, so a file name containing a
+/// colon still opens.
+fn split_color_by(spec: &str) -> (PathBuf, Option<String>) {
+    if std::path::Path::new(spec).exists() {
+        return (PathBuf::from(spec), None);
+    }
+    match spec.rsplit_once(':') {
+        Some((file, column)) if !file.is_empty() && !column.is_empty() => {
+            (PathBuf::from(file), Some(column.to_string()))
+        }
+        _ => (PathBuf::from(spec), None),
+    }
 }
 
 /// `--width`/`--height`: a cell count the renderer can allocate a framebuffer for.
@@ -81,9 +119,13 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         height,
         web,
         html,
+        pae,
+        color_by,
+        higher_is_worse,
+        lower_is_worse,
     } = args;
     let target_path = PathBuf::from(&target);
-    let (pdb_content, title) = if target_path.exists() {
+    let (pdb_content, title, structure_path) = if target_path.exists() {
         let content = proteus_core::io::read_structure_text(&target_path)
             .with_context(|| format!("Failed to read structure file at {:?}", target_path))?;
         let name = target_path
@@ -91,7 +133,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             .and_then(|s| s.to_str())
             .unwrap_or("PDB Structure")
             .to_string();
-        (content, name)
+        (content, name, target_path.clone())
     } else {
         // A path that exists wins; only then is the argument treated as a job reference, so a
         // file literally named like a UUID is still openable. Opening the job database creates
@@ -131,20 +173,87 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         } else {
             format!("Job {job_id} ({engine})")
         };
-        (content, title)
+        (content, title, PathBuf::from(&pred.pdb_path))
     };
+    // PAE and pTM: an explicit --pae must load; files found by name only add to the view.
+    let confidence = match proteus_core::pae::read_confidence(&structure_path, pae.as_deref()) {
+        Ok(c) => Some(c),
+        Err(e) if pae.is_some() => return Err(anyhow::anyhow!(e)).context("Failed to read --pae"),
+        Err(e) => {
+            eprintln!("note: ignoring the predictor's confidence files: {e}");
+            None
+        }
+    };
+    let score_table = match &color_by {
+        Some(spec) => {
+            let (file, column) = split_color_by(spec);
+            Some(
+                proteus_core::scores::read_score_table(&file, column.as_deref())
+                    .with_context(|| format!("Failed to read --color-by {spec}"))?,
+            )
+        }
+        None => None,
+    };
+    let direction = match (higher_is_worse, lower_is_worse) {
+        (true, _) => Some(true),
+        (_, true) => Some(false),
+        _ => None,
+    };
+    let attach = |s: &mut proteus_render::StructureRenderData| -> Result<()> {
+        if let Some(c) = confidence.clone() {
+            if let Some(note) = s.attach_confidence(c) {
+                eprintln!("{note}");
+            }
+        }
+        if let Some(t) = &score_table {
+            let note = s
+                .attach_scores(t, direction)
+                .context("Failed to place --color-by scores on the structure")?;
+            eprintln!("{note}");
+        }
+        Ok(())
+    };
+    // --color-by opens on its colours unless --color says otherwise.
+    let scores_scheme = color_by.is_some() && color.is_none();
 
     if web || html.is_some() {
-        let structure = proteus_render::parse_pdb_structure(&pdb_content)
+        let mut structure = proteus_render::parse_pdb_structure(&pdb_content)
             .context("Failed to parse structure for the browser viewer")?;
-        let scheme = color
-            .map(Into::into)
-            .unwrap_or_else(|| structure.default_color_scheme());
+        attach(&mut structure)?;
+        if let Some(ref_path) = &compare {
+            let ref_text = proteus_core::io::read_structure_text(ref_path)
+                .with_context(|| format!("Failed to read reference structure at {:?}", ref_path))?;
+            let ref_name = ref_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("reference");
+            let stats = structure
+                .attach_comparison(&pdb_content, &ref_text, ref_name)
+                .context("Failed to superpose the reference")?;
+            eprintln!("{}", superposition_summary(&stats));
+            if let Some(warning) = superposition_warning(&stats) {
+                eprintln!("{warning}");
+            }
+        }
+        let scheme = if scores_scheme {
+            proteus_render::rasterizer::ColorScheme::Scores
+        } else {
+            color
+                .map(Into::into)
+                .unwrap_or_else(|| structure.default_color_scheme())
+        };
+        let source_name = structure_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("model.pdb")
+            .trim_end_matches(".gz")
+            .to_string();
         let html_content = proteus_render::web::WebPage {
             title: "Proteus structure viewer",
             caption: &title,
             structure: &structure,
             scheme,
+            source: Some((&source_name, &pdb_content)),
         }
         .render();
 
@@ -212,14 +321,15 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     }
     // Parsed once here; the snapshot/interactive paths reuse it.
     let structure_data = if compare.is_none() {
-        Some(
-            proteus_render::parse_pdb_structure(&pdb_content)
-                .context("Failed to parse structure for 3D rendering")?,
-        )
+        let mut s = proteus_render::parse_pdb_structure(&pdb_content)
+            .context("Failed to parse structure for 3D rendering")?;
+        attach(&mut s)?;
+        Some(s)
     } else {
         None
     };
     let render_color: proteus_render::rasterizer::ColorScheme = match (color, &structure_data) {
+        _ if scores_scheme => proteus_render::rasterizer::ColorScheme::Scores,
         (Some(c), _) => c.into(),
         (None, Some(sd)) => {
             let scheme = sd.default_color_scheme();
@@ -282,6 +392,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 dashboard_enabled: false,
                 dashboard_data: None,
                 stop: None,
+                scores: None,
             };
             run_viewer(&sup_data.target_mesh, sup_data.camera, config)
                 .context("Interactive dual-structure 3D viewer error")?;
@@ -304,6 +415,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     } else if interactive || dashboard {
         let structure_data = structure_data.expect("parsed above when --compare is absent");
 
+        let score_colors = proteus_render::tui::ScoreColors::of(&structure_data);
         let dashboard_data = Some(proteus_render::tui::DashboardData {
             title: title.clone(),
             num_residues: structure_data.num_residues,
@@ -311,6 +423,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             metrics: structure_data.metrics,
             plddts: structure_data.plddts,
             ramachandran_points: structure_data.ramachandran_points,
+            confidence: structure_data.confidence.clone(),
         });
 
         let config = proteus_render::tui::ViewerConfig {
@@ -323,6 +436,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             dashboard_enabled: dashboard || term_cols >= 100,
             dashboard_data,
             stop: None,
+            scores: score_colors,
         };
         run_viewer(&structure_data.ribbon_mesh, structure_data.camera, config)
             .context("Interactive 3D viewer error")?;

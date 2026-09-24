@@ -1,3 +1,4 @@
+pub mod atoms;
 pub mod brand;
 pub mod error;
 pub mod geometry;
@@ -50,6 +51,56 @@ pub struct StructureRenderData {
     pub residue_labels: Vec<ResidueLabel>,
     /// Eight-state DSSP string, one character per residue of the ribbon.
     pub dssp: String,
+    /// Heavy atoms and bonds of the ribbon's residues and of the ligands (browser sticks).
+    pub atoms: atoms::AtomTable,
+    /// Ligands, cofactors and ions; ligand `k` is residue `num_residues + k` in `atoms`.
+    pub ligands: Vec<atoms::Ligand>,
+    /// The analysis's findings located on the ribbon: what the viewer can point at.
+    pub annotations: atoms::Annotations,
+    /// PAE and pTM from the predictor's side files, when the caller attached them.
+    pub confidence: Option<proteus_core::pae::PredictionConfidence>,
+    /// Scores from a table (a mutational scan, a variant-effect predictor), placed on the
+    /// residues, when the caller attached them.
+    pub scores: Option<AttachedScores>,
+    /// A reference structure superposed onto this one, when the caller attached it.
+    pub comparison: Option<Comparison>,
+}
+
+/// A reference structure moved onto this one: its ribbon, in this structure's frame, and how
+/// far each residue sits from its partner.
+#[derive(Debug, Clone)]
+pub struct Comparison {
+    pub name: String,
+    pub reference_mesh: TriangleMesh,
+    /// C-alpha distance to the paired reference residue after superposition, per residue of
+    /// this structure; `None` for an unpaired residue.
+    pub deviation: Vec<Option<f64>>,
+    pub stats: SuperpositionStats,
+}
+
+/// A score table placed on a structure, with the direction its colours run in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttachedScores {
+    pub scores: proteus_core::scores::ResidueScores,
+    /// True when a high value is the bad end (pathogenicity, ΔΔG of destabilisation); false for
+    /// fitness and log-likelihood ratios, where low is deleterious.
+    pub higher_is_worse: bool,
+}
+
+/// Whether a score column's name says that high values are the damaging end. Fitness,
+/// enrichment and language-model log-likelihood ratios are low-is-bad, the default.
+pub fn higher_is_worse(column: &str) -> bool {
+    let c = column.to_ascii_lowercase();
+    [
+        "pathogen",
+        "ddg",
+        "damag",
+        "deleterious",
+        "destabil",
+        "risk",
+    ]
+    .iter()
+    .any(|k| c.contains(k))
 }
 
 /// Identity of one residue of the ribbon.
@@ -311,6 +362,27 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         (None, plddts.clone(), Vec::new())
     };
 
+    let (atom_table, ligands) = atoms::build_atoms(&trace.protein, &pdb, &trace.ids);
+    let annotations = match &metrics {
+        Some(m) => {
+            let backbone_ids: Vec<ResidueId> =
+                proteus_core::backbone::extract_backbone(&trace.protein)
+                    .iter()
+                    .map(|r| (r.chain_id.clone(), r.seq_num, r.insertion_code.clone()))
+                    .collect();
+            atoms::annotate(
+                m,
+                &rama_points,
+                &backbone_ids,
+                &trace.protein,
+                &atom_table,
+                &trace.ids,
+                &trace.names,
+            )
+        }
+        None => atoms::Annotations::default(),
+    };
+
     let residue_labels = trace
         .ids
         .iter()
@@ -334,6 +406,12 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         plddts: detailed_plddts,
         plddt_scale: trace.plddt_scale,
         ramachandran_points: rama_points,
+        atoms: atom_table,
+        ligands,
+        annotations,
+        confidence: None,
+        scores: None,
+        comparison: None,
     })
 }
 
@@ -383,6 +461,153 @@ impl StructureRenderData {
              apart, so this shows the fold's outline and not per-residue detail. Enlarge the \
              terminal, or use --backend braille (2×4 subpixels per cell) or kitty."
         ))
+    }
+
+    /// Attach a predictor's PAE and pTM. A PAE matrix whose size is not the ribbon's residue
+    /// count (a complex with ligand tokens, the wrong file) is dropped rather than drawn against
+    /// the wrong residues; the returned note says why.
+    pub fn attach_confidence(
+        &mut self,
+        mut confidence: proteus_core::pae::PredictionConfidence,
+    ) -> Option<String> {
+        let mut note = None;
+        if let Some(p) = &confidence.pae {
+            if p.n != self.num_residues {
+                note = Some(format!(
+                    "note: the PAE matrix covers {} positions but the structure has {} \
+                     residues; PAE is not shown",
+                    p.n, self.num_residues
+                ));
+                confidence.pae = None;
+            }
+        }
+        if !confidence.is_empty() {
+            self.confidence = Some(confidence);
+        }
+        note
+    }
+
+    /// Superpose `reference_pdb` onto this structure (parsed from `self_pdb`) and keep its ribbon
+    /// and the per-residue deviation. The reference moves; this structure, its atoms and its
+    /// findings stay where they are.
+    pub fn attach_comparison(
+        &mut self,
+        self_pdb: &str,
+        reference_pdb: &str,
+        name: &str,
+    ) -> Result<SuperpositionStats, RenderError> {
+        let tgt_pdb = proteus_core::io::open_structure_bytes(self_pdb.as_bytes(), None)
+            .map_err(|e| RenderError::PdbParse(e.to_string()))?;
+        let ref_pdb = proteus_core::io::open_structure_bytes(reference_pdb.as_bytes(), None)
+            .map_err(|e| RenderError::PdbParse(format!("Reference structure parse failed: {e}")))?;
+        let tgt = trace_of(&tgt_pdb);
+        let refr = trace_of(&ref_pdb);
+        if tgt.ca.len() != self.num_residues {
+            return Err(RenderError::Geometry(
+                "the structure text does not match this bundle".into(),
+            ));
+        }
+        let (pairs, pairing) = pair_best(&tgt, &refr);
+        if pairs.len() < MIN_SUPERPOSITION_PAIRS {
+            return Err(RenderError::Geometry(format!(
+                "only {} residue(s) could be paired with the reference, and at least \
+                 {MIN_SUPERPOSITION_PAIRS} are needed to superpose",
+                pairs.len()
+            )));
+        }
+        let paired_tgt: Vec<Vector3<f64>> = pairs.iter().map(|&(i, _)| tgt.ca[i]).collect();
+        let paired_ref: Vec<Vector3<f64>> = pairs.iter().map(|&(_, j)| refr.ca[j]).collect();
+        // Fit the reference onto the target, so the target keeps its own frame.
+        let sup = proteus_core::metrics::compute_kabsch_superposition(&paired_ref, &paired_tgt)
+            .map_err(|e| RenderError::Geometry(e.to_string()))?;
+        let moved: Vec<Vector3<f64>> = refr
+            .ca
+            .iter()
+            .map(|p| sup.rotation * p + sup.translation)
+            .collect();
+        let guides: Vec<Option<Vector3<f64>>> = refr
+            .guides
+            .iter()
+            .map(|g| g.map(|g| sup.rotation * g))
+            .collect();
+        let ref_ss =
+            assign_secondary_structure(&proteus_core::backbone::extract_backbone(&refr.protein));
+        let reference_mesh = segmented_cartoon_mesh(
+            &moved,
+            &ref_ss.assignment,
+            &refr.plddts,
+            &refr.breaks,
+            &guides,
+        );
+        let mut deviation = vec![None; self.num_residues];
+        for &(i, j) in &pairs {
+            deviation[i] = Some((tgt.ca[i] - moved[j]).norm());
+        }
+        let stats = SuperpositionStats {
+            rmsd: sup.rmsd,
+            paired: pairs.len(),
+            target_residues: tgt.ca.len(),
+            reference_residues: refr.ca.len(),
+            mismatched_names: pairs
+                .iter()
+                .filter(|&&(i, j)| tgt.names[i] != refr.names[j])
+                .count(),
+            pairing,
+        };
+        // Frame both: widen the camera to the reference's reach.
+        let c = self.camera.center;
+        let c64 = Vector3::new(c.x as f64, c.y as f64, c.z as f64);
+        let reach = moved
+            .iter()
+            .map(|p| (p - c64).norm())
+            .fold(0.0f64, f64::max) as f32;
+        if reach > self.camera.bounding_radius {
+            self.camera.bounding_radius = reach;
+        }
+        self.comparison = Some(Comparison {
+            name: name.to_string(),
+            reference_mesh,
+            deviation,
+            stats,
+        });
+        Ok(stats)
+    }
+
+    /// Place a score table on this structure's residues (see
+    /// [`proteus_core::scores::ScoreTable::place`]). The returned line says how it matched.
+    pub fn attach_scores(
+        &mut self,
+        table: &proteus_core::scores::ScoreTable,
+        higher_is_worse: Option<bool>,
+    ) -> Result<String, proteus_core::CoreError> {
+        let numbers: Vec<isize> = self.residue_labels.iter().map(|l| l.number).collect();
+        let letters: Vec<char> = self
+            .residue_labels
+            .iter()
+            .map(|l| atoms::one_letter(&l.name))
+            .collect();
+        let scores = table.place(&numbers, &letters)?;
+        let note = format!(
+            "scores '{}': {} of {} residues, matched by {}{}",
+            scores.column,
+            scores.covered,
+            self.num_residues,
+            scores.matched_by,
+            if scores.mismatches > 0 {
+                format!(
+                    " ({} wild-type letters differ from the structure)",
+                    scores.mismatches
+                )
+            } else {
+                String::new()
+            }
+        );
+        let worse = higher_is_worse.unwrap_or_else(|| crate::higher_is_worse(&scores.column));
+        self.scores = Some(AttachedScores {
+            scores,
+            higher_is_worse: worse,
+        });
+        Ok(note)
     }
 
     /// True when the B-factor column is a predictor's confidence.
@@ -464,6 +689,9 @@ pub fn render_structure_snapshot(
     fb.clear(ColorRGB::BLACK);
 
     let mut rasterizer = Rasterizer::new(scheme);
+    if let Some(sc) = tui::ScoreColors::of(structure) {
+        rasterizer.residue_colors = sc.residue_colors;
+    }
     rasterizer.rasterize_mesh(&structure.ribbon_mesh, &structure.camera, &mut fb, scheme);
 
     if let Some(ref ds_mesh) = structure.disulfide_mesh {

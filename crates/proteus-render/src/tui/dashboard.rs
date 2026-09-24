@@ -14,6 +14,8 @@ pub struct DashboardData {
     pub metrics: Option<BiophysicalMetrics>,
     pub plddts: Vec<f64>,
     pub ramachandran_points: Vec<(Option<f64>, Option<f64>, RamachandranRegion)>,
+    /// PAE and pTM, when the predictor's files were found.
+    pub confidence: Option<proteus_core::pae::PredictionConfidence>,
 }
 
 /// Split `s` into ANSI escape sequences (`true`) and runs of visible text (`false`).
@@ -239,6 +241,18 @@ impl DashboardRenderer {
         let remaining = height.saturating_sub(lines.len());
         if remaining >= 5 {
             self.render_plddt_section(data, width, &mut lines);
+        }
+
+        // PAE when it fits beside the rest: telemetry keeps at least six rows.
+        let remaining = height.saturating_sub(lines.len());
+        if data
+            .confidence
+            .as_ref()
+            .is_some_and(|c| c.pae.is_some() || c.ptm.is_some())
+            && remaining >= 12
+        {
+            let rows = (remaining - 10).min(width.saturating_sub(4) / 2).min(14);
+            self.render_pae_section(data, width, rows, &mut lines);
         }
 
         let remaining = height.saturating_sub(lines.len());
@@ -491,6 +505,99 @@ impl DashboardRenderer {
         }
     }
 
+    /// pTM and a `2·rows` × `2·rows` PAE map in half-blocks (each cell two pixels high),
+    /// averaged over the residues each pixel covers.
+    fn render_pae_section(
+        &self,
+        data: &DashboardData,
+        width: usize,
+        rows: usize,
+        lines: &mut Vec<String>,
+    ) {
+        let a = &self.ansi;
+        let Some(c) = data.confidence.as_ref() else {
+            return;
+        };
+        lines.push(section_rule(
+            a,
+            &a.fg(Role::Muted),
+            '├',
+            " (predicted aligned error) ",
+            '┤',
+            width,
+        ));
+        let dim = |s: &str| a.paint(Role::Dim, s);
+        let mut facts = Vec::new();
+        if let Some(p) = c.ptm {
+            facts.push(format!("{} {}", dim("pTM"), a.bold(&format!("{p:.3}"))));
+        }
+        if let Some(p) = c.iptm {
+            facts.push(format!("{} {}", dim("ipTM"), a.bold(&format!("{p:.3}"))));
+        }
+        if let Some(p) = &c.pae {
+            facts.push(format!(
+                "{} {}",
+                dim("mean"),
+                a.bold(&format!("{:.1} Å", p.mean()))
+            ));
+        }
+        lines.push(format!(" {}", facts.join("  ")));
+        let Some(p) = &c.pae else { return };
+        let side = (rows * 2).min(p.n).max(2);
+        // Mean over the block of residues each map pixel covers.
+        let cell = |r: usize, col: usize| -> f32 {
+            let (i0, i1) = (
+                r * p.n / side,
+                ((r + 1) * p.n / side).max(r * p.n / side + 1),
+            );
+            let (j0, j1) = (
+                col * p.n / side,
+                ((col + 1) * p.n / side).max(col * p.n / side + 1),
+            );
+            let mut sum = 0.0f32;
+            for i in i0..i1.min(p.n) {
+                for j in j0..j1.min(p.n) {
+                    sum += p.get(i, j);
+                }
+            }
+            sum / ((i1.min(p.n) - i0) * (j1.min(p.n) - j0)).max(1) as f32
+        };
+        for r in (0..side).step_by(2) {
+            let mut line = String::from(" ");
+            for col in 0..side {
+                let top = cell(r, col);
+                let bottom = if r + 1 < side { cell(r + 1, col) } else { top };
+                if a.backgrounds() {
+                    line.push_str(&a.paint_rgb_on(
+                        crate::rasterizer::shader::pae_color(top, p.max),
+                        crate::rasterizer::shader::pae_color(bottom, p.max),
+                        "▀",
+                    ));
+                } else {
+                    // Without backgrounds: density by the pair's mean, light = uncertain.
+                    let t = (top + bottom) / 2.0 / p.max;
+                    line.push(match t {
+                        t if t < 0.15 => '█',
+                        t if t < 0.35 => '▓',
+                        t if t < 0.6 => '▒',
+                        _ => '░',
+                    });
+                }
+            }
+            lines.push(line);
+        }
+        lines.push(format!(
+            " {} {}  {}",
+            a.paint_rgb(crate::rasterizer::shader::pae_color(0.0, p.max), "■"),
+            dim("0"),
+            format_args!(
+                "{} {}",
+                a.paint_rgb(crate::rasterizer::shader::pae_color(p.max, p.max), "■"),
+                dim(&format!("{:.0} Å  aligned ↓ scored →", p.max))
+            )
+        ));
+    }
+
     fn render_telemetry_section(
         &self,
         data: &DashboardData,
@@ -707,6 +814,7 @@ mod tests {
                 candidate_fitness_score: Some(87.4),
             }),
             plddts: vec![92.0; 46],
+            confidence: None,
             ramachandran_points: vec![
                 (Some(-60.0), Some(-45.0), RamachandranRegion::Favored),
                 (Some(-120.0), Some(135.0), RamachandranRegion::Favored),
@@ -790,6 +898,7 @@ mod tests {
                 candidate_fitness_score: Some(87.4),
             }),
             plddts: vec![92.0; 46],
+            confidence: None,
             ramachandran_points: vec![
                 (Some(-60.0), Some(-45.0), RamachandranRegion::Favored),
                 (Some(-120.0), Some(135.0), RamachandranRegion::Favored),
@@ -850,6 +959,7 @@ mod tests {
             num_disulfides: 0,
             metrics: None,
             plddts: vec![],
+            confidence: None,
             ramachandran_points: vec![],
         };
         let lines = DashboardRenderer::with_ansi(Ansi::with_depth(ColorDepth::None))

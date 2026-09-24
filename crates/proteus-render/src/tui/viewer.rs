@@ -159,6 +159,29 @@ pub struct ViewerConfig {
     /// and return. Raw mode turns Ctrl-C into a key press, but a signal still terminates the
     /// process outright, leaving the terminal raw and on the alternate screen.
     pub stop: Option<Arc<AtomicBool>>,
+    /// Colours from an attached score table: `c` cycles to them and the legend names them.
+    pub scores: Option<ScoreColors>,
+}
+
+/// Per-residue colours of a score column, for the terminal viewer.
+#[derive(Debug, Clone)]
+pub struct ScoreColors {
+    pub column: String,
+    pub scale: crate::rasterizer::shader::ScoreScale,
+    pub residue_colors: Vec<ColorRGB>,
+}
+
+impl ScoreColors {
+    /// The colours of a structure's attached scores, if it has any.
+    pub fn of(s: &crate::StructureRenderData) -> Option<Self> {
+        let a = s.scores.as_ref()?;
+        let scale = crate::rasterizer::shader::ScoreScale::fit(&a.scores.values, a.higher_is_worse);
+        Some(Self {
+            column: a.scores.column.clone(),
+            residue_colors: a.scores.values.iter().map(|v| scale.color(*v)).collect(),
+            scale,
+        })
+    }
 }
 
 impl Default for ViewerConfig {
@@ -173,6 +196,7 @@ impl Default for ViewerConfig {
             dashboard_enabled: false,
             dashboard_data: None,
             stop: None,
+            scores: None,
         }
     }
 }
@@ -204,6 +228,9 @@ pub fn run_interactive_viewer(
     let mut fb = Framebuffer::new(layout.view_cols as usize, layout.view_rows as usize * 2);
 
     let mut rasterizer = Rasterizer::new(config.initial_color_scheme);
+    if let Some(sc) = &config.scores {
+        rasterizer.residue_colors = sc.residue_colors.clone();
+    }
     let ansi = crate::brand::ansi::Ansi::detect();
     let mut compositor = HalfBlockRenderer::new();
     let mut auto_rotate = config.auto_rotate;
@@ -241,10 +268,13 @@ pub fn run_interactive_viewer(
                         }
                     }
                     KeyCode::Char('c') => {
+                        let has_scores = config.scores.is_some();
                         color_scheme = match color_scheme {
                             ColorScheme::Plddt => ColorScheme::SecondaryStructure,
                             ColorScheme::SecondaryStructure => ColorScheme::Rainbow,
+                            ColorScheme::Rainbow if has_scores => ColorScheme::Scores,
                             ColorScheme::Rainbow => ColorScheme::Plddt,
+                            ColorScheme::Scores => ColorScheme::Plddt,
                             ColorScheme::Solid(_) => ColorScheme::Plddt,
                         };
                         rasterizer.color_scheme = color_scheme;
@@ -410,6 +440,23 @@ pub fn run_interactive_viewer(
                 }
                 ColorScheme::Rainbow => ansi.paint(Role::Text, "rainbow, N → C"),
                 ColorScheme::Solid(c) => sw(c, "solid"),
+                ColorScheme::Scores => match &config.scores {
+                    Some(sc) => {
+                        let (bad, good) = if sc.scale.higher_is_worse {
+                            (sc.scale.hi, sc.scale.lo)
+                        } else {
+                            (sc.scale.lo, sc.scale.hi)
+                        };
+                        format!(
+                            "{} {}  {}  {}",
+                            sw(sc.scale.color(Some(bad)), &format!("{bad:.2}")),
+                            sw(sc.scale.color(Some(good)), &format!("{good:.2}")),
+                            sw(crate::rasterizer::shader::NO_SCORE, "no score"),
+                            ansi.paint(Role::Dim, &sc.column)
+                        )
+                    }
+                    None => ansi.paint(Role::Dim, "no scores"),
+                },
             }
         };
         let toggle = |name: &str, state: Option<bool>| match state {
@@ -440,10 +487,15 @@ pub fn run_interactive_viewer(
                 ansi.paint(Role::Text, &config.title)
             ),
             legend,
-            toggle(
-                "disulfides",
-                config.disulfide_mesh.as_ref().map(|_| show_disulfides),
-            ),
+            // `d` is always in the key help, so a structure without disulfides says so here.
+            match config.disulfide_mesh {
+                Some(_) => toggle("disulfides", Some(show_disulfides)),
+                None => format!(
+                    "{} {}",
+                    ansi.paint(Role::Dim, "disulfides"),
+                    ansi.paint(Role::Dim, "none")
+                ),
+            },
             format!("{}{dash_note}", toggle("dashboard", dash_state)),
             toggle("effects", Some(fx_on)),
             toggle("spin", Some(auto_rotate)),

@@ -8,6 +8,159 @@ pub enum ColorScheme {
     SecondaryStructure,
     Rainbow,
     Solid(ColorRGB),
+    /// Per-residue colours from an attached score table (`Rasterizer::residue_colors`).
+    Scores,
+}
+
+/// ColorBrewer RdBu, from the damaging end (red) to the tolerated end (blue).
+pub const SCORE_STOPS: [ColorRGB; 7] = [
+    ColorRGB {
+        r: 178,
+        g: 24,
+        b: 43,
+    },
+    ColorRGB {
+        r: 239,
+        g: 138,
+        b: 98,
+    },
+    ColorRGB {
+        r: 253,
+        g: 219,
+        b: 199,
+    },
+    ColorRGB {
+        r: 247,
+        g: 247,
+        b: 247,
+    },
+    ColorRGB {
+        r: 209,
+        g: 229,
+        b: 240,
+    },
+    ColorRGB {
+        r: 103,
+        g: 169,
+        b: 207,
+    },
+    ColorRGB {
+        r: 33,
+        g: 102,
+        b: 172,
+    },
+];
+
+/// ColorBrewer Greens, reversed: AlphaFold DB's PAE colours, 0 Å darkest.
+pub const PAE_STOPS: [ColorRGB; 9] = [
+    ColorRGB { r: 0, g: 68, b: 27 },
+    ColorRGB {
+        r: 0,
+        g: 109,
+        b: 44,
+    },
+    ColorRGB {
+        r: 35,
+        g: 139,
+        b: 69,
+    },
+    ColorRGB {
+        r: 65,
+        g: 171,
+        b: 93,
+    },
+    ColorRGB {
+        r: 116,
+        g: 196,
+        b: 118,
+    },
+    ColorRGB {
+        r: 161,
+        g: 217,
+        b: 155,
+    },
+    ColorRGB {
+        r: 199,
+        g: 233,
+        b: 192,
+    },
+    ColorRGB {
+        r: 229,
+        g: 245,
+        b: 224,
+    },
+    ColorRGB {
+        r: 247,
+        g: 252,
+        b: 245,
+    },
+];
+
+/// A PAE value on AlphaFold DB's scale, 0 → `max` Å.
+pub fn pae_color(v: f32, max: f32) -> ColorRGB {
+    let t = (v / max.max(1e-3)).clamp(0.0, 1.0) * (PAE_STOPS.len() - 1) as f32;
+    let i = (t.floor() as usize).min(PAE_STOPS.len() - 2);
+    ColorRGB::lerp(PAE_STOPS[i], PAE_STOPS[i + 1], t - i as f32)
+}
+
+/// A residue with no score: a neutral grey that no end of the scale uses.
+pub const NO_SCORE: ColorRGB = ColorRGB {
+    r: 96,
+    g: 96,
+    b: 90,
+};
+
+/// The colour scale of a score column: 2nd–98th percentile limits, centred on zero when the
+/// values change sign (a log-likelihood ratio, a fitness relative to wild type), with red at
+/// the damaging end whichever way the column runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScoreScale {
+    pub lo: f64,
+    pub hi: f64,
+    pub diverging: bool,
+    pub higher_is_worse: bool,
+}
+
+impl ScoreScale {
+    pub fn fit(values: &[Option<f64>], higher_is_worse: bool) -> Self {
+        let mut v: Vec<f64> = values.iter().flatten().copied().collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let pct = |q: f64| -> f64 {
+            if v.is_empty() {
+                0.0
+            } else {
+                v[((v.len() - 1) as f64 * q).round() as usize]
+            }
+        };
+        let (p2, p98) = (pct(0.02), pct(0.98));
+        let diverging = p2 < 0.0 && p98 > 0.0;
+        let (lo, hi) = if diverging {
+            let m = p2.abs().max(p98.abs());
+            (-m, m)
+        } else if p98 > p2 {
+            (p2, p98)
+        } else {
+            (p2 - 0.5, p2 + 0.5)
+        };
+        Self {
+            lo,
+            hi,
+            diverging,
+            higher_is_worse,
+        }
+    }
+
+    /// Colour of one value; `None` is [`NO_SCORE`].
+    pub fn color(&self, value: Option<f64>) -> ColorRGB {
+        let Some(v) = value else { return NO_SCORE };
+        let mut t = ((v - self.lo) / (self.hi - self.lo)).clamp(0.0, 1.0) as f32;
+        if self.higher_is_worse {
+            t = 1.0 - t;
+        }
+        let x = t * (SCORE_STOPS.len() - 1) as f32;
+        let i = (x.floor() as usize).min(SCORE_STOPS.len() - 2);
+        ColorRGB::lerp(SCORE_STOPS[i], SCORE_STOPS[i + 1], x - i as f32)
+    }
 }
 
 /// Map AlphaFold / ESMFold pLDDT score (0.0 - 100.0) to standard colors:
