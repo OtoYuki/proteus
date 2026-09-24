@@ -543,7 +543,7 @@
       const dl = document.createElement('dl');
       for (const [k, v] of meta.metrics) {
         const dt = document.createElement('dt'); dt.textContent = k;
-        const dd = document.createElement('dd'); dd.textContent = v;
+        const dd = document.createElement('dd'); dd.textContent = C.keepUnits(v);
         dl.append(dt, dd);
       }
       panel.append(dl);

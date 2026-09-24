@@ -26,6 +26,26 @@ could not really predict, and every number it prints that has an independent imp
 elsewhere is compared against that implementation on every push — the numbers that have none
 are listed as such rather than left to look validated.
 
+<p align="center">
+  <img src="docs/media/web-1pgb.jpg" width="880"
+       alt="protein G (1PGB) in the Proteus browser page: a clay helix packed on a tide-coloured four-stranded sheet, a residue label under the pointer, and the measurements and Ramachandran plot beside it">
+</p>
+<p align="center"><sub>Protein G (1PGB) on the page <code>proteus view 1pgb.pdb --web</code> writes: the
+same ribbon, DSSP and measurements as the terminal viewer, drawn with WebGL2 in one offline
+HTML file.</sub></p>
+
+## In a minute
+
+```bash
+curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
+./proteus analyze model.pdb                          # every measurement, one structure
+./proteus view model.pdb --interactive --dashboard   # the 3-D viewer, in the terminal
+./proteus view model.pdb --web                       # the same, in a browser
+./proteus                                            # the home screen: jobs, files, forms
+```
+
+Other platforms, `cargo install` and the container image are under [Install](#install).
+
 ---
 
 ## 1. Mutate, fold, rank, export
@@ -121,6 +141,22 @@ and its encoder is round-tripped through libsixel's own decoder in CI rather tha
 
 Keys: arrows or `hjkl` orbit, `+`/`-` zoom, `Space` spin, `Tab` dashboard, `c` colour scheme,
 `o` SSAO and outlines, `d` disulfides, `r` reset camera, `q` quit.
+
+When there is a browser at hand, `--web` opens the same structure in one: the ribbon mesh the
+terminal draws, shaded by WebGL2 with SSAO and outlines, hover labels per residue, and the
+measurements beside it. The page is a single HTML file with its fonts and geometry inside, so
+it works offline and can be attached to a report.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/media/web-af-p04637.jpg" alt="the AlphaFold model of human p53 coloured by pLDDT: a confident blue DNA-binding domain between long low-confidence tails in yellow and orange"></td>
+    <td width="50%"><img src="docs/media/web-1aon.jpg" alt="the GroEL–GroES chaperonin (1AON), 8015 residues, as clay helices and tide strands"></td>
+  </tr>
+  <tr>
+    <td><sub>p53 from AlphaFold DB, coloured by pLDDT with AlphaFold's own bands.</sub></td>
+    <td><sub>GroEL–GroES (1AON), 8 015 residues.</sub></td>
+  </tr>
+</table>
 
 ## 4. Check every number against someone else's implementation
 
@@ -372,9 +408,11 @@ proteus view structure.pdb --html out.html        # our own self-contained WebGL
 scripts/gallery.sh                                 # a gallery of such pages (target/gallery/)
 ```
 
-`--compare` pairs residues by chain ID, residue number and insertion code, superposes only the
-ones both structures have, and reports how many that was; the RMSD is printed in yellow with a
-warning when the sequences differ.
+`--compare` pairs residues by chain ID and number, by number alone for two single-chain files,
+or by sequence alignment, whichever matches most; it superposes only the paired residues and
+reports how many that was. The RMSD is marked `✓` when the two are the same sequence residue for
+residue, and `!` with a warning otherwise, since the number then describes only the paired part.
+`--web` and `--html` draw one structure and refuse `--compare`.
 
 ### `proteus analyze` — one structure in full, or a table over many
 

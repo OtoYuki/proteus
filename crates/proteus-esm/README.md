@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
+
 # proteus-esm
 
 ```toml
