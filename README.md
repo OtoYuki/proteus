@@ -405,6 +405,26 @@ systemctl --user enable --now podman.socket
 proteus submit -f ubiquitin.fasta --tier sota --runner oci
 ```
 
+Complexes, ligands, alignments and several samples go through the same tier:
+
+```bash
+# chains and ligands in Boltz's own header syntax (plain `>name` records are protein chains)
+printf '>A|protein|empty\nPQITLWQRPL…\n>B|protein|empty\nPQITLWQRPL…\n>L|ccd\nMK1\n' > hivpr_mk1.fasta
+proteus submit -f hivpr_mk1.fasta --tier sota --runner oci --samples 3
+proteus submit -f target.fasta --tier sota --runner oci --msa server   # sends the sequence to ColabFold's server
+proteus submit -f target.fasta --tier sota --runner oci --msa my.a3m   # your own alignment
+proteus view <job> --model 2                                            # any of the samples
+```
+
+`--msa` is off by default: without it nothing leaves the machine and Boltz folds from the single
+sequence, which is fine for well-studied folds and weaker for orphan proteins. `--msa server`
+uses the public ColabFold MMseqs2 server. Samples run one at a time and the alignment is capped
+at 1 024 sequences (`PROTEUS_BOLTZ_PARALLEL_SAMPLES`, `PROTEUS_BOLTZ_MAX_MSA_SEQS`), which is what
+fits a 6 GB GPU. On an RTX 3060 Laptop the HIV-1 protease dimer with indinavir (243 tokens, MSA
+from the server, 3 samples) takes 86 s end to end: pTM 0.984, ipTM 0.982, 0.24 Å Cα RMSD from the
+1HSG crystal structure and 0.39–0.82 Å for the indinavir pose. 1HSG is from 1995 and certainly in
+Boltz's training data, so this shows the pipeline works, not how Boltz does on a new complex.
+
 Tier containers get the GPU through CDI (`nvidia.com/gpu=all`) whenever the NVIDIA Container
 Toolkit's spec is installed (`/etc/cdi/nvidia.yaml`, from `nvidia-ctk cdi generate`).
 `PROTEUS_GPU=off` keeps them on the CPU; any other value is used as the CDI device name. On an
@@ -462,6 +482,20 @@ The browser page points at what it measures:
 - **Comparison.** `--compare` in the browser keeps the model where it is, draws the reference
   (`x` hides it) and colours each residue by its Cα deviation.
 - **Files.** The page carries the model and hands it back, with its PAE as AlphaFold DB JSON.
+- **Complexes.** Per-chain pTM and an ipTM grid; a ligand's per-atom PAE tokens are averaged into
+  one row, so the map covers residues and ligands. A prediction with several samples lists them
+  with their scores and their Cα and ligand RMSD to the one shown.
+- **Measuring and labels.** `m` measures: two atoms give a distance, three an angle, four a
+  dihedral. `l` pins labels on the selection.
+- **Surfaces.** `u` cycles a molecular surface (a Gaussian density, Grant & Pickup 1995)
+  coloured like the ribbon, by Kyte–Doolittle hydrophobicity, or by Coulombic potential from
+  formal charges with ε = 4r, as ChimeraX's `coulombic` defaults to. It is an estimate, not a
+  Poisson–Boltzmann calculation.
+- **Sessions.** The view (camera, colours, selection, measurements, labels, surface) is kept in
+  the page's URL, so a bookmark or a copied link opens it the same way.
+
+In the terminal, `[` and `]` step through the same findings, dimming the rest and centring each
+one; `0` clears.
 
 ### `proteus analyze` — one structure in full, or a table over many
 
@@ -570,8 +604,13 @@ For centred coordinate matrices $P, Q \in \mathbb{R}^{N \times 3}$:
 $$\text{Clash}_{1k} = \frac{\sum_{i < j} \mathbb{I}\left(r_i^{\text{vdW}} + r_j^{\text{vdW}} - d_{ij} > 0.40\text{ \AA}\right)}{N_{\text{atoms}}} \times 1000$$
 
 Excluding atoms in the same residue, backbone peptide linkages and proline ring geometry
-($|res_i - res_j| = 1$ in the same chain), and disulfide-bonded sulfur pairs
-($d(S_\gamma, S_\gamma) \in [1.70, 2.60]$ Å).
+($|res_i - res_j| = 1$ in the same chain), disulfide-bonded sulfur pairs
+($d(S_\gamma, S_\gamma) \in [1.70, 2.60]$ Å), and hydrogen-bond donor–acceptor pairs at
+2.4 Å or more. The last one matters: with heavy-atom radii (N 1.55, O 1.52 Å) every ordinary
+N–H···O hydrogen bond and salt bridge (2.5–3.1 Å) overlaps by more than 0.4 Å, and MolProbity only
+avoids calling them clashes because it adds the hydrogens first. Before 0.9 Proteus counted them:
+all 3 "overlaps" in a Boltz ubiquitin model and all 4 in AF-P69905 were hydrogen bonds or salt
+bridges; with the exclusion they are 0, and 1HSG's 7 are 3.
 
 ### Non-covalent interactions
 

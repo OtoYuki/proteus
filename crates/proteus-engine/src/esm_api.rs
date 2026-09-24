@@ -48,6 +48,13 @@ impl ComputeRunner for EsmApiRunner {
         sequence: &Sequence,
         work_dir: &Path,
     ) -> Result<RunResult, EngineError> {
+        if proteus_core::complex::ComplexSpec::is_spec(&sequence.fasta) {
+            return Err(EngineError::Pipeline(
+                "complexes, ligands, MSA options and several samples need the sota tier with \
+                 --runner oci; LABEL"
+                    .replace("LABEL", "the ESMFold API folds one chain"),
+            ));
+        }
         info!(
             "EsmApiRunner submitting job {} to Meta ESMFold API for sequence '{}' ({} residues)",
             job.id, sequence.header, sequence.length

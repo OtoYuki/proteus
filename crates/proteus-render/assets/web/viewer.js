@@ -53,6 +53,7 @@
   const SCHEMES = ['ss', 'plddt', 'rainbow'].concat(scores ? ['score'] : [], compare ? ['deviation'] : []);
   let scheme = SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss';
   let noticeText = '';
+  let surfaceKey = ''; // what the surface colours mean, while one is shown
   let noticeTimer = 0;
   let V = null; // the 3D view, once WebGL has started
 
@@ -319,7 +320,13 @@
     const ribbon = vao(mesh.ribbon, true);
     const ds = mesh.disulfides.n > 0 ? vao(mesh.disulfides, false) : null;
     const refRibbon = mesh.reference.n > 0 ? vao(mesh.reference, false) : null;
-    let sticks = null, lines = null;
+    let sticks = null, lines = null, surface = null;
+    // Measurements: each a list of 2–4 atom indices; `current` is the one being built.
+    const measures = [];
+    let current = [];
+    let measuring = false;
+    // Pinned residue labels.
+    const pinned = new Set();
 
     // Depth-cueing range: the view-space depth extent of the ribbon, like pipeline.rs, measured
     // on a subsample of vertices each frame.
@@ -340,7 +347,7 @@
     const base = cam.rotation.flat();
     const center = cam.center;
     const zRange = cam.radius * 1.5 + 12;
-    const state = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0], fx: true, ds: true, ref: true, spin: false };
+    const state = { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0], fx: true, ds: true, ref: true, spin: false, surface: 0 };
     const reset = () => Object.assign(state, { yaw: 0, pitch: 0, zoom: 1, pan: [0, 0] });
 
     // Offscreen targets: colour + depth for the post pass, colour + depth for picking.
@@ -430,6 +437,10 @@
         gl.vertexAttrib1f(4, 1);
       }
       worldSpace();
+      if (surface && state.surface) {
+        gl.bindVertexArray(surface.vao.v);
+        gl.drawElements(gl.TRIANGLES, surface.vao.count, gl.UNSIGNED_INT, 0);
+      }
       if (sticks) {
         gl.bindVertexArray(sticks.v);
         gl.drawElements(gl.TRIANGLES, sticks.count, gl.UNSIGNED_INT, 0);
@@ -476,6 +487,47 @@
       gl.uniform1i(post.u.uFx, state.fx ? 1 : 0);
       gl.uniform3f(post.u.uBg, bgRgb[0] / 255, bgRgb[1] / 255, bgRgb[2] / 255);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
+      placeOverlay();
+    }
+
+    // World → CSS pixels, the inverse of what GEOM_VS does.
+    function project(p) {
+      const rot = rotation(), s = pxPerA(), v = visibleArea();
+      const d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
+      const x = rot[0] * d[0] + rot[1] * d[1] + rot[2] * d[2] + state.pan[0];
+      const y = rot[3] * d[0] + rot[4] * d[1] + rot[5] * d[2] + state.pan[1];
+      const nx = x * 2 * s / W - v.right / W, ny = y * 2 * s / H + v.bottom / H;
+      return [(nx + 1) / 2 * canvas.clientWidth, (1 - ny) / 2 * canvas.clientHeight];
+    }
+    const atomPos = (i) => [mesh.atoms.pos[3 * i], mesh.atoms.pos[3 * i + 1], mesh.atoms.pos[3 * i + 2]];
+    const atomName = (i) => shortLabel(mesh.atoms.res[i]) + ' ' + meta.atomNames[i];
+    function measureText(m) {
+      const v = C.measure(m.map(atomPos));
+      return m.length === 2 ? v.toFixed(2) + ' Å' : v.toFixed(1) + '°';
+    }
+    // Labels over the canvas: measurements at their middle, pinned residues at their C-alpha.
+    function placeOverlay() {
+      const layer = $('overlay');
+      const items = [];
+      for (const m of measures.concat(current.length >= 2 ? [current] : [])) {
+        const pts = m.map(atomPos);
+        const mid = [0, 1, 2].map((k) => pts.reduce((a, p) => a + p[k], 0) / pts.length);
+        items.push(['m', mid, measureText(m)]);
+      }
+      for (const r of pinned) {
+        const p = r < N ? caOf[r] : null;
+        if (p) items.push(['l', p, shortLabel(r)]);
+        else if (r >= N) for (let i = 0; i < mesh.atoms.n; i++) if (mesh.atoms.res[i] === r) { items.push(['l', atomPos(i), label(r)]); break; }
+      }
+      while (layer.children.length > items.length) layer.lastChild.remove();
+      items.forEach(([kind, p, text], k) => {
+        let el = layer.children[k];
+        if (!el) { el = document.createElement('span'); layer.append(el); }
+        el.className = kind === 'm' ? 'measure' : 'pin';
+        el.textContent = text;
+        const [x, y] = project(p);
+        el.style.transform = 'translate(' + Math.round(x + 6) + 'px,' + Math.round(y - 18) + 'px)';
+      });
     }
 
     function pickAt(cssX, cssY) {
@@ -509,6 +561,7 @@
       queued = false;
       if (state.spin) { state.yaw += 0.01; request(); }
       render();
+      if (!state.spin) saveSession();
     }
     function request() { if (!queued) { queued = true; requestAnimationFrame(frame); } }
     new ResizeObserver(() => { hideTip(); request(); }).observe(canvas);
@@ -534,6 +587,7 @@
       gl.bufferData(gl.ARRAY_BUFFER, colours, gl.STATIC_DRAW);
       residueColours(colours);
       rebuildSticks();
+      if (state.surface === 1) buildSurface();
       showLegend();
       request();
     }
@@ -546,6 +600,7 @@
       const shown = new Set(sel.neigh ? C.neighbours(mesh.atoms, sel.set, 5) : sel.set);
       for (let k = 0; k < ligands.length; k++) shown.add(N + k);
       for (const c of sel.contacts) { shown.add(c[0]); shown.add(c[1]); }
+      for (const m of measures.concat([current])) for (const i of m) shown.add(mesh.atoms.res[i]);
       if (shown.size && mesh.atoms.n) {
         const m = C.stickMesh(mesh.atoms, meta.elements, shown,
           (r) => (r < N ? resColour[r] : ligandCarbon) || [200, 200, 200], 0.17);
@@ -565,6 +620,11 @@
         for (const c of issues[key]) add(c, colour);
       }
       for (const c of sel.contacts) add(c, rgbOf(c.role || 'text'));
+      const accent = rgbOf('accent');
+      for (const m of measures.concat(current.length >= 2 ? [current] : [])) {
+        for (let k = 0; k + 1 < m.length; k++) b.dashes(atomPos(m[k]), atomPos(m[k + 1]), 0.05, 0.18, 0.12, accent, 0);
+      }
+      for (const i of current) b.sphere(atomPos(i), 0.32, accent, mesh.atoms.res[i]);
       const lm = b.build();
       if (lm.nt) lines = dynVao(lm);
     }
@@ -600,13 +660,152 @@
       request();
     }
 
+    // ---------------------------------------------------------------- surfaces
+    const SURFACES = ['', 'surface', 'hydrophobicity', 'Coulombic potential'];
+    let surfaceGeom = null;
+    function buildSurface() {
+      if (surface) { surface.vao.free(); surface = null; }
+      if (!state.surface) { if (surfaceKey) { surfaceKey = ''; showLegend(); } return; }
+      if (!surfaceGeom) {
+        const t0 = performance.now();
+        const prot = (i) => mesh.atoms.res[i] < N;
+        surfaceGeom = C.gaussianSurface(mesh.atoms, meta.elements, prot, mesh.atoms.n > 20000 ? 1.5 : 1.0);
+        surfaceGeom.ms = performance.now() - t0;
+      }
+      const g = surfaceGeom;
+      const col = new Uint8Array(g.n * 3), res = new Float32Array(g.n);
+      const mode = SURFACES[state.surface];
+      let charges = null, grid = null;
+      if (mode === 'Coulombic potential') {
+        const resName = (i) => meta.labels.name[mesh.atoms.res[i]] || '';
+        const names = [], rn = [];
+        for (let i = 0; i < mesh.atoms.n; i++) { names.push(meta.atomNames[i]); rn.push(mesh.atoms.res[i] < N ? resName(i) : ''); }
+        charges = C.formalCharges(names, rn, mesh.atoms.res);
+        // Charges binned on a 10 Å grid; a charge beyond 20 Å adds under 0.3 kcal/mol/e.
+        grid = new Map();
+        for (const c of charges) {
+          const k = [0, 1, 2].map((d) => Math.floor(mesh.atoms.pos[3 * c[0] + d] / 10)).join();
+          if (!grid.has(k)) grid.set(k, []);
+          grid.get(k).push(c);
+        }
+      }
+      for (let v = 0; v < g.n; v++) {
+        const a = g.atom[v], r = mesh.atoms.res[a];
+        res[v] = r;
+        let c;
+        if (mode === 'hydrophobicity') {
+          const kd = C.KYTE_DOOLITTLE[meta.labels.name[r]];
+          // ChimeraX's palette: dark cyan (hydrophilic) → white → goldenrod (hydrophobic).
+          c = kd === undefined ? [200, 200, 200] : kd < 0 ? C.lerp([0, 139, 139], [255, 255, 255], 1 + kd / 4.5) : C.lerp([255, 255, 255], [218, 165, 32], kd / 4.5);
+        } else if (mode === 'Coulombic potential') {
+          const p = [g.pos[3 * v], g.pos[3 * v + 1], g.pos[3 * v + 2]];
+          const cell = p.map((x) => Math.floor(x / 10));
+          const near = [];
+          for (let dx = -2; dx <= 2; dx++) for (let dy = -2; dy <= 2; dy++) for (let dz = -2; dz <= 2; dz++) {
+            const list = grid.get([cell[0] + dx, cell[1] + dy, cell[2] + dz].join());
+            if (list) for (const q of list) near.push(q);
+          }
+          const phi = C.coulomb(p, mesh.atoms.pos, near);
+          // Red −10 → white → blue +10 kcal/mol/e, ChimeraX's default range.
+          c = phi < 0 ? C.lerp([255, 255, 255], [220, 30, 30], Math.min(1, -phi / 10)) : C.lerp([255, 255, 255], [30, 60, 220], Math.min(1, phi / 10));
+        } else {
+          c = (r < N ? resColour[r] : ligandCarbon) || [200, 200, 200];
+        }
+        col[3 * v] = c[0]; col[3 * v + 1] = c[1]; col[3 * v + 2] = c[2];
+      }
+      surface = { vao: dynVao({ n: g.n, nt: g.nt, pos: g.pos, nrm: g.nrm, col, res, idx: g.idx }) };
+      surfaceKey = mode === 'hydrophobicity' ? 'surface: cyan hydrophilic → gold hydrophobic (Kyte–Doolittle)'
+        : mode === 'Coulombic potential' ? 'surface: red −10 → blue +10 kcal/mol/e (formal charges, ε = 4r)'
+        : 'surface: coloured as the ribbon';
+      showLegend();
+    }
+
+    // ---------------------------------------------------------------- measuring
+    // The stick atom nearest a click, within 14 px on screen; else the clicked residue's C-alpha.
+    function atomAt(cssX, cssY, residue) {
+      let best = -1, bd = 14 * 14;
+      const shown = new Set(sel.neigh ? C.neighbours(mesh.atoms, sel.set, 5) : sel.set);
+      for (let k = 0; k < ligands.length; k++) shown.add(N + k);
+      if (residue >= 0) shown.add(residue);
+      for (let i = 0; i < mesh.atoms.n; i++) {
+        if (!shown.has(mesh.atoms.res[i])) continue;
+        const [x, y] = project(atomPos(i));
+        const d = (x - cssX) * (x - cssX) + (y - cssY) * (y - cssY);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best < 0 && residue >= 0) {
+        for (let i = 0; i < mesh.atoms.n; i++) if (mesh.atoms.res[i] === residue && meta.atomNames[i] === 'CA') return i;
+      }
+      return best;
+    }
+    function measureClick(cssX, cssY, residue) {
+      const i = atomAt(cssX, cssY, residue);
+      if (i < 0) { notice('no atom there: select a residue first so its atoms are drawn'); return; }
+      if (current.length === 4) current = [];
+      current.push(i);
+      const kinds = ['', 'pick 1–3 more atoms', 'distance', 'angle', 'dihedral'];
+      notice(current.map(atomName).join(' – ') + (current.length >= 2 ? ' = ' + measureText(current) + ' (' + kinds[current.length] + '; enter keeps it)' : ' · ' + kinds[1]));
+      rebuildSticks();
+      saveSession();
+      request();
+    }
+    function finishMeasure() {
+      if (current.length >= 2) measures.push(current);
+      current = [];
+      rebuildSticks();
+      saveSession();
+      request();
+    }
+
+    // ---------------------------------------------------------------- sessions
+    // The view lives in the URL fragment: reload, bookmark or share the link to get it back.
+    let sessionTimer = 0;
+    function saveSession() {
+      clearTimeout(sessionTimer);
+      sessionTimer = setTimeout(() => {
+        const v = { y: +state.yaw.toFixed(3), p: +state.pitch.toFixed(3), z: +state.zoom.toFixed(3),
+          pan: state.pan.map((x) => +x.toFixed(2)), c: scheme, fx: state.fx ? 1 : 0, ds: state.ds ? 1 : 0,
+          ref: state.ref ? 1 : 0, u: state.surface, s: [...sel.set], n: sel.neigh ? 1 : 0, k: [...showKinds],
+          l: [...pinned], m: measures };
+        try { history.replaceState(null, '', '#v=' + C.encodeSession(v)); } catch (_) { /* file:// in some browsers */ }
+      }, 250);
+    }
+    function restoreSession() {
+      const m = /[#&]v=([A-Za-z0-9_-]+)/.exec(location.hash);
+      const v = m && C.decodeSession(m[1]);
+      if (!v) return;
+      const num = (x, d) => (typeof x === 'number' && isFinite(x) ? x : d);
+      state.yaw = num(v.y, 0); state.pitch = num(v.p, 0); state.zoom = Math.min(50, Math.max(0.1, num(v.z, 1)));
+      if (Array.isArray(v.pan) && v.pan.length === 2) state.pan = v.pan.map((x) => num(x, 0));
+      if (SCHEMES.includes(v.c)) scheme = v.c;
+      state.fx = v.fx !== 0; state.ds = v.ds !== 0; state.ref = v.ref !== 0;
+      state.surface = Math.max(0, Math.min(SURFACES.length - 1, num(v.u, 0) | 0));
+      sel.neigh = v.n !== 0;
+      const valid = (i) => Number.isInteger(i) && i >= 0 && i < N + ligands.length;
+      for (const k of v.k || []) if (KINDS.some((x) => x[0] === k)) showKinds.add(k);
+      for (const r of v.l || []) if (valid(r)) pinned.add(r);
+      for (const mm of v.m || []) if (Array.isArray(mm) && mm.length >= 2 && mm.length <= 4 && mm.every((i) => Number.isInteger(i) && i >= 0 && i < mesh.atoms.n)) measures.push(mm);
+      sel.set = new Set((v.s || []).filter(valid));
+      document.querySelectorAll('#panel .findings input').forEach((cb) => { cb.checked = showKinds.has(cb.dataset.kind); });
+    }
+
     V = {
       selectionChanged(opts) {
         rebuildSticks();
         applyDimming();
         if (opts && opts.focus) focus(opts.zoom);
+        saveSession();
         request();
       },
+      togglePins() {
+        if (!sel.set.size) { notice('select residues to label them'); return; }
+        const all = [...sel.set].every((r) => pinned.has(r));
+        for (const r of sel.set) if (all) pinned.delete(r); else pinned.add(r);
+        notice((all ? 'unpinned ' : 'pinned ') + sel.set.size + ' label' + (sel.set.size > 1 ? 's' : ''));
+        saveSession();
+        request();
+      },
+      link() { saveSession(); return location.href; },
       previewChanged() { applyDimming(); request(); },
       atoms: mesh.atoms,
       caOf,
@@ -647,7 +846,8 @@
       if (down && e.type === 'pointerup' && Math.hypot(e.clientX - down.x, e.clientY - down.y) < 5) {
         const r = canvas.getBoundingClientRect();
         const i = pickAt(e.clientX - r.left, e.clientY - r.top);
-        clickResidue(i, e);
+        if (measuring) measureClick(e.clientX - r.left, e.clientY - r.top, i);
+        else clickResidue(i, e);
         request();
       }
       down = null;
@@ -690,7 +890,30 @@
           if (!sel.set.size) { notice('nothing selected to focus on'); break; }
           focus(true);
           break;
-        case 'Escape': select(new Set()); break;
+        case 'm':
+          measuring = !measuring;
+          if (!measuring) finishMeasure();
+          canvas.style.cursor = measuring ? 'crosshair' : '';
+          notice(measuring ? 'measure: click 2 atoms for a distance, 3 for an angle, 4 for a dihedral; enter keeps it' :
+            measures.length + ' measurement' + (measures.length === 1 ? '' : 's') + ' kept (backspace removes the last)');
+          break;
+        case 'Enter': if (measuring) { finishMeasure(); notice(measures.length + ' kept'); } else return; break;
+        case 'Backspace':
+          if (current.length) current.pop(); else if (measures.length) measures.pop(); else return;
+          rebuildSticks(); saveSession(); request();
+          break;
+        case 'l': V.togglePins(); break;
+        case 'u':
+          state.surface = (state.surface + 1) % SURFACES.length;
+          buildSurface();
+          notice(state.surface ? surfaceGeom.nt + ' triangles in ' + Math.round(surfaceGeom.ms) + ' ms' : 'surface off');
+          saveSession();
+          request();
+          break;
+        case 'Escape':
+          if (measuring && current.length) { current = []; rebuildSticks(); request(); break; }
+          select(new Set());
+          break;
         case ' ': state.spin = !state.spin; e.preventDefault(); request(); break;
         case 'r': reset(); request(); break;
         case 's': save(); break;
@@ -729,8 +952,14 @@
         setTimeout(() => URL.revokeObjectURL(a.href), 1000);
       });
     }
+    restoreSession();
+    if (scheme !== (SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss')) recolor();
     rebuildSticks();
-    window.ProteusViewer = { state, render, pickAt, sel, select, focus, get scheme() { return scheme; },
+    applyDimming();
+    buildSurface();
+    updateSelectionUI();
+    window.ProteusViewer = { state, render, pickAt, sel, select, focus, project, measures, pinned, measureClick, finishMeasure,
+      get surfaceTriangles() { return surface ? surface.vao.count / 3 : 0; }, get scheme() { return scheme; },
       get sticks() { return sticks ? sticks.count / 3 : 0; }, get lines() { return lines ? lines.count / 3 : 0; } };
   }
 
@@ -831,6 +1060,7 @@
     const btn = (text, fn, title) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; if (title) b.title = title; b.addEventListener('click', fn); row.append(b); };
     btn(sel.neigh ? '5 Å neighbours: on' : '5 Å neighbours: off', () => { sel.neigh = !sel.neigh; select(sel.set, { contacts: sel.contacts, pae: sel.pae }); }, 'n');
     btn('focus', () => { if (V) window.ProteusViewer.focus(true); }, 'f');
+    btn('label', () => { if (V) V.togglePins(); }, 'l');
     const residues = ids.filter((i) => i < N).map((i) => ({ chain: meta.labels.chain[i], number: meta.labels.number[i], icode: meta.labels.icode[i] }));
     const ligs = ids.filter((i) => i >= N).map((i) => ligands[i - N]).filter(Boolean)
       .map((l) => ({ chain: l.chain, number: l.number, icode: '' }));
@@ -940,6 +1170,12 @@
       name.textContent = '(secondary structure · dssp)';
       el.append(name, swatch(C.ssColor(0), 'helix'), swatch(C.ssColor(1), 'strand'), swatch(C.ssColor(2), 'coil'));
     }
+    if (surfaceKey) {
+      const k = document.createElement('span');
+      k.className = 'surface-key';
+      k.textContent = surfaceKey;
+      el.append(k);
+    }
     if (noticeText) {
       const n = document.createElement('span');
       n.className = 'notice';
@@ -957,6 +1193,7 @@
       const parts = [];
       if (conf.ptm != null) parts.push('pTM ' + conf.ptm.toFixed(3));
       if (conf.iptm != null) parts.push('ipTM ' + conf.iptm.toFixed(3));
+      if (conf.ligandIptm != null) parts.push('ligand ipTM ' + conf.ligandIptm.toFixed(3));
       rows.splice(Math.min(2, rows.length), 0, ['predicted TM-score', parts.join(' · ')]);
     }
     if (compare) {
@@ -972,6 +1209,60 @@
         dl.append(dt, dd);
       }
       panel.append(dl);
+    }
+    // Complexes: each chain's pTM and each pair's ipTM (Boltz), chains in input order.
+    if (conf && conf.pairIptm && conf.pairIptm.length > 1) {
+      h('chains · pTM on the diagonal, ipTM off it');
+      const names = chainNames();
+      const t = document.createElement('table');
+      t.className = 'grid';
+      const head = document.createElement('tr');
+      head.append(document.createElement('th'));
+      for (const n of names.slice(0, conf.pairIptm.length)) { const th = document.createElement('th'); th.textContent = n; head.append(th); }
+      t.append(head);
+      conf.pairIptm.forEach((row, i) => {
+        const tr = document.createElement('tr');
+        const th = document.createElement('th'); th.textContent = names[i] || String(i); tr.append(th);
+        row.forEach((v, j) => {
+          const td = document.createElement('td');
+          td.textContent = v.toFixed(2);
+          td.className = v >= 0.8 ? 'good' : v >= 0.6 ? '' : 'bad';
+          if (i === j) td.classList.add('diag');
+          tr.append(td);
+        });
+        t.append(tr);
+      });
+      panel.append(t);
+      const note = document.createElement('p');
+      note.className = 'note tight';
+      note.textContent = 'ipTM above 0.8 is a confident interface; below 0.6 the chains\' relative placement is a guess.';
+      panel.append(note);
+    }
+    if (meta.models && meta.models.length > 1) {
+      h('models · ranked by the predictor');
+      const t = document.createElement('table');
+      t.className = 'grid models';
+      const hr = document.createElement('tr');
+      const hasLig = meta.models.some((m) => m.ligandRmsd !== null && m.ligandRmsd !== undefined);
+      for (const c of ['#', 'score', 'pTM', 'ipTM', 'pLDDT', 'Cα', ...(hasLig ? ['ligand'] : [])]) { const th = document.createElement('th'); th.textContent = c; hr.append(th); }
+      t.append(hr);
+      const f = (v, d) => (v === null || v === undefined ? '—' : v.toFixed(d));
+      for (const m of meta.models) {
+        const tr = document.createElement('tr');
+        if (m.shown) tr.className = 'shown';
+        tr.title = m.file + (m.shown ? ' (shown)' : ' — proteus view … --model ' + m.rank);
+        const cells = [String(m.rank) + (m.shown ? ' ◀' : ''), f(m.score, 3), f(m.ptm, 3), f(m.iptm, 3), f(m.plddt, 1), m.shown ? '—' : f(m.rmsd, 2)];
+        if (hasLig) cells.push(m.shown ? '—' : f(m.ligandRmsd, 2));
+        for (const v of cells) {
+          const td = document.createElement('td'); td.textContent = v; tr.append(td);
+        }
+        t.append(tr);
+      }
+      panel.append(t);
+      const note = document.createElement('p');
+      note.className = 'note tight';
+      note.textContent = 'RMSDs (Å) to the model shown, after superposing on the protein; the ligand column is heavy atoms. Models that agree are more likely right; open another with --model K.';
+      panel.append(note);
     }
     if (paeInfo) {
       h('predicted aligned error');
@@ -1040,6 +1331,11 @@
       const name = (src && src.dataset.name ? src.dataset.name.replace(/\.[^.]+$/, '') : subject) + '-predicted_aligned_error.json';
       download(name, new TextEncoder().encode(JSON.stringify([{ predicted_aligned_error: rows, max_predicted_aligned_error: pae.max }])), 'application/json');
     }]);
+    files.push(['view link', () => {
+      const url = V ? V.link() : location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => notice('link to this view copied'), () => notice(url));
+      else notice(url);
+    }]);
     if (files.length) {
       h('files');
       const row = document.createElement('div');
@@ -1095,6 +1391,7 @@
         lab.className = 'all';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
+        cb.dataset.kind = g.kind;
         cb.addEventListener('change', () => {
           if (cb.checked) showKinds.add(g.kind); else showKinds.delete(g.kind);
           if (V) V.selectionChanged();
@@ -1261,6 +1558,15 @@
 
   // The PAE map: N×N pixels scaled without smoothing. Hover reads a cell; a click selects its
   // two residues; a drag selects two ranges and reports the mean error between them.
+  // Chain IDs in the order a predictor numbers chains: protein chains as they appear, then
+  // ligand chains not already named.
+  function chainNames() {
+    const out = [];
+    for (const c of meta.labels.chain) if (!out.includes(c)) out.push(c);
+    for (const l of ligands) if (!out.includes(l.chain)) out.push(l.chain);
+    return out.map((c) => c.trim() || '·');
+  }
+
   function download(name, bytes, type) {
     const a = document.createElement('a');
     a.download = name;
@@ -1290,7 +1596,8 @@
       g.drawImage(off, 0, 0, px, px);
       // Chain boundaries.
       g.strokeStyle = role('warm'); g.lineWidth = 1;
-      for (let i = 1; i < n; i++) if (meta.labels.chain[i] !== meta.labels.chain[i - 1]) {
+      const chainOf = (i) => (i < N ? meta.labels.chain[i] : 'ligand ' + (i - N));
+      for (let i = 1; i < n; i++) if (chainOf(i) !== chainOf(i - 1)) {
         const t = i / n * px;
         g.beginPath(); g.moveTo(t, 0); g.lineTo(t, px); g.moveTo(0, t); g.lineTo(px, t); g.stroke();
       }

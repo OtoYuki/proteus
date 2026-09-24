@@ -84,6 +84,85 @@ pub struct Args {
     /// With --color-by: low values are the damaging end
     #[arg(long, requires = "color_by")]
     lower_is_worse: bool,
+
+    /// Which of a prediction's sampled models to show (Boltz `*_model_K`, 0 = its best); the
+    /// others are listed beside it with their scores and RMSD to this one
+    #[arg(long, value_name = "K")]
+    model: Option<usize>,
+}
+
+/// `dir/stem_model_K.ext` siblings of a model, as `(K, path)` in rank order, when the file is
+/// one of a set (Boltz, AlphaFold 3 and ColabFold name their samples this way).
+fn sibling_models(path: &std::path::Path) -> Vec<(usize, PathBuf)> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return Vec::new();
+    };
+    let Some((prefix, rest)) = name.rsplit_once("_model_") else {
+        return Vec::new();
+    };
+    let ext = rest.split_once('.').map_or("", |(_, e)| e);
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<(usize, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_str()?.to_string();
+            let tail = n.strip_prefix(prefix)?.strip_prefix("_model_")?;
+            let (k, e2) = tail.split_once('.')?;
+            (e2 == ext).then(|| Some((k.parse().ok()?, e.path())))?
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The table of a prediction's models: the predictor's scores and each one's RMSD to the one
+/// shown.
+fn model_table(
+    models: &[(usize, PathBuf)],
+    shown: &std::path::Path,
+) -> Vec<proteus_render::ModelSummary> {
+    let shown_pdb = proteus_core::io::open_structure(shown).ok();
+    models
+        .iter()
+        .map(|(k, path)| {
+            let conf = proteus_core::pae::read_confidence(path, None).ok();
+            let json = path.parent().and_then(|d| {
+                let stem = path.file_name()?.to_str()?.split('.').next()?.to_string();
+                let text =
+                    std::fs::read_to_string(d.join(format!("confidence_{stem}.json"))).ok()?;
+                serde_json::from_str::<serde_json::Value>(&text).ok()
+            });
+            let this = proteus_core::io::open_structure(path).ok();
+            let (rmsd, ligand_rmsd) = match (&shown_pdb, &this) {
+                (Some(a), Some(b)) => (
+                    proteus_core::qc::ca_rmsd(b, a).ok(),
+                    proteus_core::qc::ligand_rmsd(b, a),
+                ),
+                _ => (None, None),
+            };
+            proteus_render::ModelSummary {
+                rank: *k,
+                file: path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string(),
+                score: conf.as_ref().and_then(|c| c.confidence_score),
+                ptm: conf.as_ref().and_then(|c| c.ptm),
+                iptm: conf.as_ref().and_then(|c| c.iptm),
+                plddt: json
+                    .as_ref()
+                    .and_then(|j| j.get("complex_plddt"))
+                    .and_then(serde_json::Value::as_f64)
+                    .map(|p| p * 100.0),
+                rmsd_to_shown: rmsd,
+                ligand_rmsd_to_shown: ligand_rmsd,
+                shown: path == shown,
+            }
+        })
+        .collect()
 }
 
 /// `FILE` or `FILE:COLUMN`; a path that exists as written wins, so a file name containing a
@@ -123,6 +202,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         color_by,
         higher_is_worse,
         lower_is_worse,
+        model,
     } = args;
     let target_path = PathBuf::from(&target);
     let (pdb_content, title, structure_path) = if target_path.exists() {
@@ -175,6 +255,53 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         };
         (content, title, PathBuf::from(&pred.pdb_path))
     };
+    // A set of sampled models: --model picks one, and the rest are tabled beside it.
+    let siblings = sibling_models(&structure_path);
+    let (pdb_content, title, structure_path) = match model {
+        None => (pdb_content, title, structure_path),
+        Some(k) => {
+            let Some((_, p)) = siblings.iter().find(|(r, _)| *r == k) else {
+                bail!(
+                    "--model {k}: this prediction has {} model(s){}",
+                    siblings.len().max(1),
+                    if siblings.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " ({})",
+                            siblings
+                                .iter()
+                                .map(|(r, _)| r.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                );
+            };
+            let text = proteus_core::io::read_structure_text(p)
+                .with_context(|| format!("Failed to read {}", p.display()))?;
+            (text, format!("{title} · model {k}"), p.clone())
+        }
+    };
+    let models = if siblings.len() > 1 {
+        let table = model_table(&siblings, &structure_path);
+        for m in &table {
+            eprintln!(
+                "model {}{}: score {}  pTM {}  ipTM {}  RMSD to shown {}{}",
+                m.rank,
+                if m.shown { " (shown)" } else { "" },
+                m.score.map_or("—".into(), |v| format!("{v:.3}")),
+                m.ptm.map_or("—".into(), |v| format!("{v:.3}")),
+                m.iptm.map_or("—".into(), |v| format!("{v:.3}")),
+                m.rmsd_to_shown.map_or("—".into(), |v| format!("{v:.2} Å")),
+                m.ligand_rmsd_to_shown
+                    .map_or(String::new(), |v| format!("  ligand {v:.2} Å")),
+            );
+        }
+        table
+    } else {
+        Vec::new()
+    };
     // PAE and pTM: an explicit --pae must load; files found by name only add to the view.
     let confidence = match proteus_core::pae::read_confidence(&structure_path, pae.as_deref()) {
         Ok(c) => Some(c),
@@ -200,6 +327,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         _ => None,
     };
     let attach = |s: &mut proteus_render::StructureRenderData| -> Result<()> {
+        s.models = models.clone();
         if let Some(c) = confidence.clone() {
             if let Some(note) = s.attach_confidence(c) {
                 eprintln!("{note}");
@@ -393,6 +521,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 dashboard_data: None,
                 stop: None,
                 scores: None,
+                findings: Vec::new(),
             };
             run_viewer(&sup_data.target_mesh, sup_data.camera, config)
                 .context("Interactive dual-structure 3D viewer error")?;
@@ -416,6 +545,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let structure_data = structure_data.expect("parsed above when --compare is absent");
 
         let score_colors = proteus_render::tui::ScoreColors::of(&structure_data);
+        let findings = proteus_render::tui::TerminalFinding::of(&structure_data);
         let dashboard_data = Some(proteus_render::tui::DashboardData {
             title: title.clone(),
             num_residues: structure_data.num_residues,
@@ -437,6 +567,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             dashboard_data,
             stop: None,
             scores: score_colors,
+            findings,
         };
         run_viewer(&structure_data.ribbon_mesh, structure_data.camera, config)
             .context("Interactive 3D viewer error")?;
