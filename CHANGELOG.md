@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
+  NVIDIA CDI spec is installed; `PROTEUS_GPU=off` or a device name overrides it) and records
+  the device in the prediction's metadata.
+- `containers/boltz/Containerfile` builds the `sota` tier's Boltz-2 image with its weights.
+
 ## [0.8.0] — 2026-09-23
 
 The release where Proteus gets a face.

@@ -397,6 +397,20 @@ ESMFold API), `simulated` (an offline placeholder helix), or `auto`, which tries
 order. `--export` takes `.parquet`, `.csv` or `.json`; anything else is refused rather than
 guessed at.
 
+The `sota` tier runs Boltz-2 from an image you build once (16 GB, weights included):
+
+```bash
+podman build -t ghcr.io/jwohlwend/boltz:latest containers/boltz
+systemctl --user enable --now podman.socket
+proteus submit -f ubiquitin.fasta --tier sota --runner oci
+```
+
+Tier containers get the GPU through CDI (`nvidia.com/gpu=all`) whenever the NVIDIA Container
+Toolkit's spec is installed (`/etc/cdi/nvidia.yaml`, from `nvidia-ctk cdi generate`).
+`PROTEUS_GPU=off` keeps them on the CPU; any other value is used as the CDI device name. On an
+RTX 3060 Laptop (6 GB) human ubiquitin folds in 50 s end to end at 3.7 GB of GPU memory,
+0.80 Å Cα RMSD from the 1UBQ crystal structure.
+
 ### `proteus view` — the viewer
 
 ```bash
