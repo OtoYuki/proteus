@@ -108,8 +108,11 @@ const COORDINATE_RECORDS: &[&str] = &[
 
 fn coordinate_records_only(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
+    let mut ids = ResidueIds::default();
     for line in text.lines() {
         if COORDINATE_RECORDS.iter().any(|r| line.starts_with(r)) {
+            let line = ids.disambiguate(line);
+            let line = line.as_str();
             out.push_str(line);
             // Many tools stop an atom record after the B-factor (column 66) or the segment id
             // (72); pdbtbx refuses such lines as too short. The missing columns are optional.
@@ -120,6 +123,87 @@ fn coordinate_records_only(text: &str) -> String {
         }
     }
     out
+}
+
+/// Gives a free insertion code to a residue whose chain, number and insertion code repeat an
+/// earlier residue's, so that pdbtbx keeps the two apart. pdbtbx files such a residue's atoms
+/// under the first one (and drops its residue name), after which every metric reads only the
+/// first residue's backbone. A residue counts as new when its number/insertion code differ
+/// from the previous record's, when the residue name changes on an atom without an alternate
+/// location (a name change among altloc atoms is microheterogeneity, e.g. 1EJG 22 PRO/SER), or
+/// when an atom name and altloc repeat within the residue.
+#[derive(Default)]
+struct ResidueIds {
+    /// Residue ids (chain, number, insertion code) already used in this model, as written
+    /// after any renaming.
+    used: std::collections::HashSet<(char, String, char)>,
+    current: Option<CurrentResidue>,
+}
+
+/// The residue the last ATOM/HETATM record belonged to.
+struct CurrentResidue {
+    /// (chain, number, insertion code) as the file wrote them.
+    key: (char, String, char),
+    name: String,
+    /// The insertion code it is written with.
+    icode: char,
+    /// (atom name, altloc) pairs seen so far.
+    atoms: Vec<(String, char)>,
+}
+
+impl ResidueIds {
+    fn disambiguate(&mut self, line: &str) -> String {
+        if line.starts_with("MODEL") {
+            *self = ResidueIds::default();
+        }
+        let is_atom = line.starts_with("ATOM") || line.starts_with("HETATM");
+        let is_anisou = line.starts_with("ANISOU");
+        if !(is_atom || is_anisou) || line.len() < 27 || !line.is_char_boundary(27) {
+            return line.to_string();
+        }
+        let col = |i: usize| line.as_bytes()[i] as char;
+        let key = (col(21), line[22..26].to_string(), col(26));
+        if is_anisou {
+            // ANISOU follows its ATOM record: give it the same id.
+            return match &self.current {
+                Some(c) if c.key == key && c.icode != key.2 => {
+                    format!("{}{}{}", &line[..26], c.icode, &line[27..])
+                }
+                _ => line.to_string(),
+            };
+        }
+        let name = line[12..16].trim().to_string();
+        let altloc = col(16);
+        let resname = line[17..20].trim().to_string();
+        let continues = self.current.as_ref().is_some_and(|c| {
+            c.key == key
+                && (c.name == resname || altloc != ' ')
+                && !c.atoms.iter().any(|(n, a)| *n == name && *a == altloc)
+        });
+        if !continues {
+            let icode = if self.used.contains(&key) {
+                ('A'..='Z')
+                    .find(|&c| !self.used.contains(&(key.0, key.1.clone(), c)))
+                    .unwrap_or(key.2)
+            } else {
+                key.2
+            };
+            self.used.insert((key.0, key.1.clone(), icode));
+            self.current = Some(CurrentResidue {
+                key: key.clone(),
+                name: resname,
+                icode,
+                atoms: Vec::new(),
+            });
+        }
+        let current = self.current.as_mut().expect("set above");
+        current.atoms.push((name, altloc));
+        if current.icode == key.2 {
+            line.to_string()
+        } else {
+            format!("{}{}{}", &line[..26], current.icode, &line[27..])
+        }
+    }
 }
 
 /// pdbtbx panics (rather than erroring) on a coordinate that does not parse as a finite
@@ -464,11 +548,68 @@ fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
     e.eq_ignore_ascii_case("H") || e.eq_ignore_ascii_case("D")
 }
 
+/// Undo pdbtbx's merging of two residues that a file gives the same number and insertion code
+/// (e.g. two chains concatenated without renumbering). The parser files the second residue's
+/// atoms under the first, which would then lose it entirely: every metric reads the first N,
+/// CA, C of a residue. Here a repeated atom name starts a new residue (atoms keep their file
+/// order), and two same-numbered residues of different names, which pdbtbx stores as
+/// conformers without an alternate-location id, become two residues. Real alternate
+/// conformations are left alone.
+fn split_merged_residues(pdb: &mut pdbtbx::PDB) {
+    fn pieces(r: &pdbtbx::Residue) -> Option<Vec<pdbtbx::Residue>> {
+        if r.conformers().any(|c| c.alternative_location().is_some()) {
+            return None;
+        }
+        let mut out = Vec::new();
+        for c in r.conformers() {
+            let mut group: Vec<pdbtbx::Atom> = Vec::new();
+            let mut flush = |group: &mut Vec<pdbtbx::Atom>| -> Option<()> {
+                if group.is_empty() {
+                    return Some(());
+                }
+                let mut conf = pdbtbx::Conformer::new(c.name(), None, None)?;
+                for a in group.drain(..) {
+                    conf.add_atom(a);
+                }
+                out.push(pdbtbx::Residue::new(
+                    r.serial_number(),
+                    r.insertion_code(),
+                    Some(conf),
+                )?);
+                Some(())
+            };
+            for a in c.atoms() {
+                if group.iter().any(|g| g.name() == a.name()) {
+                    flush(&mut group)?;
+                }
+                group.push(a.clone());
+            }
+            flush(&mut group)?;
+        }
+        (out.len() > 1).then_some(out)
+    }
+    for chain in pdb.chains_mut() {
+        let split: Vec<Option<Vec<pdbtbx::Residue>>> = chain.residues().map(pieces).collect();
+        if split.iter().all(Option::is_none) {
+            continue;
+        }
+        let old: Vec<pdbtbx::Residue> = chain.residues().cloned().collect();
+        chain.remove_residues_by(|_| true);
+        for (residue, pieces) in old.into_iter().zip(split) {
+            match pieces {
+                Some(pieces) => pieces.into_iter().for_each(|p| chain.add_residue(p)),
+                None => chain.add_residue(residue),
+            }
+        }
+    }
+}
+
 /// A copy of the structure restricted to protein residues, heavy atoms and the first
 /// alternate conformation: what every biophysical metric (SASA, DSSP, Ramachandran,
 /// overlaps, interactions) is defined on. Solvent, ions, ligands and hydrogens are removed.
 pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
     let mut out = pdb.clone();
+    split_merged_residues(&mut out);
     out.remove_residues_by(|r| !is_protein_residue(r));
     for residue in out.residues_mut() {
         if !is_standard_amino_acid(residue.name().unwrap_or("")) {
@@ -485,8 +626,10 @@ pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
         }
     }
     out.remove_atoms_by(is_hydrogen);
-    // Alternate conformations: keep the first (highest-occupancy by PDB convention), as
-    // mdtraj, DSSP and MolProbity do. Duplicated altloc atoms would otherwise inflate SASA.
+    // Alternate conformations: keep the first one in the file (usually A), as mdtraj and DSSP
+    // do; occupancy is not compared. cctbx's `remove_alt_confs` keeps the highest-occupancy one
+    // instead, which is why validate/geometry_ref.py selects the first explicitly. Duplicated
+    // altloc atoms would otherwise inflate SASA.
     for residue in out.residues_mut() {
         while residue.conformer_count() > 1 {
             residue.remove_conformer(1);
@@ -795,5 +938,54 @@ END\n";
             .find(|a| a.name().trim() == "HG")
             .expect("Hg removed");
         assert!(element_symbol(hg).eq_ignore_ascii_case("Hg"));
+    }
+
+    /// 1CRN with residue 2 renumbered to 1 (same name) or residue 3 renumbered to 2 (a
+    /// different name): pdbtbx files both under one residue.
+    fn crambin_renumbered(from: isize, to: isize) -> pdbtbx::PDB {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/1crn.pdb");
+        let text: String = std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|l| {
+                if l.starts_with("ATOM") && l[22..26].trim().parse::<isize>() == Ok(from) {
+                    format!("{}{:>4}{}\n", &l[..22], to, &l[26..])
+                } else {
+                    format!("{l}\n")
+                }
+            })
+            .collect();
+        load_structure_bytes(text.as_bytes(), Some("x.pdb"))
+            .unwrap()
+            .pdb
+    }
+
+    #[test]
+    fn two_residues_sharing_a_number_are_both_kept() {
+        let whole = protein_heavy_atoms(&crambin_renumbered(0, 0));
+        for (from, to) in [(2, 1), (3, 2)] {
+            let merged = crambin_renumbered(from, to);
+            let p = protein_heavy_atoms(&merged);
+            assert_eq!(p.residue_count(), whole.residue_count(), "{from}->{to}");
+            assert_eq!(p.atom_count(), whole.atom_count(), "{from}->{to}");
+            let bb = crate::backbone::extract_backbone(&p);
+            assert_eq!(bb.len(), 46);
+            // Both copies are restrained, and the peptide bond between them is found.
+            let g = crate::geometry::analyze(&p);
+            let reference = crate::geometry::analyze(&whole);
+            assert_eq!(g.bonds.n, reference.bonds.n, "{from}->{to}");
+        }
+    }
+
+    #[test]
+    fn real_alternate_conformations_are_not_split() {
+        let text = "ATOM      1  N   SER A   1       0.000   0.000   0.000  1.00 10.00           N\n\
+                    ATOM      2  CA ASER A   1       1.458   0.000   0.000  0.60 10.00           C\n\
+                    ATOM      3  CA BSER A   1       1.458   0.100   0.000  0.40 10.00           C\n\
+                    ATOM      4  C   SER A   1       2.009   1.420   0.000  1.00 10.00           C\n";
+        let loaded = load_structure_bytes(text.as_bytes(), Some("x.pdb")).unwrap();
+        let p = protein_heavy_atoms(&loaded.pdb);
+        assert_eq!(p.residue_count(), 1);
+        assert_eq!(p.atom_count(), 3);
     }
 }

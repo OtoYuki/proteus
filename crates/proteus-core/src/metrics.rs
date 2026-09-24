@@ -343,7 +343,9 @@ pub fn analyze_pdb_detailed_with_source(
         steric_overlap: Some(steric_overlap),
         sasa_metrics: Some(sasa_metrics),
         interaction_network: Some(interaction_network),
-        covalent_geometry: Some(covalent_geometry),
+        // A C-alpha-only trace has nothing to measure: report no geometry rather than zeros
+        // that would read as a clean structure.
+        covalent_geometry: (!covalent_geometry.is_empty()).then_some(covalent_geometry),
         candidate_fitness_score: None,
     };
 

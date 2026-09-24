@@ -167,7 +167,9 @@ not match (2PTC, 6M0J).
 ## What Proteus does before measuring
 
 `proteus_core::io::protein_heavy_atoms`: first model only, protein residues only (an atom
-named `CA` with element carbon), heavy atoms only, first alternate conformation only. This is
+named `CA` with element carbon), heavy atoms only, first alternate conformation only (the first
+in the file, not the highest occupancy). Two residues that share a chain, number and insertion
+code are kept apart (the later one gets a free insertion code); no corpus file has one. This is
 what mdtraj's `protein and not element H` selection and DSSP/MolProbity operate on. Two of
 these rules were added because the harness caught the discrepancy (altloc duplicates inflated
 1BPI's SASA by 1.5 %; waters and ions were being counted as atoms).

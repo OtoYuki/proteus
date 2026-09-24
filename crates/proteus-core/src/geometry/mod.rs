@@ -417,6 +417,16 @@ pub struct CovalentGeometry {
 }
 
 impl CovalentGeometry {
+    /// True when nothing could be measured: no restraint, Cβ, peptide or side chain (a
+    /// C-alpha-only trace, or no standard residues).
+    pub fn is_empty(&self) -> bool {
+        self.bonds.n == 0
+            && self.angles.n == 0
+            && self.cbeta_residues == 0
+            && self.peptides == 0
+            && self.rotamer_residues == 0
+    }
+
     /// Rotamer outliers as a percentage of evaluated side chains (MolProbity's figure).
     pub fn rotamer_outlier_pct(&self) -> Option<f64> {
         (self.rotamer_residues > 0)

@@ -56,23 +56,24 @@ pub struct StructureQc {
     pub heavy_atom_overlap_score: f64,
     pub overlap_count: usize,
     /// RMS Z of bond lengths against the Phenix restraint library (geostd + CDL): about 1 for
-    /// a refined structure, well above for a distorted one. `None` without restrained bonds.
+    /// a refined structure, well above for a distorted one. The geometry columns are `None`
+    /// when nothing could be measured (a C-alpha-only trace), never a misleading 0.
     pub bond_rmsz: Option<f64>,
     /// Bond lengths more than 4σ from ideal.
-    pub bond_outliers: usize,
+    pub bond_outliers: Option<usize>,
     pub angle_rmsz: Option<f64>,
-    pub angle_outliers: usize,
+    pub angle_outliers: Option<usize>,
     /// Chiral centres more than 4σ from ideal, including inversions.
-    pub chirality_outliers: usize,
+    pub chirality_outliers: Option<usize>,
     /// Chiral centres of the wrong hand (D-residues, inverted Ile/Thr CB).
-    pub handedness_swaps: usize,
-    pub planarity_outliers: usize,
+    pub handedness_swaps: Option<usize>,
+    pub planarity_outliers: Option<usize>,
     /// Residues whose CB is ≥ 0.25 Å from the position the backbone implies.
-    pub cbeta_outliers: usize,
+    pub cbeta_outliers: Option<usize>,
     /// Cis peptide bonds before a residue other than proline.
-    pub cis_nonpro: usize,
+    pub cis_nonpro: Option<usize>,
     /// Peptide bonds with ω between 30° and 150° from cis.
-    pub twisted_peptides: usize,
+    pub twisted_peptides: Option<usize>,
     /// MolProbity rotamer outliers (< 0.3 % in Top8000), percent of evaluated side chains.
     pub rotamer_outlier_pct: Option<f64>,
     pub hbond_count: usize,
@@ -304,15 +305,15 @@ pub fn structure_qc(
         heavy_atom_overlap_score: overlap.map_or(0.0, |o| o.heavy_atom_overlap_score),
         overlap_count: overlap.map_or(0, |o| o.clash_count),
         bond_rmsz: geo.and_then(|g| g.bonds.rmsz),
-        bond_outliers: geo.map_or(0, |g| g.bonds.outliers),
+        bond_outliers: geo.map(|g| g.bonds.outliers),
         angle_rmsz: geo.and_then(|g| g.angles.rmsz),
-        angle_outliers: geo.map_or(0, |g| g.angles.outliers),
-        chirality_outliers: geo.map_or(0, |g| g.chiralities.outliers),
-        handedness_swaps: geo.map_or(0, |g| g.handedness_swaps),
-        planarity_outliers: geo.map_or(0, |g| g.planes.outliers),
-        cbeta_outliers: geo.map_or(0, |g| g.cbeta_outliers),
-        cis_nonpro: geo.map_or(0, |g| g.cis_nonproline),
-        twisted_peptides: geo.map_or(0, |g| g.twisted),
+        angle_outliers: geo.map(|g| g.angles.outliers),
+        chirality_outliers: geo.map(|g| g.chiralities.outliers),
+        handedness_swaps: geo.map(|g| g.handedness_swaps),
+        planarity_outliers: geo.map(|g| g.planes.outliers),
+        cbeta_outliers: geo.map(|g| g.cbeta_outliers),
+        cis_nonpro: geo.map(|g| g.cis_nonproline),
+        twisted_peptides: geo.map(|g| g.twisted),
         rotamer_outlier_pct: geo.and_then(|g| g.rotamer_outlier_pct()),
         hbond_count: net.map_or(0, |n| n.total_hbonds),
         salt_bridge_count: net.map_or(0, |n| n.total_salt_bridges),
@@ -579,6 +580,14 @@ mod tests {
         assert!(m.ramachandran_stats.is_none());
         let f = crate::ranking::evaluate_candidate_fitness(&m, 8);
         assert_eq!(f.ramachandran_component, 85.0);
+        // Nothing covalent to measure either: absent, not a row of zeros that reads as clean.
+        assert!(m.covalent_geometry.is_none());
+        let qc = structure_qc(&path, None, None).unwrap();
+        assert_eq!(
+            (qc.bond_outliers, qc.cbeta_outliers, qc.cis_nonpro),
+            (None, None, None)
+        );
+        assert_eq!(qc.bond_rmsz, None);
     }
 
     #[test]

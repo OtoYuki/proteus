@@ -106,6 +106,15 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   holding the job forever, and a failed or out-of-memory run says so with its last output.
 - The Boltz image carries a C compiler: Triton compiles its kernels on first use for larger
   inputs and failed without one.
+- Two residues that a PDB file gives the same chain, number and insertion code (chains
+  concatenated without renumbering) were merged by the parser, and the second disappeared from
+  every metric. The later one now gets a free insertion code before parsing (its name is kept);
+  in mmCIF, where only a repeated atom name can show it, the merged residue is split. A change
+  of residue name among alternate-location atoms (microheterogeneity) is left as it was.
+- A C-alpha-only trace exported its covalent-geometry counts as 0, which reads as a clean
+  model; they are now empty (`None`/null), like the RMSZ columns.
+- `io::protein_heavy_atoms` claimed to keep the highest-occupancy alternate conformation; it
+  keeps the first one in the file (as mdtraj and DSSP do). The comment is corrected.
 - The README's sample `analyze` output for 1CRN predated earlier fixes (54 H-bonds shown,
   53 computed); regenerated.
 
