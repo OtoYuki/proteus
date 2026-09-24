@@ -140,6 +140,10 @@ pub fn compute_contact_density(coords: &[Vector3<f64>], threshold_angstrom: f64)
     }
 }
 
+/// Outliers kept in [`BiophysicalMetrics::covalent_geometry`]: the counts cover all of them,
+/// the list only the worst, so a badly refined structure cannot bloat stored metrics.
+pub const MAX_STORED_GEOMETRY_OUTLIERS: usize = 100;
+
 #[derive(Debug, Clone)]
 pub struct DetailedBiophysicalAnalysis {
     pub metrics: BiophysicalMetrics,
@@ -312,6 +316,8 @@ pub fn analyze_pdb_detailed_with_source(
     let sasa_metrics = crate::sasa::compute_sasa(&all_atoms);
     let steric_overlap = crate::clash::compute_steric_overlap(pdb);
     let interaction_network = crate::interactions::compute_interaction_network(pdb);
+    let mut covalent_geometry = crate::geometry::analyze(pdb);
+    covalent_geometry.keep_worst_outliers(MAX_STORED_GEOMETRY_OUTLIERS);
 
     let mut metrics = BiophysicalMetrics {
         id: Uuid::new_v4(),
@@ -337,6 +343,7 @@ pub fn analyze_pdb_detailed_with_source(
         steric_overlap: Some(steric_overlap),
         sasa_metrics: Some(sasa_metrics),
         interaction_network: Some(interaction_network),
+        covalent_geometry: Some(covalent_geometry),
         candidate_fitness_score: None,
     };
 

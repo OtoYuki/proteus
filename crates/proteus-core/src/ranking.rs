@@ -156,6 +156,7 @@ mod tests {
             steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
+            covalent_geometry: None,
             candidate_fitness_score: None,
         };
 
@@ -187,6 +188,7 @@ mod tests {
             steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
+            covalent_geometry: None,
             candidate_fitness_score: None,
         }
     }
@@ -235,6 +237,7 @@ mod tests {
             steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
+            covalent_geometry: None,
             candidate_fitness_score: None,
         };
         let predicted_zero = evaluate_candidate_fitness(&base, 46);

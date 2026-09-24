@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 /// Version of the structure-QC table (CSV/JSON columns, Parquet fields), written to the
 /// Parquet key-value metadata as `proteus.qc_schema_version`.
-pub const QC_SCHEMA_VERSION: u32 = 1;
+pub const QC_SCHEMA_VERSION: u32 = 2;
 
 /// Column names, in order. CSV header, Arrow schema and JSON field names all agree.
 pub const QC_COLUMNS: &[&str] = &[
@@ -43,6 +43,17 @@ pub const QC_COLUMNS: &[&str] = &[
     "hydrophobic_burial_pct",
     "heavy_atom_overlap_score",
     "overlap_count",
+    "bond_rmsz",
+    "bond_outliers",
+    "angle_rmsz",
+    "angle_outliers",
+    "chirality_outliers",
+    "handedness_swaps",
+    "planarity_outliers",
+    "cbeta_outliers",
+    "cis_nonpro",
+    "twisted_peptides",
+    "rotamer_outlier_pct",
     "hbond_count",
     "salt_bridge_count",
     "pi_stacking_count",
@@ -85,6 +96,17 @@ fn columns() -> Vec<Col> {
         F64(|r| r.hydrophobic_burial_pct),
         F64(|r| r.heavy_atom_overlap_score),
         Int(|r| r.overlap_count),
+        OptF64(|r| r.bond_rmsz),
+        Int(|r| r.bond_outliers),
+        OptF64(|r| r.angle_rmsz),
+        Int(|r| r.angle_outliers),
+        Int(|r| r.chirality_outliers),
+        Int(|r| r.handedness_swaps),
+        Int(|r| r.planarity_outliers),
+        Int(|r| r.cbeta_outliers),
+        Int(|r| r.cis_nonpro),
+        Int(|r| r.twisted_peptides),
+        OptF64(|r| r.rotamer_outlier_pct),
         Int(|r| r.hbond_count),
         Int(|r| r.salt_bridge_count),
         Int(|r| r.pi_stacking_count),
@@ -236,6 +258,17 @@ mod tests {
             hydrophobic_burial_pct: 10.0,
             heavy_atom_overlap_score: 0.0,
             overlap_count: 0,
+            bond_rmsz: Some(0.8),
+            bond_outliers: 0,
+            angle_rmsz: Some(1.1),
+            angle_outliers: 1,
+            chirality_outliers: 0,
+            handedness_swaps: 0,
+            planarity_outliers: 0,
+            cbeta_outliers: 0,
+            cis_nonpro: 0,
+            twisted_peptides: 0,
+            rotamer_outlier_pct: None,
             hbond_count: 1,
             salt_bridge_count: 0,
             pi_stacking_count: 0,

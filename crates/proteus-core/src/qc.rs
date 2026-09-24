@@ -55,6 +55,26 @@ pub struct StructureQc {
     /// Severe heavy-atom overlaps (> 0.40 Å) per 1000 atoms. Not a MolProbity clashscore.
     pub heavy_atom_overlap_score: f64,
     pub overlap_count: usize,
+    /// RMS Z of bond lengths against the Phenix restraint library (geostd + CDL): about 1 for
+    /// a refined structure, well above for a distorted one. `None` without restrained bonds.
+    pub bond_rmsz: Option<f64>,
+    /// Bond lengths more than 4σ from ideal.
+    pub bond_outliers: usize,
+    pub angle_rmsz: Option<f64>,
+    pub angle_outliers: usize,
+    /// Chiral centres more than 4σ from ideal, including inversions.
+    pub chirality_outliers: usize,
+    /// Chiral centres of the wrong hand (D-residues, inverted Ile/Thr CB).
+    pub handedness_swaps: usize,
+    pub planarity_outliers: usize,
+    /// Residues whose CB is ≥ 0.25 Å from the position the backbone implies.
+    pub cbeta_outliers: usize,
+    /// Cis peptide bonds before a residue other than proline.
+    pub cis_nonpro: usize,
+    /// Peptide bonds with ω between 30° and 150° from cis.
+    pub twisted_peptides: usize,
+    /// MolProbity rotamer outliers (< 0.3 % in Top8000), percent of evaluated side chains.
+    pub rotamer_outlier_pct: Option<f64>,
     pub hbond_count: usize,
     pub salt_bridge_count: usize,
     pub pi_stacking_count: usize,
@@ -244,6 +264,7 @@ pub fn structure_qc(
     let sasa = m.sasa_metrics.as_ref();
     let overlap = m.steric_overlap.as_ref();
     let net = m.interaction_network.as_ref().map(|n| &n.summary);
+    let geo = m.covalent_geometry.as_ref();
     let rg_expected = expected_folded_rg(n_residues);
 
     Ok(StructureQc {
@@ -282,6 +303,17 @@ pub fn structure_qc(
         hydrophobic_burial_pct: sasa.map_or(0.0, |s| s.hydrophobic_burial_ratio * 100.0),
         heavy_atom_overlap_score: overlap.map_or(0.0, |o| o.heavy_atom_overlap_score),
         overlap_count: overlap.map_or(0, |o| o.clash_count),
+        bond_rmsz: geo.and_then(|g| g.bonds.rmsz),
+        bond_outliers: geo.map_or(0, |g| g.bonds.outliers),
+        angle_rmsz: geo.and_then(|g| g.angles.rmsz),
+        angle_outliers: geo.map_or(0, |g| g.angles.outliers),
+        chirality_outliers: geo.map_or(0, |g| g.chiralities.outliers),
+        handedness_swaps: geo.map_or(0, |g| g.handedness_swaps),
+        planarity_outliers: geo.map_or(0, |g| g.planes.outliers),
+        cbeta_outliers: geo.map_or(0, |g| g.cbeta_outliers),
+        cis_nonpro: geo.map_or(0, |g| g.cis_nonproline),
+        twisted_peptides: geo.map_or(0, |g| g.twisted),
+        rotamer_outlier_pct: geo.and_then(|g| g.rotamer_outlier_pct()),
         hbond_count: net.map_or(0, |n| n.total_hbonds),
         salt_bridge_count: net.map_or(0, |n| n.total_salt_bridges),
         pi_stacking_count: net.map_or(0, |n| n.total_pi_pi_stacks),

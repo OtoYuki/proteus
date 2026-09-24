@@ -92,6 +92,10 @@ pub struct BiophysicalMetrics {
     pub steric_overlap: Option<StericOverlapStats>,
     pub sasa_metrics: Option<SasaMetrics>,
     pub interaction_network: Option<crate::interactions::InteractionNetwork>,
+    /// Covalent geometry and rotamers (MolProbity/Phenix checks; `crate::geometry`), with at
+    /// most the 100 worst outliers kept. Absent in metrics stored before it existed.
+    #[serde(default)]
+    pub covalent_geometry: Option<crate::geometry::CovalentGeometry>,
     pub candidate_fitness_score: Option<f64>,
 }
 

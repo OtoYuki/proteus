@@ -216,6 +216,8 @@ fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
         "Rama fav %",
         "outliers",
         "overlap/1k",
+        "bond Z",
+        "rota out %",
         "Rg/Rg₀",
         "H %",
         "E %",
@@ -234,6 +236,8 @@ fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
             format!("{:.1}", r.rama_favored_pct),
             r.rama_outliers.to_string(),
             format!("{:.1}", r.heavy_atom_overlap_score),
+            opt(r.bond_rmsz, 2),
+            opt(r.rotamer_outlier_pct, 1),
             format!("{:.2}", r.rg_ratio),
             format!("{:.0}", r.helix_pct),
             format!("{:.0}", r.strand_pct),
@@ -455,6 +459,69 @@ fn print_report(
         ]);
     }
 
+    if let Some(ref g) = metrics.covalent_geometry {
+        let rmsz = |v: Option<f64>| v.map_or_else(|| "–".to_string(), |v| format!("{v:.2}"));
+        table.add_row(vec![
+            Cell::new("Bond lengths (geostd + CDL)"),
+            Cell::new(format!(
+                "RMSZ {} | {} of {} beyond 4σ",
+                rmsz(g.bonds.rmsz),
+                g.bonds.outliers,
+                g.bonds.n
+            )),
+        ]);
+        table.add_row(vec![
+            Cell::new("Bond angles (geostd + CDL)"),
+            Cell::new(format!(
+                "RMSZ {} | {} of {} beyond 4σ",
+                rmsz(g.angles.rmsz),
+                g.angles.outliers,
+                g.angles.n
+            )),
+        ]);
+        table.add_row(vec![
+            Cell::new("Chirality | planarity"),
+            Cell::new(format!(
+                "{} chiral outliers ({} inverted) | {} planar groups beyond 4σ",
+                g.chiralities.outliers, g.handedness_swaps, g.planes.outliers
+            )),
+        ]);
+        table.add_row(vec![
+            Cell::new("Cβ deviation (≥0.25 Å)"),
+            Cell::new(format!(
+                "{} of {} residues",
+                g.cbeta_outliers, g.cbeta_residues
+            )),
+        ]);
+        table.add_row(vec![
+            Cell::new("Peptide ω"),
+            Cell::new(format!(
+                "{} cis-Pro | {} cis non-Pro | {} twisted (of {})",
+                g.cis_proline, g.cis_nonproline, g.twisted, g.peptides
+            )),
+        ]);
+        table.add_row(vec![
+            Cell::new("Rotamers (Top8000)"),
+            Cell::new(format!(
+                "outliers {} ({} of {}) | allowed {}",
+                g.rotamer_outlier_pct()
+                    .map_or_else(|| "–".to_string(), |p| format!("{p:.1}%")),
+                g.rotamer_outliers,
+                g.rotamer_residues,
+                g.rotamer_allowed
+            )),
+        ]);
+        if g.symmetric_flips > 0 {
+            table.add_row(vec![
+                Cell::new("Symmetric atoms renamed"),
+                Cell::new(format!(
+                    "{} residues named against the IUPAC convention (swapped before checking)",
+                    g.symmetric_flips
+                )),
+            ]);
+        }
+    }
+
     if let Some(ref net) = metrics.interaction_network {
         table.add_row(vec![
             Cell::new("Hydrogen Bonds (H-Bonds)"),
@@ -526,7 +593,50 @@ fn print_report(
     }
 
     println!("{table}");
+    if let Some(ref g) = metrics.covalent_geometry {
+        print_geometry_outliers(g, WORST_OUTLIERS_SHOWN);
+    }
     Ok(())
+}
+
+/// Outliers listed under the single-structure report.
+const WORST_OUTLIERS_SHOWN: usize = 10;
+
+fn print_geometry_outliers(g: &proteus_core::geometry::CovalentGeometry, n: usize) {
+    use proteus_core::geometry::OutlierKind;
+    if g.outliers.is_empty() {
+        return;
+    }
+    let mut table = Table::new();
+    table.load_style(UTF8_FULL);
+    crate::cli::fit_table(&mut table);
+    table.set_header(vec!["Worst geometry outliers", "Atoms", "Ideal", "Model", "Z"]);
+    for o in g.outliers.iter().take(n) {
+        let what = match o.kind {
+            OutlierKind::Bond => "bond",
+            OutlierKind::Angle => "angle",
+            OutlierKind::Tetrahedral => "chiral volume",
+            OutlierKind::HandednessSwap => "inverted chiral centre",
+            OutlierKind::PseudochiralNaming => "methyls misnamed",
+            OutlierKind::Planarity => "planar group",
+            OutlierKind::Cbeta => "Cβ deviation",
+            OutlierKind::CisPeptide => "cis peptide (non-Pro)",
+            OutlierKind::TwistedPeptide => "twisted peptide",
+            OutlierKind::Rotamer => "rotamer outlier",
+        };
+        table.add_row(vec![
+            Cell::new(what),
+            Cell::new(o.atoms.join(" – ")),
+            Cell::new(format!("{:.3}", o.ideal)),
+            Cell::new(format!("{:.3}", o.model)),
+            Cell::new(o.z.map_or_else(|| "–".to_string(), |z| format!("{z:+.1}"))),
+        ]);
+    }
+    println!("{table}");
+    let total = g.outliers_total.max(g.outliers.len());
+    if total > n {
+        println!("{} more outliers not shown.", total - n);
+    }
 }
 
 #[cfg(test)]
