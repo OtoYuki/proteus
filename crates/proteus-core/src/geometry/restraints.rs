@@ -249,7 +249,7 @@ impl Restraints {
         let pos = |r: &Residue, n: &str| r.atom(n).map(|i| model.atoms[i].pos);
         let dihedral = |p: [Option<Vector3<f64>>; 4]| -> Option<f64> {
             let [a, b, c, d] = p;
-            crate::structure::compute_dihedral(&a?, &b?, &c?, &d?).ok()
+            dihedral(a?, b?, c?, d?)
         };
         let omega = dihedral([
             pos(prev, "CA"),
@@ -387,6 +387,22 @@ pub(crate) fn build(model: &super::Model) -> Restraints {
         }
     }
     r
+}
+
+/// Dihedral a–b–c–d in degrees; `None` when any of the three bonds has no length (coincident
+/// atoms), where the angle is undefined rather than 0°.
+pub(crate) fn dihedral(
+    a: Vector3<f64>,
+    b: Vector3<f64>,
+    c: Vector3<f64>,
+    d: Vector3<f64>,
+) -> Option<f64> {
+    if [b - a, c - b, d - c].iter().any(|v| v.norm() < 1e-6) {
+        return None;
+    }
+    crate::structure::compute_dihedral(&a, &b, &c, &d)
+        .ok()
+        .filter(|w| w.is_finite())
 }
 
 /// Model value and signed deviation of each restraint, in cctbx's sign convention

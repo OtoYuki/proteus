@@ -1,7 +1,8 @@
 //! Side-chain rotamers against cctbx `rotalyze` (MolProbity Top8000).
 //!
 //! Reference: `validate/reference/geometry/*.json.gz`, key `rotalyze`, written by
-//! `validate/geometry_ref.py` (the structure reduced as `protein_heavy_atoms` reduces it, then
+//! `validate/geometry_ref.py` (the structure reduced as `protein_heavy_atoms` reduces it and
+//! processed by cctbx, which renames symmetric side-chain atoms, then
 //! `rotalyze(outliers_only=False)`). Ignored by default because it needs the downloaded corpus:
 //!
 //! ```text
@@ -133,7 +134,8 @@ fn rotamers_match_cctbx_rotalyze() {
         let structure = structure_path(&stem);
         assert!(structure.exists(), "missing {}", structure.display());
 
-        let pdb = load(&structure);
+        // As phenix.molprobity: rotamers are scored after the symmetric-atom renaming.
+        let (pdb, _) = proteus_core::geometry::flip_symmetric_amino_acids(&load(&structure));
         let t = Instant::now();
         let ours = evaluate_rotamers(&pdb);
         let ms = t.elapsed().as_secs_f64() * 1e3;

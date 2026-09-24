@@ -49,7 +49,11 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   located and ranked. `restraint_details` exposes every restraint with its target, σ, model
   value and Z.
 - `proteus_core::rotamer`: MolProbity rotalyze on the Top8000 distributions (outlier < 0.3 %,
-  allowed < 2 %), with rotamer names.
+  allowed < 2 %), with rotamer names, scored after the symmetric-atom renaming as
+  phenix.molprobity does.
+- Coincident atoms make a restraint undefined, not NaN: such restraints are counted
+  (`degenerate`) and listed, and an undefined ω is not a cis peptide. The checks read the first
+  model only.
 - Both are validated structure by structure against cctbx on the 53-file corpus and 13
   committed ESMFold models: identical restraint counts and outliers, RMSZ within 5e-6, all
   26 469 rotamers identical (`make validate`; `validate/geometry_reference.py`,

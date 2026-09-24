@@ -629,6 +629,7 @@ fn print_geometry_outliers(g: &proteus_core::geometry::CovalentGeometry, n: usiz
             OutlierKind::CisPeptide => "cis peptide (non-Pro)",
             OutlierKind::TwistedPeptide => "twisted peptide",
             OutlierKind::Rotamer => "rotamer outlier",
+            OutlierKind::Degenerate => "coincident atoms (undefined)",
         };
         table.add_row(vec![
             Cell::new(what),

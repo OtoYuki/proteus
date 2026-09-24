@@ -86,9 +86,14 @@ pub(crate) struct Model {
 }
 
 impl Model {
+    /// Atoms of the first model only (as `io::load_structure` keeps), so that a caller passing
+    /// an NMR ensemble does not get restraints between copies of the same residue.
     pub fn from_pdb(pdb: &pdbtbx::PDB) -> Model {
         let mut m = Model::default();
-        for chain in pdb.chains() {
+        let Some(first) = pdb.models().next() else {
+            return m;
+        };
+        for chain in first.chains() {
             for residue in chain.residues() {
                 let name = residue
                     .name()
@@ -186,8 +191,7 @@ impl Model {
                     let [a, b, c, d] = names.map(pos);
                     match (a, b, c, d) {
                         (Some(a), Some(b), Some(c), Some(d)) => {
-                            crate::structure::compute_dihedral(&a, &b, &c, &d)
-                                .is_ok_and(|w| w.abs() > 90.0)
+                            restraints::dihedral(a, b, c, d).is_some_and(|w| w.abs() > 90.0)
                         }
                         _ => false,
                     }
@@ -226,6 +230,34 @@ impl Model {
     }
 }
 
+/// A copy of `pdb` (first model) with symmetric side-chain atoms named against the IUPAC
+/// convention swapped, as Phenix does before validating, and the number of residues changed.
+/// Every check in this module, and [`crate::rotamer`] through [`analyze`], sees this copy.
+pub fn flip_symmetric_amino_acids(pdb: &pdbtbx::PDB) -> (pdbtbx::PDB, usize) {
+    let mut model = Model::from_pdb(pdb);
+    let flips = model.flip_symmetric_amino_acids();
+    let mut out = pdb.clone();
+    while out.model_count() > 1 {
+        out.remove_model(1);
+    }
+    if flips > 0 {
+        // Same traversal as `Model::from_pdb`, so atom k of the model is atom k here.
+        let mut k = 0;
+        if let Some(first) = out.models_mut().next() {
+            for chain in first.chains_mut() {
+                for residue in chain.residues_mut() {
+                    for atom in residue.atoms_mut() {
+                        let p = model.atoms[k].pos;
+                        atom.set_pos((p.x, p.y, p.z)).expect("finite coordinates");
+                        k += 1;
+                    }
+                }
+            }
+        }
+    }
+    (out, flips)
+}
+
 /// Kind of a covalent-geometry outlier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -248,6 +280,8 @@ pub enum OutlierKind {
     TwistedPeptide,
     /// A side chain in a conformation seen in fewer than 0.3 % of Top8000 residues.
     Rotamer,
+    /// A restraint with no defined value because two of its atoms coincide.
+    Degenerate,
 }
 
 /// One outlier, located and quantified.
@@ -281,6 +315,7 @@ impl GeometryOutlier {
             }
             OutlierKind::Cbeta => self.model / CBETA_OUTLIER * SIGMA_CUTOFF,
             OutlierKind::Rotamer => SIGMA_CUTOFF,
+            OutlierKind::Degenerate => 1e5,
             _ => self.z.map_or(0.0, f64::abs),
         }
     }
@@ -365,6 +400,10 @@ pub struct CovalentGeometry {
     /// Residues whose symmetric side-chain atoms were named against the IUPAC convention and
     /// were swapped before restraining (Arg, Asp, Glu, Phe, Tyr, Val, Leu).
     pub symmetric_flips: usize,
+    /// Restraints left out of the statistics because their atoms coincide (listed as
+    /// `Degenerate` outliers).
+    #[serde(default)]
+    pub degenerate: usize,
     /// Outliers, most severe first; possibly only the worst of them, see `outliers_total`.
     pub outliers: Vec<GeometryOutlier>,
     /// How many outliers there were before [`CovalentGeometry::keep_worst_outliers`].
@@ -457,7 +496,9 @@ struct Evaluated {
     max_delta: f64,
 }
 
-fn evaluate(model: &Model, r: &restraints::Restraints) -> Vec<Evaluated> {
+/// Every restraint measured, split into those with a defined value and the degenerate ones
+/// (coincident atoms: an angle or plane with no defined value).
+fn evaluate(model: &Model, r: &restraints::Restraints) -> (Vec<Evaluated>, Vec<Evaluated>) {
     let mut out =
         Vec::with_capacity(r.bonds.len() + r.angles.len() + r.chiralities.len() + r.planes.len());
     for b in &r.bonds {
@@ -520,16 +561,18 @@ fn evaluate(model: &Model, r: &restraints::Restraints) -> Vec<Evaluated> {
             max_delta: deltas.iter().map(|d| d.abs()).fold(0.0, f64::max),
         });
     }
-    out
+    out.into_iter()
+        .partition(|e| e.z.is_finite() && e.model.is_finite() && e.max_delta.is_finite())
 }
 
 /// Every covalent restraint of the structure with its model value and Z, for export or
 /// inspection. Input as for [`analyze`].
 pub fn restraint_details(pdb: &pdbtbx::PDB) -> Vec<RestraintDetail> {
-    let mut model = Model::from_pdb(pdb);
-    model.flip_symmetric_amino_acids();
+    let (flipped, _) = flip_symmetric_amino_acids(pdb);
+    let model = Model::from_pdb(&flipped);
     let r = restraints::build(&model);
     evaluate(&model, &r)
+        .0
         .into_iter()
         .map(|e| RestraintDetail {
             kind: e.kind,
@@ -546,14 +589,26 @@ pub fn restraint_details(pdb: &pdbtbx::PDB) -> Vec<RestraintDetail> {
 /// Run every covalent-geometry check on a structure already reduced by
 /// [`crate::io::protein_heavy_atoms`].
 pub fn analyze(pdb: &pdbtbx::PDB) -> CovalentGeometry {
-    let mut model = Model::from_pdb(pdb);
-    let symmetric_flips = model.flip_symmetric_amino_acids();
+    let (flipped, symmetric_flips) = flip_symmetric_amino_acids(pdb);
+    let pdb = &flipped;
+    let model = Model::from_pdb(pdb);
     let r = restraints::build(&model);
-    let evaluated = evaluate(&model, &r);
+    let (evaluated, degenerate) = evaluate(&model, &r);
     let mut g = CovalentGeometry {
         symmetric_flips,
+        degenerate: degenerate.len(),
         ..CovalentGeometry::default()
     };
+    for e in &degenerate {
+        g.outliers.push(GeometryOutlier {
+            kind: OutlierKind::Degenerate,
+            residue: model.residues[model.atoms[e.atoms[0]].residue].id.clone(),
+            atoms: e.atoms.iter().map(|&i| model.atom_label(i)).collect(),
+            ideal: e.ideal,
+            model: 0.0,
+            z: None,
+        });
+    }
     let of = |k: RestraintKind| evaluated.iter().filter(move |e| e.kind == k);
     g.bonds = RestraintStats::from_z(of(RestraintKind::Bond).map(|e| e.z));
     g.angles = RestraintStats::from_z(of(RestraintKind::Angle).map(|e| e.z));
@@ -624,7 +679,7 @@ pub fn analyze(pdb: &pdbtbx::PDB) -> CovalentGeometry {
         if (c1 - n2).norm() >= omega::OMEGALYZE_LINK_CUTOFF {
             continue;
         }
-        let Ok(w) = crate::structure::compute_dihedral(&ca1, &c1, &n2, &ca2) else {
+        let Some(w) = restraints::dihedral(ca1, c1, n2, ca2) else {
             continue;
         };
         let t = OmegaType::classify(w);
@@ -700,4 +755,110 @@ pub fn analyze(pdb: &pdbtbx::PDB) -> CovalentGeometry {
         .sort_by(|a, b| b.severity().total_cmp(&a.severity()));
     g.outliers_total = g.outliers.len();
     g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CRAMBIN: &str = include_str!("../../tests/data/1crn.pdb");
+
+    fn crambin() -> pdbtbx::PDB {
+        let (pdb, _) = pdbtbx::ReadOptions::default()
+            .set_format(pdbtbx::Format::Pdb)
+            .set_level(pdbtbx::StrictnessLevel::Loose)
+            .read_raw(std::io::BufReader::new(std::io::Cursor::new(
+                CRAMBIN.as_bytes(),
+            )))
+            .unwrap();
+        crate::io::protein_heavy_atoms(&pdb)
+    }
+
+    fn atom_mut<'a>(pdb: &'a mut pdbtbx::PDB, seq: isize, name: &str) -> &'a mut pdbtbx::Atom {
+        pdb.residues_mut()
+            .find(|r| r.serial_number() == seq)
+            .unwrap()
+            .atoms_mut()
+            .find(|a| a.name().trim() == name)
+            .unwrap()
+    }
+
+    fn pos(pdb: &pdbtbx::PDB, seq: isize, name: &str) -> (f64, f64, f64) {
+        let a = pdb
+            .residues()
+            .find(|r| r.serial_number() == seq)
+            .unwrap()
+            .atoms()
+            .find(|a| a.name().trim() == name)
+            .unwrap();
+        a.pos()
+    }
+
+    #[test]
+    fn crambin_matches_cctbx_counts() {
+        // validate/reference/geometry/1crn_pdb.json.gz
+        let g = analyze(&crambin());
+        assert_eq!((g.bonds.n, g.bonds.outliers), (337, 2));
+        assert_eq!((g.angles.n, g.angles.outliers), (466, 10));
+        assert_eq!(g.chiralities.n, 56);
+        assert_eq!(g.planes.n, 61);
+        assert!((g.bonds.rmsz.unwrap() - 1.49865).abs() < 1e-4);
+        assert_eq!(g.handedness_swaps + g.cis_nonproline + g.twisted, 0);
+    }
+
+    #[test]
+    fn coincident_atoms_are_reported_not_nan() {
+        let mut pdb = crambin();
+        let ca = pos(&pdb, 2, "CA");
+        atom_mut(&mut pdb, 2, "CB").set_pos(ca).unwrap();
+        let g = analyze(&pdb);
+        assert!(g.degenerate > 0);
+        assert!(g.outliers.iter().any(|o| o.kind == OutlierKind::Degenerate));
+        for s in [&g.bonds, &g.angles, &g.chiralities, &g.planes] {
+            assert!(s.rmsz.is_some_and(f64::is_finite));
+        }
+        // Everything serialises to JSON that reads back.
+        let json = serde_json::to_string(&restraint_details(&pdb)).unwrap();
+        let _: Vec<RestraintDetail> = serde_json::from_str(&json).unwrap();
+        let _: CovalentGeometry =
+            serde_json::from_str(&serde_json::to_string(&g).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn undefined_omega_is_not_a_cis_peptide() {
+        let mut pdb = crambin();
+        let n = pos(&pdb, 4, "N");
+        atom_mut(&mut pdb, 4, "CA").set_pos(n).unwrap();
+        let g = analyze(&pdb);
+        assert_eq!(g.cis_nonproline, 0);
+        assert!(g.cbeta.iter().all(|c| c.deviation.is_finite()));
+    }
+
+    #[test]
+    fn only_the_first_model_is_checked() {
+        let one = crambin();
+        let mut two = one.clone();
+        let mut copy = two.model(0).unwrap().clone();
+        copy.set_serial_number(2);
+        two.add_model(copy);
+        assert_eq!(two.model_count(), 2);
+        let (a, b) = (analyze(&one), analyze(&two));
+        assert_eq!((a.bonds.n, a.bonds.outliers), (b.bonds.n, b.bonds.outliers));
+        assert_eq!(a.cbeta_residues, b.cbeta_residues);
+    }
+
+    #[test]
+    fn rotamers_are_scored_after_the_symmetric_flip() {
+        // Swapping LEU 18's methyl names must not change its rotamer: Phenix renames them first.
+        let pdb = crambin();
+        let mut swapped = pdb.clone();
+        let (d1, d2) = (pos(&pdb, 18, "CD1"), pos(&pdb, 18, "CD2"));
+        atom_mut(&mut swapped, 18, "CD1").set_pos(d2).unwrap();
+        atom_mut(&mut swapped, 18, "CD2").set_pos(d1).unwrap();
+        let (a, b) = (analyze(&pdb), analyze(&swapped));
+        assert_eq!(b.symmetric_flips, a.symmetric_flips + 1);
+        assert_eq!(a.rotamer_outliers, b.rotamer_outliers);
+        assert_eq!(a.rotamer_allowed, b.rotamer_allowed);
+        assert_eq!(a.bonds, b.bonds);
+    }
 }

@@ -103,7 +103,10 @@ What had to be matched, beyond the monomer dictionaries:
 * **Symmetric-atom renaming.** cctbx swaps Arg NH1/NH2, Asp OD1/OD2, Glu OE1/OE2, Phe/Tyr
   ring atoms and Val/Leu methyls named against the IUPAC convention before restraining.
   Adding that step removed 1,325 of the first 1,343 disagreements: they were naming, not
-  geometry.
+  geometry. phenix.molprobity also runs rotalyze, cbetadev and omegalyze on the renamed
+  model, which changes 13 rotamer evaluations on this corpus, so the reference does the same
+  (found by review: the first reference ran rotalyze on the unrenamed atoms and agreed with
+  the equally wrong port).
 * **Linkage.** Two residues are linked when C(i)–N(i+1) ≤ 3 Å (restraints, CDL) or < 2 Å
   (omegalyze); the previous residue needs only its C.
 * **The same atoms.** The reference reduces each structure exactly as
@@ -127,7 +130,7 @@ present as mmCIF counted once):
 | X-ray | 27 | 23 | 3023 / 111 551 (2.71 %) | 1.18 | 4.25 % | 7.1 % | 567 / 13 387 |
 | NMR | 8 | 2 | 4 / 7 383 (0.05 %) | 0.68 | 0.92 % | 5.9 % | 0 / 844 |
 | cryo-EM | 4 | 1 | 9 / 64 601 (0.01 %) | 0.37 | 0.20 % | 0.6 % | 0 / 7 532 |
-| AlphaFold DB v6 | 9 | 3 | 94 / 37 300 (0.25 %) | 0.75 | 3.97 % | 5.8 % | 230 / 4 403 |
+| AlphaFold DB v6 | 9 | 3 | 94 / 37 300 (0.25 %) | 0.75 | 3.97 % | 5.9 % | 230 / 4 403 |
 | ESMFold (unrelaxed) | 13 | **13** | 374 / 12 615 (2.96 %) | 1.25 | 1.12 % | 0.8 % | 0 / 1 454 |
 
 Every ESMFold model has bond outliers, almost all of them peptide C–N bonds that are too short

@@ -197,6 +197,10 @@ def main():
     def res_key(r):
         return f"{r.chain_id.strip()}:{int(r.resseq)}:{(r.icode or '').strip()}"
 
+    # phenix.molprobity runs the per-residue validators on the processed model, whose
+    # symmetric side-chain atoms pdb_interpretation has already renamed (flip_symmetric_amino_
+    # acids); rotalyze in particular depends on it.
+    h = model.get_hierarchy()
     cb = cbetadev(pdb_hierarchy=h, outliers_only=False, out=sink, quiet=True)
     out["cbetadev"] = {
         res_key(r): {"resname": r.resname.strip(), "deviation": round(r.deviation, 4),

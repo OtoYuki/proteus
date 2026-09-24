@@ -154,5 +154,5 @@ pub fn deviation(
     if betadist != ideal.dist {
         beta = ca + (beta - ca) * ideal.dist / betadist;
     }
-    Some((cb - beta).norm())
+    Some((cb - beta).norm()).filter(|d| d.is_finite())
 }
