@@ -760,16 +760,20 @@
     // ---------------------------------------------------------------- sessions
     // The view lives in the URL fragment: reload, bookmark or share the link to get it back.
     let sessionTimer = 0;
+    // Written at once when the page is left, so a reload right after a change keeps it.
+    function saveSessionNow() {
+      clearTimeout(sessionTimer);
+      const v = { y: +state.yaw.toFixed(3), p: +state.pitch.toFixed(3), z: +state.zoom.toFixed(3),
+        pan: state.pan.map((x) => +x.toFixed(2)), c: scheme, fx: state.fx ? 1 : 0, ds: state.ds ? 1 : 0,
+        ref: state.ref ? 1 : 0, u: state.surface, s: [...sel.set], n: sel.neigh ? 1 : 0, k: [...showKinds],
+        l: [...pinned], m: measures };
+      try { history.replaceState(null, '', '#v=' + C.encodeSession(v)); } catch (_) { /* file:// in some browsers */ }
+    }
     function saveSession() {
       clearTimeout(sessionTimer);
-      sessionTimer = setTimeout(() => {
-        const v = { y: +state.yaw.toFixed(3), p: +state.pitch.toFixed(3), z: +state.zoom.toFixed(3),
-          pan: state.pan.map((x) => +x.toFixed(2)), c: scheme, fx: state.fx ? 1 : 0, ds: state.ds ? 1 : 0,
-          ref: state.ref ? 1 : 0, u: state.surface, s: [...sel.set], n: sel.neigh ? 1 : 0, k: [...showKinds],
-          l: [...pinned], m: measures };
-        try { history.replaceState(null, '', '#v=' + C.encodeSession(v)); } catch (_) { /* file:// in some browsers */ }
-      }, 250);
+      sessionTimer = setTimeout(saveSessionNow, 250);
     }
+    window.addEventListener('pagehide', saveSessionNow);
     function restoreSession() {
       const m = /[#&]v=([A-Za-z0-9_-]+)/.exec(location.hash);
       const v = m && C.decodeSession(m[1]);
@@ -958,7 +962,7 @@
     applyDimming();
     buildSurface();
     updateSelectionUI();
-    window.ProteusViewer = { state, render, pickAt, sel, select, focus, project, measures, pinned, measureClick, finishMeasure,
+    window.ProteusViewer = { state, render, pickAt, sel, select, focus, project, measures, pinned, measureClick, finishMeasure, saveSessionNow,
       get surfaceTriangles() { return surface ? surface.vao.count / 3 : 0; }, get scheme() { return scheme; },
       get sticks() { return sticks ? sticks.count / 3 : 0; }, get lines() { return lines ? lines.count / 3 : 0; } };
   }

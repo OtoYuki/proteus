@@ -132,7 +132,7 @@ for (const name of wanted) {
       V.finishMeasure();
       V.state.zoom = 1.7;
       V.render();
-      await new Promise((r) => setTimeout(r, 400));
+      V.saveSessionNow();
       return { tris, labels: document.querySelectorAll('#overlay .measure').length, hash: location.hash };
     });
     if (!extra.tris) fail(where, 'u drew no surface');
