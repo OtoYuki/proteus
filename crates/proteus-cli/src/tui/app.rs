@@ -25,13 +25,15 @@ impl Tab {
         }
     }
 
-    /// The glyph beside the tab's name: a list, a ring, a play mark.
-    pub fn icon(self) -> &'static str {
+    /// The tab's icon: the identity's dot-matrix drawing, two braille cells.
+    pub fn icon(self) -> String {
+        use proteus_render::brand::icons::Icon;
         match self {
-            Tab::Jobs => "≡",
-            Tab::Structures => "⌬",
-            Tab::Run => "▸",
+            Tab::Jobs => Icon::Jobs,
+            Tab::Structures => Icon::Structures,
+            Tab::Run => Icon::Run,
         }
+        .braille()
     }
 
     fn index(self) -> usize {

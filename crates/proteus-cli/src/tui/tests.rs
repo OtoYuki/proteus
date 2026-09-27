@@ -664,7 +664,7 @@ fn the_home_screen_shows_tabs_gauges_and_guidance() {
         },
     );
     let screen = rendered(&app, 160, 40);
-    assert!(screen.contains("⌬ structures 2"), "{screen}");
+    assert!(screen.contains("⡮⠕ structures 2"), "{screen}");
     assert!(screen.contains("98 % favoured"), "{screen}");
     assert!(screen.contains("α30 β40 coil 30 %"), "{screen}");
     assert!(screen.contains("11.8 Å"), "{screen}");
@@ -832,4 +832,31 @@ fn the_status_line_says_what_happened_not_the_raw_output() {
     app.status = Some(format!("✗ {}", "x".repeat(200)));
     let screen = rendered(&app, 60, 30);
     assert!(screen.lines().last().unwrap().trim_end().ends_with('…'));
+}
+
+#[test]
+fn the_help_takes_down_the_preview_picture() {
+    // A kitty picture is drawn above the text, so it would sit on top of the help box.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.pdb"), "x").unwrap();
+    let mut app = app_in(dir.path());
+    app.tab = Tab::Structures;
+    app.cell_pixels = Some((10.0, 20.0));
+    app.help = true;
+    *app.preview_want.borrow_mut() = Some((
+        PreviewKey {
+            path: dir.path().join("a.pdb"),
+            cols: 10,
+            rows: 5,
+            pixels: true,
+        },
+        ratatui::layout::Rect::new(0, 0, 10, 5),
+    ));
+    let screen = rendered(&app, 120, 40);
+    assert!(screen.contains("(keys)"));
+    assert!(
+        screen.contains("the same line works in a script."),
+        "{screen}"
+    );
+    assert!(app.preview_want.borrow().is_none());
 }

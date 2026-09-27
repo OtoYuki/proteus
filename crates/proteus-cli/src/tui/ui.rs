@@ -51,6 +51,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(key_hints(app, keys.width as usize)), keys);
     draw_status(f, status, app);
     if app.help {
+        // A kitty picture sits above the text layer: placed, it would cover the help. No pane
+        // asks for one while the help is up, so the loop takes it down.
+        *app.preview_want.borrow_mut() = None;
         draw_help(f, f.area(), look);
     }
 }
@@ -851,17 +854,20 @@ fn headline_card(
     tri.extend(gauge(look, fx.triage / 100.0, W, look.accent()));
     tri.push(Span::styled(format!(" {:.0}", fx.triage), look.text()));
     out.push(Line::from(tri));
+    // The Rg ratio only when it fits on the line: wrapped, it strands under the labels (the
+    // measurements below give it in full either way).
+    let mut size = format!(
+        "{residues} residues · {} chain{}",
+        fx.chains,
+        if fx.chains == 1 { "" } else { "s" },
+    );
+    let rg = format!(" · Rg ×{:.2}", fx.rg_ratio);
+    if 11 + size.chars().count() + rg.chars().count() <= width as usize {
+        size.push_str(&rg);
+    }
     out.push(Line::from(vec![
         label("size"),
-        Span::styled(
-            format!(
-                "{residues} residues · {} chain{} · Rg ×{:.2}",
-                fx.chains,
-                if fx.chains == 1 { "" } else { "s" },
-                fx.rg_ratio
-            ),
-            look.text(),
-        ),
+        Span::styled(size, look.text()),
     ]));
     out
 }
@@ -1475,12 +1481,19 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         row("esc", "stop typing; digits switch tabs again"),
         Line::from(""),
         Line::from(Span::styled(
-            "  Every action runs a proteus command and shows it first; the same line works in a script.",
+            "  Every action runs a proteus command and shows it first:",
+            look.dim(),
+        )),
+        Line::from(Span::styled(
+            "  the same line works in a script.",
             look.dim(),
         )),
     ];
     let w = area.width.min(80);
-    let h = area.height.min(text.len() as u16 + 2);
+    // Rows as wrapped at the box's inner width, so the last line is never cut off.
+    let inner = w.saturating_sub(2).max(1) as usize;
+    let rows: usize = text.iter().map(|l| l.width().max(1).div_ceil(inner)).sum();
+    let h = area.height.min(rows as u16 + 2);
     let r = Rect {
         x: area.x + (area.width - w) / 2,
         y: area.y + (area.height - h) / 2,
