@@ -80,17 +80,26 @@ the chips in the panel) hands the binder role to another chain. The terminal vie
 shows the same three lines.
 
 **What these numbers are worth**, measured on the 3 669 designs in the Overath et al. 2025
-meta-analysis whose binding was tested in the lab (394 bound). Scores are average precision
-over the AlphaFold 3 models (`make validate-binders`); a random ranking scores 0.107.
+meta-analysis whose binding was tested in the lab (394 bound, 15 targets), using the AlphaFold 3
+models (`make validate-binders`). A campaign ranks its own designs against one target, so the
+score is average precision (AP) per target, averaged over the 15. A random ranking scores the
+binder rate, 0.131 on average.
 
-| ranked by | AP | |
-|---|---|---|
-| `ipsae_min` | **0.358** | the dataset's own ipSAE_min: 0.350 |
-| `lis` | 0.313 | |
-| `ipae` (lower first) | 0.298 | |
-| `interface_sc` | 0.267 | the dataset's Rosetta Sc: 0.178 |
-| `iptm` | 0.236 | |
-| `plddt_mean` | 0.208 | |
+| ranked by | AP per target | AUROC | |
+|---|---|---|---|
+| `ipsae_min` | **0.513** | 0.803 | 3.9× random; the dataset's own ipSAE_min: 0.513 |
+| `lis` | 0.477 | 0.808 | |
+| `ipae` (lower first) | 0.444 | 0.791 | |
+| `iptm` | 0.425 | 0.791 | pDockQ2 (dataset): 0.436 |
+| `plddt_mean` | 0.409 | 0.730 | |
+| `interface_sc` | 0.381 | 0.714 | the dataset's Rosetta Sc: 0.267, Rosetta ΔG: 0.332 |
+
+It beats every other score in the dataset, pDockQ2, ColabFold's actifpTM (0.346) and Rosetta's
+interface ΔG included. It is an enrichment filter, not a predictor: most top-ranked designs still
+fail in the lab, and targets with one to three binders give noisy numbers. Ranking all
+designs together instead (AP 0.358 against 0.107) mixes targets whose binder rates run from 2 % to
+57 %, and mostly measures which targets are easy. The per-target table is in
+[`last_run.md`](validate/binders/last_run.md).
 
 Keeping `ipsae_min > 0.61`, the paper's threshold, keeps 509 of the 3 669 designs. 203 of those
 bound: 40 % of what you would send to the lab, against 11 % unfiltered, and half of all the binders.

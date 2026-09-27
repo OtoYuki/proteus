@@ -13,7 +13,8 @@ of every design (validate/binders/fetch.sh). Three sections:
    residues). The authors adapted BindCraft's Rosetta scoring; the exact protocol (whether models
    were relaxed first) is not published, so this is correlation, gated only as a regression floor.
 3. How well each metric separates the 394 designs that bound in the lab from the rest: average
-   precision (AP) and AUROC. Reported, not gated: it is a property of the metric, not of the code.
+   precision (AP) and AUROC, per target (how a campaign uses it) and pooled. Reported, not gated:
+   it is a property of the metric, not of the code.
 
 Standard library only. Exit status 1 when a gate fails.
 """
@@ -190,25 +191,58 @@ def main():
     labelled = [o for o in rows if ref[o["_id"]]["binder"] in ("True", "False")]
     labels = [1 if ref[o["_id"]]["binder"] == "True" else 0 for o in labelled]
     prevalence = sum(labels) / len(labels)
+    # A campaign ranks its own designs against one target, so the question a user asks is answered
+    # per target. Pooling mixes targets whose binder rates run from a few percent to over half,
+    # and then mostly measures which targets are easy.
+    by_target = {}
+    for i, o in enumerate(labelled):
+        by_target.setdefault(ref[o["_id"]]["target_id"], []).append(i)
+    scored = {t: ix for t, ix in by_target.items() if any(labels[i] for i in ix)}
+    min_binders = tol["outcome"]["min_binders_per_target"]
+    solid = {t: ix for t, ix in scored.items() if sum(labels[i] for i in ix) >= min_binders}
+
+    def per_target(s, targets):
+        aps = [average_precision([s[i] for i in ix], [labels[i] for i in ix]) for ix in targets.values()]
+        aucs = [auroc([s[i] for i in ix], [labels[i] for i in ix]) for ix in targets.values()]
+        return st.fmean(aps), st.fmean(a for a in aucs if a is not None)
+
+    def random_ap(targets):
+        return st.fmean(sum(labels[i] for i in ix) / len(ix) for ix in targets.values())
+
     w("## 3. Separating designs that bound in the lab from those that did not\n")
     w(
-        f"{len(labelled)} designs with an outcome, {sum(labels)} binders "
-        f"(prevalence {prevalence:.3f}, the AP of a random ranking). Higher AP and AUROC are "
-        "better; each metric is oriented so that larger means more likely to bind. Missing "
-        "values rank last. Pooled over all 15 targets.\n"
+        f"{len(labelled)} designs with an outcome, {sum(labels)} binders, {len(by_target)} targets "
+        f"({len(scored)} with at least one binder, {len(solid)} with at least {min_binders}). Higher "
+        "AP and AUROC are better; each metric is oriented so that larger means more likely to bind. "
+        "Missing values rank last.\n"
     )
-    w("| metric | source | AP | AUROC |")
-    w("|---|---|---|---|")
+    w(
+        "**Per target** is the mean over targets of the AP (AUROC) of ranking that target's designs, "
+        "which is how a design campaign uses the score. A random ranking's AP is the binder rate: "
+        f"{random_ap(scored):.3f} averaged over the {len(scored)} targets, {random_ap(solid):.3f} over "
+        f"the {len(solid)}. **Pooled** ranks all designs together; its random AP is {prevalence:.3f}. "
+        "Pooled numbers mostly measure which targets are easy, so read the per-target columns.\n"
+    )
+    w(
+        f"| metric | source | AP per target | AUROC per target | AP per target (≥{min_binders} binders) "
+        "| AP pooled | AUROC pooled |"
+    )
+    w("|---|---|---|---|---|---|---|")
+    neg = lambda v: None if v is None else -v
     metrics = [
         ("ipSAE_min", "proteus", lambda o, x: o["ipsae_min"]),
         ("ipSAE_min", "dataset (AF3)", lambda o, x: num(x["af3_ipSAE_min"])),
+        ("ipSAE d0chn", "dataset (AF3)", lambda o, x: num(x["af3_ipSAE_d0chn"])),
         ("ipSAE_max", "proteus", lambda o, x: o["ipsae_max"]),
-        ("ipTM", "proteus (from AF3's file)", lambda o, x: o["iptm"]),
-        ("−ipAE", "proteus", lambda o, x: None if o["ipae"] is None else -o["ipae"]),
         ("LIS", "proteus", lambda o, x: o["lis"]),
+        ("−ipAE", "proteus", lambda o, x: neg(o["ipae"])),
+        ("pDockQ2_min", "dataset (AF3)", lambda o, x: num(x["af3_pDockQ2_min"])),
+        ("ipTM", "proteus (from AF3's file)", lambda o, x: o["iptm"]),
         ("pLDDT (mean)", "proteus", lambda o, x: o["plddt_mean"]),
         ("Sc", "proteus", lambda o, x: o["interface_sc"]),
         ("Sc", "dataset (Rosetta)", lambda o, x: num(x["af3_rosetta_interface_sc"])),
+        ("actifpTM", "dataset (ColabFold)", lambda o, x: num(x["colab_actifptm_avg"])),
+        ("−interface ΔG", "dataset (Rosetta)", lambda o, x: neg(num(x["af3_rosetta_interface_dG"]))),
         ("dSASA", "proteus", lambda o, x: o["interface_dsasa"]),
         ("interface H-bonds", "proteus", lambda o, x: o["interface_hbonds"]),
         (
@@ -222,7 +256,25 @@ def main():
     for name, source, f in metrics:
         s = [f(o, ref[o["_id"]]) for o in labelled]
         s = [v if v is not None else -1e18 for v in s]
-        w(f"| {name} | {source} | {average_precision(s, labels):.3f} | {auroc(s, labels):.3f} |")
+        ap_t, auc_t = per_target(s, scored)
+        ap_s, _ = per_target(s, solid)
+        w(
+            f"| {name} | {source} | {ap_t:.3f} | {auc_t:.3f} | {ap_s:.3f} | "
+            f"{average_precision(s, labels):.3f} | {auroc(s, labels):.3f} |"
+        )
+    w("")
+
+    w("Per target, ranked by Proteus's `ipsae_min`:\n")
+    w("| target | designs | binders | random AP | AP | AUROC |")
+    w("|---|---|---|---|---|---|")
+    s = [o["ipsae_min"] if o["ipsae_min"] is not None else -1e18 for o in labelled]
+    for t, ix in sorted(by_target.items(), key=lambda kv: -len(kv[1])):
+        ts, tl = [s[i] for i in ix], [labels[i] for i in ix]
+        ap, auc = average_precision(ts, tl), auroc(ts, tl)
+        w(
+            f"| {t} | {len(ix)} | {sum(tl)} | {sum(tl) / len(tl):.3f} | "
+            f"{'–' if ap is None else f'{ap:.3f}'} | {'–' if auc is None else f'{auc:.3f}'} |"
+        )
     w("")
     thr = tol["outcome"]["ipsae_min_threshold"]
     sel = [l for o, l in zip(labelled, labels) if (o["ipsae_min"] or 0) > thr]
