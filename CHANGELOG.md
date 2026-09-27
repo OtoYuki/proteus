@@ -64,11 +64,15 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   against a random 0.093 on a set already filtered by ipSAE. Results are in
   `validate/nipah/last_run.md`.
 - PAE files from complexes with ligands or modified residues are read. AlphaFold 3-style
-  predictors write one row per token (one per standard residue, one per heavy atom of anything
-  else); the protein residues' rows are now picked out in file order, where before the matrix
-  was refused as the wrong size. On a Boltz-2 HIV protease + MK1 model (198 residues, 243
-  tokens) ipSAE and LIS equal `ipsae.py`'s. This is the case behind `ipsae.py`'s
-  `index N is out of bounds` failures (DunbrackLab/IPSAE #20, #28).
+  predictors write one row per token (one per standard residue, one per ligand heavy atom; a
+  modified residue is one token in Boltz-2 and one per atom in AlphaFold 3); the protein
+  residues' rows are now picked out in file order, under whichever convention accounts for
+  every row, where before the matrix was refused as the wrong size. ipSAE and LIS equal
+  `ipsae.py`'s on a Boltz-2 HIV protease + MK1 model (198 residues, 243 tokens). On Boltz-2
+  folds with a modified residue, `ipsae.py` (v4) assumes one token per atom: with a
+  phosphoserine alone it stops with `index 86 is out of bounds` (DunbrackLab/IPSAE #28); with a
+  phosphoserine and ATP it runs and reports ipSAE 0.619 where the value is 0.253. Proteus gives
+  0.253, as does `ipsae.py` itself once the ATP is removed and the SEP read as SER.
 - Protenix (`*_sample_N.cif`, `token_pair_pae`), OpenFold3 (`*_confidences.json`/`.npz`,
   `*_confidences_aggregated.json`) and Chai-1 (`scores.model_idx_N.npz`) outputs are found
   beside their models, file names checked against each predictor's writer. float16 `.npy`

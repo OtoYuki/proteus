@@ -187,11 +187,13 @@ END
 /// in the order [`crate::io::protein_heavy_atoms`] keeps them.
 ///
 /// AlphaFold 3, Boltz, Chai-1, Protenix and OpenFold3 give a standard residue or nucleotide one
-/// token and anything else one token per heavy atom, in input order, which is file order. A
-/// modified residue in a protein chain is one of those; its row is its CA atom's, as `ipsae.py`
-/// takes it. Waters are not tokenised. `ipsae.py`'s `index N is out of bounds` failures on
-/// Boltz-2 complexes (DunbrackLab/IPSAE #20, #28) are a miscount of exactly this.
-pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> (usize, Vec<usize>) {
+/// token and a ligand one token per heavy atom, in input order, which is file order. Waters are
+/// not tokenised. A modified residue in a protein chain differs by predictor: AlphaFold 3 gives
+/// it one token per heavy atom (`modified_per_atom`; its row is then its CA atom's, as
+/// `ipsae.py` takes it), Boltz-2 one token (measured: a SEP in a 30 + 56-residue complex gives
+/// an 86-row PAE). `ipsae.py`'s `index N is out of bounds` failures on Boltz-2 complexes
+/// (DunbrackLab/IPSAE #20, #28) are a miscount of exactly this.
+pub fn protein_token_rows(pdb: &pdbtbx::PDB, modified_per_atom: bool) -> (usize, Vec<usize>) {
     use crate::io::{is_hydrogen, is_protein_residue, is_standard_amino_acid};
     const NUCLEOTIDES: &[&str] = &["A", "C", "G", "U", "DA", "DC", "DG", "DT", "N", "DN"];
     let mut pdb = pdb.clone();
@@ -214,7 +216,10 @@ pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> (usize, Vec<usize>) {
             continue;
         }
         let protein = is_protein_residue(residue);
-        if is_standard_amino_acid(name) || NUCLEOTIDES.contains(&name) {
+        if is_standard_amino_acid(name)
+            || NUCLEOTIDES.contains(&name)
+            || (protein && !modified_per_atom)
+        {
             if protein {
                 rows.push(next);
             }
@@ -950,7 +955,9 @@ mod tests {
     #[test]
     fn token_rows_follow_the_file_order() {
         let pdb = crate::io::open_structure_bytes(TOKEN_TEST_PDB, Some("x.pdb")).unwrap();
-        assert_eq!(protein_token_rows(&pdb), (11, vec![0, 2, 6, 10]));
+        assert_eq!(protein_token_rows(&pdb, true), (11, vec![0, 2, 6, 10]));
+        // Boltz-2: the SEP is one token.
+        assert_eq!(protein_token_rows(&pdb, false), (7, vec![0, 1, 2, 6]));
     }
 
     #[test]
