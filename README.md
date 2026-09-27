@@ -69,7 +69,7 @@ it is not validated against experimental stability or activity. For a sequence-l
 Structures the offline simulator produced are tagged `engine = simulated` and kept out of the
 leaderboard unless you pass `--runner simulated`. A tier that silently fell back tells you which
 tier you asked for and why it could not honour it. Every export row carries the `engine` column;
-the Parquet file is tagged `proteus.schema_version = 4` and reads directly into DuckDB, Polars
+the Parquet file is tagged `proteus.schema_version = 5` and reads directly into DuckDB, Polars
 or PyArrow.
 
 ## 2. Triage a folder of predicted models
@@ -83,14 +83,27 @@ A folding or design campaign ends with a directory of hundreds or thousands of m
 question of which ones are worth looking at. `analyze` over a directory gives one row per
 structure — sequence, chain and residue counts, pLDDT (only when the file really carries one),
 DSSP composition and string, MolProbity-contour Ramachandran, SASA and burial, heavy-atom
-overlaps, the interaction network, Rg against the folded-protein law, optional Kabsch RMSD to a
-reference, and the triage score — computed in parallel and written as Parquet, CSV or JSON.
+overlaps, covalent geometry and rotamers, the interaction network, Rg against the
+folded-protein law, optional Kabsch RMSD to a reference, and the triage score — computed in
+parallel and written as Parquet, CSV or JSON.
+
+The covalent-geometry columns are MolProbity's checks as Phenix runs them: bond-length and
+bond-angle RMSZ and outliers against the Phenix restraint library (geostd, with the backbone
+from the Conformation-Dependent Library), chirality and planarity, Cβ deviation, cis and
+twisted peptides, and Top8000 rotamers. They reproduce cctbx residue by residue (section 4).
+They answer a question pLDDT does not: whether the model is chemically sound. ESMFold, like
+every AlphaFold2-style structure module, learns the peptide bond and returns the model
+unrelaxed. Every one of 13 ESMFold models in the corpus has bond-length outliers, mostly short
+peptide C–N bonds in residues it is confident about, and not one of them has any after an
+AlphaFold2-style Amber relaxation that moves no Cα by more than 0.14 Å
+([`validate/predicted/`](validate/predicted/README.md)).
 
 ```sql
 -- duckdb
-SELECT model, plddt_mean, rama_outliers, rg_ratio
+SELECT model, plddt_mean, rama_outliers, rg_ratio, bond_outliers, rotamer_outlier_pct
 FROM 'qc.parquet'
 WHERE plddt_mean > 80 AND rama_outliers = 0 AND rg_ratio < 1.3
+  AND handedness_swaps = 0 AND cis_nonpro = 0
 ORDER BY fitness DESC;
 ```
 
@@ -177,6 +190,9 @@ This runs on every push (`.github/workflows/validate.yml`). Tolerances are the c
 | Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii), two documented exceptions |
 | hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–79 % — heavy-atom criteria over-detect by 1.3–1.7× |
 | salt bridges, π–π stacking, cation–π | PLIP, intra-chain, 15 structures | salt bridges **97.7 %** precision / 72 % recall; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %** |
+| covalent geometry: bonds, angles, chirality, planarity (Phenix restraint library) | cctbx `pdb_interpretation` + `mmtbx.validation.restraints`, 53 corpus files and 13 ESMFold models | every restraint count and every > 4σ outlier identical; RMSZ within 5e-6 |
+| Cβ deviation, cis/twisted peptides | cctbx `cbetadev`, `omegalyze` | every residue: Cβ within 0.001 Å, ω within 0.01°, flags identical |
+| side-chain rotamers (Top8000) | cctbx `rotalyze` | 26 469 of 26 469 residues identical (χ within 5e-4°, percentile within 5e-5) |
 | heavy-atom steric overlap | none exists with these definitions | labelled as ours, not compared |
 | Kabsch RMSD, contact density, burial, triage score | none | unit-tested only; the score is checked against decoys (40/40), not against experiment |
 
@@ -233,6 +249,7 @@ Proteus is not the only Rust implementation of any one of its parts.
 | structure prediction and design **inside the binary** (ESMFold, ProteinMPNN, RFdiffusion2 on CPU) | [folding-everywhere](https://github.com/lingxusb/folding-everywhere). Proteus dispatches prediction to containers and APIs instead |
 | a terminal viewer with iTerm2 support and more polish | [ProteinView](https://github.com/001TMF/ProteinView) |
 | interactive analysis in a browser | [Mol\*](https://molstar.org), which Proteus does not try to replace |
+| a full validation report with the all-atom **clashscore** (Reduce hydrogens + Probe) | [MolProbity](https://molprobity.biochem.duke.edu) or `phenix.molprobity`. Proteus reproduces MolProbity's covalent-geometry, Cβ, ω and rotamer checks, not its all-atom contacts |
 
 **What this is not.** Not a folding engine — it orchestrates ESMFold and Boltz rather than
 predicting structure itself, and no prediction image is published (build or pull one and point
@@ -254,6 +271,7 @@ Same metric, same file, median wall-clock. Full table in [`bench/README.md`](ben
 | SASA | 2.3–4.7× mdtraj's C++ kernel (960 points each), ~33× Biopython (96 vs 100 points) |
 | DSSP | 1.3–12× mdtraj |
 | φ/ψ + Ramachandran | 33–159× mdtraj's φ/ψ API |
+| covalent geometry + rotamers | 1AON (58 674 atoms): 0.07 s, against 31.5 s for the same cctbx checks run once on the same laptop (not in the bench harness) |
 
 6VXX (22 812 atoms), full profile: 0.69 s. Crambin: ~9 ms.
 
@@ -317,6 +335,17 @@ All-atom, pure Rust, O(N) through spatial cell lists.
   and disulfides. This is **not** the MolProbity clashscore, which adds hydrogens with Reduce
   first. It under-counts on deposited structures and is meant as a relative screen for grossly
   overlapping predicted models.
+- **Covalent geometry** — every bond length, bond angle, chiral volume and planar group of
+  the 20 amino acids and selenomethionine against Phenix's default restraints: geostd monomers
+  (Engh & Huber 1991), the Conformation-Dependent Library v1.2 for the backbone of every
+  residue linked on both sides, Engh & Huber 1999 targets for cis-proline, peptide links,
+  C-terminal carboxylates and disulfides. Symmetric side-chain atoms named against the IUPAC
+  convention are swapped first, as Phenix does. Outliers beyond 4σ, RMSZ per restraint type.
+  Heavy atoms only, so it works on predicted models.
+- **Cβ deviation and ω** — MolProbity's cbetadev (≥ 0.25 Å) and omegalyze (cis within 30° of
+  0°, twisted between 30° and 150°).
+- **Rotamers** — the seventeen Top8000 χ-angle distributions, outlier below 0.3 %, allowed below
+  2 %, with rotamer names, as MolProbity's rotalyze.
 - **Superposition** — Kabsch, via SVD on the 3×3 covariance matrix (`nalgebra`).
 
 ## ESM-2, in pure Rust
@@ -512,10 +541,12 @@ proteus analyze models/ --reference wt.pdb -j 8 --top 50
 
 Directories are searched recursively for `.pdb`, `.ent`, `.cif` and `.mmcif`, each optionally
 gzipped. `--confidence-source predicted|experimental` overrides the pLDDT-vs-B-factor detection.
-The Parquet file is tagged `proteus.qc_schema_version = 1`.
+The Parquet file is tagged `proteus.qc_schema_version = 2` (2 added the eleven covalent-geometry
+columns).
 
 1CRN (crambin). It is an X-ray structure, so no pLDDT is reported — the B-factor column is not
-a confidence and Proteus will not pretend it is:
+a confidence and Proteus will not pretend it is. The ten worst covalent-geometry outliers follow
+the table (`--json` carries up to 100):
 
 ```
 ┌──────────────────────────────────────────┬───────────────────────────────────────────────────────────────────┐
@@ -535,7 +566,19 @@ a confidence and Proteus will not pretend it is:
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Heavy-atom steric overlap (>0.4 Å, no H) ┆ 0.0 per 1k atoms (0 overlaps)                                     │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-│ Hydrogen Bonds (H-Bonds)                 ┆ 54 total (43 BB-BB, 10 BB-SC, 1 SC-SC)                            │
+│ Bond lengths (geostd + CDL)              ┆ RMSZ 1.50 | 2 of 337 beyond 4σ                                    │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Bond angles (geostd + CDL)               ┆ RMSZ 1.55 | 10 of 466 beyond 4σ                                   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Chirality | planarity                    ┆ 0 chiral outliers (0 inverted) | 0 planar groups beyond 4σ        │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Cβ deviation (≥0.25 Å)                   ┆ 0 of 42 residues                                                  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Peptide ω                                ┆ 0 cis-Pro | 0 cis non-Pro | 0 twisted (of 45)                     │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Rotamers (Top8000)                       ┆ outliers 0.0% (0 of 37) | allowed 1                               │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Hydrogen Bonds (H-Bonds)                 ┆ 53 total (42 BB-BB, 10 BB-SC, 1 SC-SC)                            │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Ionic Salt Bridges (≤4.0Å)               ┆ 1 detected (closest: ARG17:NH2-GLU23:OE2 3.97Å)                   │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
@@ -543,10 +586,34 @@ a confidence and Proteus will not pretend it is:
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Cation-π Interactions                    ┆ 0 active interactions                                             │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
-│ Non-Covalent Network Density             ┆ 119.6 contacts / 100 res                                          │
+│ Non-Covalent Network Density             ┆ 117.4 contacts / 100 res                                          │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ Candidate Fitness Score                  ┆ 98.2 / 100                                                        │
 └──────────────────────────────────────────┴───────────────────────────────────────────────────────────────────┘
+┌─────────────────────────┬───────────────────────────────────────────┬─────────┬─────────┬──────┐
+│ Worst geometry outliers ┆ Atoms                                     ┆ Ideal   ┆ Model   ┆ Z    │
+╞═════════════════════════╪═══════════════════════════════════════════╪═════════╪═════════╪══════╡
+│ angle                   ┆ A 14 ASN OD1 – A 14 ASN CG – A 14 ASN ND2 ┆ 122.600 ┆ 128.625 ┆ -6.0 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ bond                    ┆ A 37 GLY N – A 37 GLY CA                  ┆ 1.447   ┆ 1.518   ┆ -5.8 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 7 ILE CA – A 7 ILE C – A 7 ILE O        ┆ 120.950 ┆ 115.385 ┆ +5.4 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 12 ASN OD1 – A 12 ASN CG – A 12 ASN ND2 ┆ 122.600 ┆ 127.608 ┆ -5.0 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 36 PRO C – A 37 GLY N – A 37 GLY CA     ┆ 122.550 ┆ 117.411 ┆ +4.7 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 21 THR O – A 21 THR C – A 22 PRO N      ┆ 121.270 ┆ 125.513 ┆ -4.4 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 1 THR CA – A 1 THR CB – A 1 THR OG1     ┆ 109.600 ┆ 103.060 ┆ +4.4 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 34 ILE O – A 34 ILE C – A 35 ILE N      ┆ 123.180 ┆ 127.746 ┆ -4.3 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ angle                   ┆ A 45 ALA N – A 45 ALA CA – A 45 ALA CB    ┆ 110.440 ┆ 103.984 ┆ +4.2 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌┤
+│ bond                    ┆ A 35 ILE N – A 35 ILE CA                  ┆ 1.461   ┆ 1.497   ┆ -4.2 │
+└─────────────────────────┴───────────────────────────────────────────┴─────────┴─────────┴──────┘
+2 more outliers not shown.
 ```
 
 ### `proteus submit`, `status`, `inspect` — jobs
@@ -615,6 +682,17 @@ N–H···O hydrogen bond and salt bridge (2.5–3.1 Å) overlaps by more than 
 avoids calling them clashes because it adds the hydrogens first. Before 0.9 Proteus counted them:
 all 3 "overlaps" in a Boltz ubiquitin model and all 4 in AF-P69905 were hydrogen bonds or salt
 bridges; with the exclusion they are 0, and 1HSG's 7 are 3.
+
+### Covalent geometry
+
+For each restraint with target $x_0$ and esd $\sigma$, $Z = (x_0 - x)/\sigma$; a restraint is
+an outlier when $|Z| > 4$, and $\text{RMSZ} = \sqrt{\tfrac{1}{n}\sum Z^2}$ over all $n$
+restraints of a type (≈ 1 for a well-refined structure). Chiral volume for a centre $c$ with
+neighbours $a, b, d$: $V = (a - c)\cdot\big((b - c)\times(d - c)\big)$, $\sigma = 0.2$ Å³; a centre
+is counted as **inverted** only when $V$ lies on the other side of zero by at least half the
+ideal magnitude. A planar group is scored by the largest distance of an atom from the
+weighted least-squares plane, divided by that atom's esd. Cβ deviation is the distance from
+the modelled CB to the mean of two ideal CB positions built from N, CA, C.
 
 ### Non-covalent interactions
 

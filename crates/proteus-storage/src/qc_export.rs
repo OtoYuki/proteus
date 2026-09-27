@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 /// Version of the structure-QC table (CSV/JSON columns, Parquet fields), written to the
 /// Parquet key-value metadata as `proteus.qc_schema_version`.
-pub const QC_SCHEMA_VERSION: u32 = 1;
+pub const QC_SCHEMA_VERSION: u32 = 2;
 
 /// Column names, in order. CSV header, Arrow schema and JSON field names all agree.
 pub const QC_COLUMNS: &[&str] = &[
@@ -43,6 +43,17 @@ pub const QC_COLUMNS: &[&str] = &[
     "hydrophobic_burial_pct",
     "heavy_atom_overlap_score",
     "overlap_count",
+    "bond_rmsz",
+    "bond_outliers",
+    "angle_rmsz",
+    "angle_outliers",
+    "chirality_outliers",
+    "handedness_swaps",
+    "planarity_outliers",
+    "cbeta_outliers",
+    "cis_nonpro",
+    "twisted_peptides",
+    "rotamer_outlier_pct",
     "hbond_count",
     "salt_bridge_count",
     "pi_stacking_count",
@@ -56,6 +67,7 @@ enum Col {
     Int(fn(&StructureQc) -> usize),
     F64(fn(&StructureQc) -> f64),
     OptF64(fn(&StructureQc) -> Option<f64>),
+    OptInt(fn(&StructureQc) -> Option<usize>),
 }
 
 fn columns() -> Vec<Col> {
@@ -85,6 +97,17 @@ fn columns() -> Vec<Col> {
         F64(|r| r.hydrophobic_burial_pct),
         F64(|r| r.heavy_atom_overlap_score),
         Int(|r| r.overlap_count),
+        OptF64(|r| r.bond_rmsz),
+        OptInt(|r| r.bond_outliers),
+        OptF64(|r| r.angle_rmsz),
+        OptInt(|r| r.angle_outliers),
+        OptInt(|r| r.chirality_outliers),
+        OptInt(|r| r.handedness_swaps),
+        OptInt(|r| r.planarity_outliers),
+        OptInt(|r| r.cbeta_outliers),
+        OptInt(|r| r.cis_nonpro),
+        OptInt(|r| r.twisted_peptides),
+        OptF64(|r| r.rotamer_outlier_pct),
         Int(|r| r.hbond_count),
         Int(|r| r.salt_bridge_count),
         Int(|r| r.pi_stacking_count),
@@ -104,6 +127,7 @@ pub fn qc_schema() -> Schema {
             Col::Int(_) => Field::new(*name, DataType::Int64, false),
             Col::F64(_) => Field::new(*name, DataType::Float64, false),
             Col::OptF64(_) => Field::new(*name, DataType::Float64, true),
+            Col::OptInt(_) => Field::new(*name, DataType::Int64, true),
         })
         .collect::<Vec<_>>();
     Schema::new(fields)
@@ -119,6 +143,11 @@ pub fn qc_to_record_batch(rows: &[StructureQc]) -> Result<RecordBatch, arrow_sch
                 Col::Int(f) => Arc::new(rows.iter().map(|r| f(r) as i64).collect::<Int64Array>()),
                 Col::F64(f) => Arc::new(rows.iter().map(|r| Some(f(r))).collect::<Float64Array>()),
                 Col::OptF64(f) => Arc::new(rows.iter().map(f).collect::<Float64Array>()),
+                Col::OptInt(f) => Arc::new(
+                    rows.iter()
+                        .map(|r| f(r).map(|v| v as i64))
+                        .collect::<Int64Array>(),
+                ),
             }
         })
         .collect();
@@ -165,6 +194,7 @@ pub fn export_qc_to_csv(rows: &[StructureQc]) -> String {
                 Col::Int(f) => f(r).to_string(),
                 Col::F64(f) => f(r).to_string(),
                 Col::OptF64(f) => f(r).map(|v| v.to_string()).unwrap_or_default(),
+                Col::OptInt(f) => f(r).map(|v| v.to_string()).unwrap_or_default(),
             })
             .collect();
         out.push_str(&fields.join(","));
@@ -236,6 +266,17 @@ mod tests {
             hydrophobic_burial_pct: 10.0,
             heavy_atom_overlap_score: 0.0,
             overlap_count: 0,
+            bond_rmsz: Some(0.8),
+            bond_outliers: Some(0),
+            angle_rmsz: Some(1.1),
+            angle_outliers: Some(1),
+            chirality_outliers: Some(0),
+            handedness_swaps: Some(0),
+            planarity_outliers: Some(0),
+            cbeta_outliers: Some(0),
+            cis_nonpro: Some(0),
+            twisted_peptides: Some(0),
+            rotamer_outlier_pct: None,
             hbond_count: 1,
             salt_bridge_count: 0,
             pi_stacking_count: 0,
