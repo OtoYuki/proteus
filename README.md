@@ -64,7 +64,8 @@ chain A against every other chain. For every model it adds two groups of columns
   cutoff), buried surface (dSASA), shape complementarity (Sc, Lawrence & Colman 1993), and
   hydrogen bonds and salt bridges across the interface.
 - **From the predictor's own files beside the model:** ipTM, ipAE, ipSAE and LIS. Proteus reads
-  Boltz, ColabFold, AlphaFold 3 (local runs and the AlphaFold Server) and AlphaFold DB files. ipSAE
+  Boltz, AlphaFold 3 (local runs and the AlphaFold Server), Protenix, OpenFold3, ColabFold and
+  AlphaFold DB files, and Chai-1's scores (below). ipSAE
   (Dunbrack 2025) is the pTM-style score over only the residue pairs the predictor is confident
   about. It is reported both ways round, binder→target and target→binder, and `ipsae_min` is the
   smaller of the two.
@@ -660,9 +661,20 @@ takes the first chain against the rest. The PAE and scores files are found besid
 - AlphaFold 3 run locally: `<name>_confidences.json` and `<name>_summary_confidences.json`
   beside `<name>_model.cif`, or `confidences.json` beside a sample's `model.cif`.
 - AlphaFold Server: `<name>_full_data_<k>.json`.
+- Protenix: `<job>_full_data_sample_<k>.json` (written with `--need_atom_confidence`) and
+  `<job>_summary_confidence_sample_<k>.json` beside `<job>_sample_<k>.cif`.
+- OpenFold3: `…_confidences.json` or `.npz` and `…_confidences_aggregated.json` beside
+  `…_model.cif`.
+- Chai-1: `scores.model_idx_<k>.npz` (pTM, ipTM) beside `pred.model_idx_<k>.cif`. Chai-1's
+  command line writes no PAE; a `pae.model_idx_<k>.npy` saved from its Python API is read. This
+  is checked against Chai-1's source, not on its output: it needs more than a 6 GB GPU.
 
-The PAE metrics need one PAE row per protein residue in file order. When a matrix does not fit
-the model, for example because it has ligand tokens, those columns stay empty.
+AlphaFold 3-style predictors write one PAE row per token: one per standard residue, one per
+heavy atom of a ligand, and for a modified residue one per atom (AlphaFold 3, Boltz-1,
+Protenix, OpenFold3) or one (Boltz-2). The protein residues' rows are picked out under whichever
+convention accounts for every row, so complexes with ligands and modified residues are scored.
+Real Boltz-2, Protenix and OpenFold3 output of such a complex is checked in the tests. When a
+matrix fits the model under neither, the PAE columns stay empty and `analyze` says why.
 
 1CRN (crambin). It is an X-ray structure, so no pLDDT is reported — the B-factor column is not
 a confidence and Proteus will not pretend it is. The ten worst covalent-geometry outliers follow
