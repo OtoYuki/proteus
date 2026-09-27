@@ -265,3 +265,43 @@ fn protenix_output_with_a_modified_residue_and_a_ligand() {
     near(i.ipae, 15.095940);
     near(i.iptm, 0.265748);
 }
+
+fn interface_of(dir: &std::path::Path, model: &str) -> proteus_core::qc::InterfaceColumns {
+    let spec = InterfaceSpec::parse("A:B").unwrap();
+    proteus_core::qc::structure_qc_with(
+        &dir.join(model),
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .interface
+}
+
+fn near(ours: Option<f64>, theirs: f64) {
+    let v = ours.unwrap();
+    assert!((v - theirs).abs() < 1e-6, "{v} vs {theirs}");
+}
+
+/// OpenFold3 output as written, with its PAE in `_confidences.json` and, from a second run, in a
+/// float16 `_confidences.npz`; ipTM from `_confidences_aggregated.json`.
+#[test]
+fn openfold3_output_in_both_confidence_formats() {
+    let model = "sepatp_seed_2746317213_sample_1_model.cif";
+    let dir = unpack(&data("predictors/openfold3_json"));
+    let i = interface_of(dir.path(), model);
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.012872);
+    near(i.ipsae_min, 0.010942);
+    near(i.lis, 0.105125);
+    near(i.ipae, 15.979549);
+    near(i.iptm, 0.27203);
+
+    let dir = unpack(&data("predictors/openfold3_npz"));
+    let i = interface_of(dir.path(), model);
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.012945);
+    near(i.ipsae_min, 0.011067);
+    near(i.iptm, 0.269767);
+}
