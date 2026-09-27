@@ -17,11 +17,12 @@ use ratatui::widgets::{
     Block, Borders, Cell, Clear, List, ListItem, ListState, Paragraph, Row, Table, TableState, Wrap,
 };
 use ratatui::Frame;
+use std::path::Path;
 
-/// Rows the full header takes (name line, tabs, hairline); a short terminal gets one row.
+/// Rows the header takes: the bar and a hairline under it; a short terminal gets the bar only.
 fn header_rows(area: Rect) -> u16 {
     if area.height >= 18 && area.width >= 60 {
-        3
+        2
     } else {
         1
     }
@@ -39,7 +40,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     .areas(f.area());
 
     draw_header(f, top, app);
-    let body = body.inner(ratatui::layout::Margin::new(1, 0));
+    let body = body.inner(ratatui::layout::Margin::new(2, 1));
     match app.tab {
         Tab::Jobs => draw_jobs(f, body, app),
         Tab::Structures => draw_structures(f, body, app),
@@ -55,65 +56,49 @@ pub fn draw(f: &mut Frame, app: &App) {
 // ---------------------------------------------------------------------------------------------
 // Header, key hints, status line
 
+/// The tabs as one segmented control: the showing tab filled in the accent, the others quiet,
+/// each with its number key.
 fn tab_spans(app: &App) -> Vec<Span<'static>> {
     let look = &app.look;
     let mut spans = Vec::new();
     for (i, t) in Tab::ALL.iter().enumerate() {
-        let active = *t == app.tab;
-        spans.push(Span::styled(format!("{} ", i + 1), look.dim()));
-        let name = format!("({})", t.title().to_lowercase());
-        spans.push(if active {
-            Span::styled(
-                name,
-                look.accent()
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )
+        let name = t.title().to_lowercase();
+        if *t == app.tab {
+            spans.push(Span::styled(format!(" {} {name} ", i + 1), look.tab_on()));
         } else {
-            Span::styled(name, look.muted())
-        });
-        spans.push(Span::raw("   "));
+            spans.push(Span::styled(format!(" {} ", i + 1), look.dim()));
+            spans.push(Span::styled(format!("{name} "), look.muted()));
+        }
+        spans.push(Span::raw(" "));
     }
     spans
 }
 
 fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let look = &app.look;
-    let name = vec![
-        Span::styled(" proteus", look.accent().add_modifier(Modifier::BOLD)),
-        Span::styled(concat!("  v", env!("CARGO_PKG_VERSION")), look.dim()),
+    let [bar, rule] = if area.height >= 2 {
+        Layout::vertical([Constraint::Length(1); 2]).areas(area)
+    } else {
+        [area, Rect::default()]
+    };
+    let mut spans = vec![
+        Span::styled("  proteus", look.accent().add_modifier(Modifier::BOLD)),
+        Span::raw("    "),
     ];
-    if area.height < 3 {
-        let mut spans = name;
-        spans.push(Span::raw("   "));
-        spans.extend(tab_spans(app));
-        f.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
-    }
-    let [top, tabs, rule] = Layout::vertical([Constraint::Length(1); 3]).areas(area);
-    f.render_widget(Paragraph::new(Line::from(name)), top);
-    f.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("{} ", brand::SIGNATURE),
-            look.dim(),
-        )))
-        .alignment(Alignment::Right),
-        top,
-    );
-    let mut spans = vec![Span::raw(" ")];
     spans.extend(tab_spans(app));
-    f.render_widget(Paragraph::new(Line::from(spans)), tabs);
-    // The jobs at a glance, right-aligned under the signature: each state as glyph and word.
-    let summary = job_summary(app);
-    if !summary.is_empty() {
+    f.render_widget(Paragraph::new(Line::from(spans)), bar);
+    let mut right = job_summary(app);
+    right.push(Span::styled("  ", look.dim()));
+    f.render_widget(
+        Paragraph::new(Line::from(right)).alignment(Alignment::Right),
+        bar,
+    );
+    if rule.height > 0 {
         f.render_widget(
-            Paragraph::new(Line::from(summary)).alignment(Alignment::Right),
-            tabs,
+            Block::new().borders(Borders::TOP).border_style(look.line()),
+            rule,
         );
     }
-    f.render_widget(
-        Block::new().borders(Borders::TOP).border_style(look.line()),
-        rule,
-    );
 }
 
 /// "● 1 running  ✓ 7 done  ✗ 4 failed", states with no jobs left out, in the order a
@@ -153,40 +138,42 @@ fn key_hints(app: &App) -> Line<'static> {
             Tab::Jobs => &[
                 ("↑↓", "move"),
                 ("⏎", "view"),
-                ("w", "browser"),
-                ("i", "inspect"),
+                ("w", "in browser"),
+                ("i", "report"),
                 ("/", "filter"),
-                ("?", "help"),
+                ("tab", "next"),
+                ("?", "keys"),
                 ("q", "quit"),
             ],
             Tab::Structures => &[
                 ("↑↓", "move"),
                 ("⏎", "open"),
                 ("←", "up"),
-                ("w", "browser"),
-                ("a", "analyze"),
-                ("?", "help"),
+                ("w", "in browser"),
+                ("a", "report"),
+                ("tab", "next"),
+                ("?", "keys"),
                 ("q", "quit"),
             ],
             Tab::Run => &[
                 ("↑↓", "field"),
-                ("⏎", "edit / run"),
+                ("⏎", "edit · run"),
                 ("←→", "choose"),
                 ("f", "other form"),
-                ("F1", "help"),
+                ("tab", "next"),
+                ("F1", "keys"),
                 ("q", "quit"),
             ],
         }
     };
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = vec![Span::raw("  ")];
     for (k, v) in pairs {
         spans.push(Span::styled(k.to_string(), look.accent()));
         if !v.is_empty() {
-            spans.push(Span::styled(format!(" {v}"), look.dim()));
+            spans.push(Span::styled(format!(" {v}"), look.muted()));
         }
-        spans.push(Span::styled("  ·  ", look.line()));
+        spans.push(Span::raw("    "));
     }
-    spans.pop();
     Line::from(spans)
 }
 
@@ -357,13 +344,19 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Wide: the list on the left, the selected job on the right with a still of its model and
-    // its measurements. Narrow: the job under the list, filling what the list does not need.
+    // Wide: the list on the left, the selected job inspected on the right. Narrow: the list
+    // takes what it needs and the inspector the rest.
     let wide = area.width >= 120 && area.height >= 16;
     let [list, detail] = if wide {
-        Layout::horizontal([Constraint::Percentage(56), Constraint::Percentage(44)]).areas(area)
+        let [l, _, d] = Layout::horizontal([
+            Constraint::Percentage(46),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        [l, d]
     } else if area.height >= 16 {
-        let want = (visible.len() as u16 + 4).max(6);
+        let want = (visible.len() as u16 + 3).max(6);
         Layout::vertical([Constraint::Max(want), Constraint::Min(8)]).areas(area)
     } else {
         [area, Rect::default()]
@@ -376,42 +369,52 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         } else {
             look.muted()
         };
+        let failed = j.job.status == JobStatus::Failed;
         Row::new(vec![
             Cell::from(state(look, &j.job.status, app.tick)),
             Cell::from(Span::styled(
-                short_id(&j.job.id.to_string()).to_string(),
-                look.dim(),
+                j.header.clone(),
+                if failed { look.muted() } else { look.text() },
             )),
-            Cell::from(Span::styled(j.header.clone(), look.text())),
-            Cell::from(Span::styled(j.length.to_string(), look.muted())),
-            Cell::from(Span::styled(tier_slug(&j.job.tier), look.muted())),
+            Cell::from(
+                Line::from(Span::styled(j.length.to_string(), look.muted())).right_aligned(),
+            ),
+            Cell::from(
+                Line::from(match j.plddt {
+                    Some(p) => Span::styled(
+                        format!("{p:.1}"),
+                        look.data(proteus_render::rasterizer::shader::plddt_to_color(p as f32)),
+                    ),
+                    None => Span::styled("–", look.dim()),
+                })
+                .right_aligned(),
+            ),
             Cell::from(Span::styled(eng.to_string(), eng_style)),
-            Cell::from(Span::styled(
-                j.plddt.map_or(String::new(), |p| format!("{p:.1}")),
-                look.text(),
-            )),
-            Cell::from(Span::styled(age(j.job.created_at), look.dim())),
+            Cell::from(Line::from(Span::styled(age(j.job.created_at), look.dim())).right_aligned()),
         ])
     });
     let table = Table::new(
         rows,
         [
-            Constraint::Length(11),
-            Constraint::Length(8),
+            Constraint::Length(10),
             Constraint::Fill(1),
-            Constraint::Length(5),
             Constraint::Length(4),
-            Constraint::Length(12),
             Constraint::Length(5),
+            Constraint::Length(10),
             Constraint::Length(4),
         ],
     )
     .header(
         Row::new([
-            "STATE", "ID", "NAME", "LEN", "TIER", "ENGINE", "PLDDT", "AGE",
+            Cell::from("state"),
+            Cell::from("name"),
+            Cell::from(Line::from("len").right_aligned()),
+            Cell::from(Line::from("pLDDT").right_aligned()),
+            Cell::from("engine"),
+            Cell::from(Line::from("age").right_aligned()),
         ])
         .style(look.dim())
-        .bottom_margin(0),
+        .bottom_margin(1),
     )
     .column_spacing(2)
     .row_highlight_style(look.selected())
@@ -422,146 +425,445 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
 
     if detail.height > 0 {
         if let Some(j) = jobs.current() {
-            draw_job_detail(f, detail, app, j, wide);
+            draw_job_detail(f, detail, app, j);
         }
     }
 }
 
-/// The selected job: its state and times, what went wrong if it failed, and for a finished
-/// model a preview and the same measurements as `proteus analyze`.
+/// The selected job, inspected: its name and state, how it ran, why it failed if it did, and
+/// for a model the preview, the headline gauges and every measurement.
 fn draw_job_detail(
     f: &mut Frame,
     area: Rect,
     app: &App,
     j: &proteus_storage::repository::JobSummary,
-    wide: bool,
 ) {
     let look = &app.look;
-    let when = |t: Option<chrono::DateTime<Utc>>| {
-        t.map_or("—".to_string(), |t| {
-            t.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
-                .to_string()
-        })
+    let when = |t: chrono::DateTime<Utc>| {
+        t.with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string()
     };
-    let kv = |k: &str, v: String, vs: Style| {
-        Line::from(vec![
-            Span::styled(format!("{k:<8}"), look.dim()),
-            Span::styled(v, vs),
-        ])
-    };
-    let mut info = vec![Line::from(vec![
-        state(look, &j.job.status, app.tick),
-        Span::raw("   "),
-        Span::styled(j.job.id.to_string(), look.muted()),
-    ])];
-    let mut engine_line = engine(j).to_string();
-    if let Some(p) = j.plddt {
-        if !engine_line.is_empty() {
-            engine_line.push_str(" · ");
-        }
-        engine_line.push_str(&format!("mean pLDDT {p:.1}"));
+    let mut sub = vec![
+        Span::styled(short_id(&j.job.id.to_string()).to_string(), look.muted()),
+        Span::styled("  ", look.dim()),
+        Span::styled(tier_slug(&j.job.tier).to_string(), look.text()),
+    ];
+    if !engine(j).is_empty() {
+        sub.push(Span::styled(" on ", look.dim()));
+        sub.push(Span::styled(engine(j).to_string(), look.text()));
     }
-    info.push(kv(
-        "run",
-        format!(
-            "{} · {} residues · {}{}",
-            tier_slug(&j.job.tier),
-            j.length,
-            when(Some(j.job.created_at)),
-            j.job
-                .completed_at
-                .map(|t| format!(
-                    " · took {}s",
-                    (t - j.job.started_at.unwrap_or(j.job.created_at))
-                        .num_seconds()
-                        .max(0)
-                ))
-                .unwrap_or_default()
-        ),
-        look.text(),
+    sub.push(Span::styled(
+        format!("  ·  {} residues  ·  {}", j.length, when(j.job.created_at)),
+        look.dim(),
     ));
-    if !engine_line.is_empty() {
-        info.push(kv("engine", engine_line, look.text()));
+    if let Some(done) = j.job.completed_at {
+        let secs = (done - j.job.started_at.unwrap_or(j.job.created_at))
+            .num_seconds()
+            .max(0);
+        sub.push(Span::styled(format!("  ·  {secs} s"), look.dim()));
     }
+    let mut notes = Vec::new();
     if engine(j) == proteus_engine::ENGINE_SIMULATED {
-        info.push(kv(
-            "",
-            "! simulated: a synthetic helix, not a prediction".into(),
+        notes.push(Line::from(Span::styled(
+            "! simulated: a synthetic helix, not a prediction",
             look.warm(),
-        ));
+        )));
     }
     if let Some(d) = proteus_engine::tier_downgrade(j.metadata.as_ref()) {
-        info.push(kv(
-            "tier",
-            format!("! '{}' not honoured: {}", d.requested, d.reason),
+        notes.push(Line::from(Span::styled(
+            format!("! tier '{}' not honoured: {}", d.requested, d.reason),
+            look.warm(),
+        )));
+    }
+    if let Some(e) = &j.job.error_log {
+        notes.push(Line::from(vec![
+            Span::styled("✗ ", look.bad()),
+            Span::styled(e.clone(), look.text()),
+        ]));
+    }
+    if let Some(p) = &j.pdb_path {
+        notes.push(Line::from(Span::styled(
+            elide_middle(&tilde(p), area.width as usize),
+            look.dim(),
+        )));
+    }
+    let path = j.pdb_path.as_ref().map(std::path::PathBuf::from);
+    draw_inspector(
+        f,
+        area,
+        app,
+        Inspect {
+            title: j.header.clone(),
+            badge: Some(state(look, &j.job.status, app.tick)),
+            sub,
+            notes,
+            path: path.as_deref(),
+            empty: match j.job.status {
+                JobStatus::Completed => None,
+                JobStatus::Failed => Some("This job left no model."),
+                _ => Some("The model appears here when the job finishes."),
+            },
+        },
+    );
+}
+
+/// What the inspector shows about one structure (a job's model or a file).
+struct Inspect<'a> {
+    title: String,
+    badge: Option<Span<'static>>,
+    sub: Vec<Span<'static>>,
+    notes: Vec<Line<'static>>,
+    path: Option<&'a Path>,
+    /// Said where the preview and measurements would be, when there is no structure.
+    empty: Option<&'static str>,
+}
+
+/// The inspector: title and badge, an identity line, notes; then the structure's preview beside
+/// its headline card (the interface verdict and gauges); then every measurement, grouped.
+fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
+    let look = &app.look;
+    if area.width < 20 || area.height < 4 {
+        return;
+    }
+    // Title line: the name in bold, the badge right-aligned.
+    let [title, sub, notes_area, _, body] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(it.notes.len() as u16),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            it.title.clone(),
+            look.text().add_modifier(Modifier::BOLD),
+        )),
+        title,
+    );
+    if let Some(b) = it.badge {
+        f.render_widget(
+            Paragraph::new(Line::from(b)).alignment(Alignment::Right),
+            title,
+        );
+    }
+    f.render_widget(Paragraph::new(Line::from(it.sub)), sub);
+    f.render_widget(Paragraph::new(it.notes), notes_area);
+
+    let analysis = it.path.and_then(|p| app.analyses.get(p));
+    let done = match analysis {
+        Some(Analysis::Done { .. }) => analysis.unwrap(),
+        Some(Analysis::Pending) => {
+            f.render_widget(Paragraph::new(Span::styled("measuring…", look.dim())), body);
+            return;
+        }
+        Some(Analysis::Failed(why)) => {
+            f.render_widget(
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        "✗ could not measure this structure",
+                        look.bad(),
+                    )),
+                    Line::from(Span::styled(why.clone(), look.muted())),
+                ])
+                .wrap(Wrap { trim: false }),
+                body,
+            );
+            return;
+        }
+        None => {
+            if let Some(e) = it.empty {
+                f.render_widget(Paragraph::new(Span::styled(e, look.dim())), body);
+            }
+            return;
+        }
+    };
+    let Analysis::Done {
+        residues,
+        predicted,
+        rows,
+        interface,
+        verdict,
+        facts,
+    } = done
+    else {
+        return;
+    };
+
+    // Preview and card share a band as tall as the preview wants to be (about square in
+    // pixels: a cell is twice as tall as wide), capped at half the body.
+    // Numbers first: the preview only where it leaves room for them, and only when there is a
+    // structure to draw.
+    let has_pic = body.height >= 16
+        && it.path.is_some_and(|p| {
+            app.scenes.contains_key(p) || app.preview.as_ref().is_some_and(|(k, _)| k.path == p)
+        });
+    let side = body.width >= 70;
+    let card_w = if side && has_pic {
+        body.width * 48 / 100 - 2
+    } else {
+        body.width
+    };
+    let card_lines = headline_card(
+        look,
+        *residues,
+        *predicted,
+        facts.as_deref(),
+        verdict.as_ref(),
+        card_w,
+    );
+    if !has_pic {
+        let mut lines = card_lines;
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(grouped_details(look, rows, interface, body.width));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+        return;
+    }
+    let band_h = if side {
+        ((body.width as f32 * 0.5 / 2.1) as u16)
+            .max(card_lines.len() as u16)
+            .min(body.height / 2 + 2)
+            .max(8.min(body.height))
+    } else {
+        (body.height / 3).clamp(6.min(body.height), 14)
+    };
+    let [band, _, details] = Layout::vertical([
+        Constraint::Length(band_h),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(body);
+    let (pic, card) = if side {
+        let [p, _, c] = Layout::horizontal([
+            Constraint::Percentage(52),
+            Constraint::Length(2),
+            Constraint::Min(0),
+        ])
+        .areas(band);
+        (p, Some(c))
+    } else {
+        (band, None)
+    };
+    if let Some(path) = it.path {
+        draw_preview_pane(f, pic, app, path);
+    }
+    let mut detail_lines = Vec::new();
+    match card {
+        Some(c) => f.render_widget(Paragraph::new(card_lines).wrap(Wrap { trim: false }), c),
+        None => detail_lines.extend(card_lines),
+    }
+    detail_lines.extend(grouped_details(look, rows, interface, details.width));
+    f.render_widget(
+        Paragraph::new(detail_lines).wrap(Wrap { trim: false }),
+        details,
+    );
+}
+
+/// The inspector's headline: the interface verdict for a complex, then gauges for confidence,
+/// backbone, fold and the triage score.
+fn headline_card(
+    look: &Look,
+    residues: usize,
+    predicted: bool,
+    facts: Option<&super::app::Facts>,
+    verdict: Option<&(bool, String)>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    if let Some((ok, text)) = verdict {
+        let (mark, rest) = text.split_once(" · ").unwrap_or((text.as_str(), ""));
+        out.push(Line::from(Span::styled(
+            mark.to_string(),
+            if *ok { look.accent() } else { look.warm() }.add_modifier(Modifier::BOLD),
+        )));
+        out.push(Line::from(Span::styled(rest.to_string(), look.muted())));
+        out.push(Line::from(""));
+    }
+    let Some(fx) = facts else {
+        return out;
+    };
+    // The bars take what the labels (11) and the longest value (~20) leave, 8 to 18 cells.
+    let w_ = (width as usize).saturating_sub(11 + 20).clamp(8, 18);
+    #[allow(non_snake_case)]
+    let W = w_;
+    let label = |s: &str| Span::styled(format!("{s:<11}"), look.dim());
+    // pLDDT gauge in AlphaFold's own band colours, or the B-factor warning.
+    match (fx.plddt, predicted) {
+        (Some(p), true) => {
+            let c = proteus_render::rasterizer::shader::plddt_to_color(p as f32);
+            let mut l = vec![label("pLDDT")];
+            l.extend(gauge(look, p / 100.0, W, look.data(c)));
+            l.push(Span::styled(format!(" {p:.1}"), look.text()));
+            out.push(Line::from(l));
+        }
+        _ => out.push(Line::from(vec![
+            label("pLDDT"),
+            Span::styled("– experimental structure", look.dim()),
+        ])),
+    }
+    if fx.ptm.is_some() || fx.iptm.is_some() {
+        let n = |v: Option<f64>| v.map_or("–".into(), |v| format!("{v:.2}"));
+        out.push(Line::from(vec![
+            label("pTM · ipTM"),
+            Span::styled(format!("{} · {}", n(fx.ptm), n(fx.iptm)), look.text()),
+        ]));
+    }
+    let mut rama = vec![label("backbone")];
+    let rama_style = if fx.rama_outliers == 0 {
+        look.accent()
+    } else {
+        look.warm()
+    };
+    rama.extend(gauge(look, fx.rama_favored / 100.0, W, rama_style));
+    rama.push(Span::styled(
+        format!(" {:.0} % favoured", fx.rama_favored),
+        look.text(),
+    ));
+    if fx.rama_outliers > 0 {
+        rama.push(Span::styled(
+            format!(" · {} outliers", fx.rama_outliers),
             look.warm(),
         ));
     }
-    if let Some(e) = &j.job.error_log {
-        info.push(kv("error", format!("✗ {e}"), look.bad()));
+    out.push(Line::from(rama));
+    // Secondary structure as one stacked bar in the viewers' own colours.
+    let mut ss = vec![label("fold")];
+    let total = (fx.helix + fx.strand + fx.coil).max(1e-9);
+    let mut used = 0usize;
+    for (i, (v, c)) in [
+        (fx.helix, proteus_render::brand::structure::HELIX),
+        (fx.strand, proteus_render::brand::structure::STRAND),
+        (fx.coil, proteus_render::brand::structure::COIL),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let n = if i == 2 {
+            W - used
+        } else {
+            ((v / total) * W as f64).round() as usize
+        };
+        let n = n.min(W - used);
+        used += n;
+        ss.push(Span::styled("█".repeat(n), look.data(c)));
     }
-    let block = section(look, &j.header, None);
-    let inner = block.inner(area);
-    if let Some(p) = &j.pdb_path {
-        // One line: the start and the file name, the middle elided.
-        info.push(kv(
-            "file",
-            elide_middle(&tilde(p), (inner.width as usize).saturating_sub(9)),
-            look.dim(),
-        ));
-    }
-    f.render_widget(block, area);
-    let analysis = j
-        .pdb_path
-        .as_ref()
-        .and_then(|p| app.analyses.get(std::path::Path::new(p)));
-    // The info lines wrap; count what they take at this width.
-    let info_h = info
-        .iter()
-        .map(|l| (l.width() as u16).div_ceil(inner.width.max(1)).max(1))
-        .sum::<u16>();
-    let [info_area, rest] =
-        Layout::vertical([Constraint::Length(info_h + 1), Constraint::Min(0)]).areas(inner);
-    f.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), info_area);
-    match analysis {
-        Some(Analysis::Done {
-            rows,
-            interface,
-            verdict,
-            preview,
-            ..
-        }) => {
-            let lines = measurement_lines(look, rows, interface, verdict.as_ref(), rest.width);
-            let text_h = lines.len() as u16;
-            let room = rest.height.saturating_sub(text_h);
-            let text_area = match preview
-                .as_ref()
-                .filter(|_| wide && room >= 8 && look.pixel((0, 0, 0)).is_some())
-            {
-                Some(p) => {
-                    let [pic, txt] =
-                        Layout::vertical([Constraint::Length(room.min(28)), Constraint::Min(0)])
-                            .areas(rest);
-                    draw_preview(f, pic, p, look);
-                    txt
-                }
-                None => rest,
-            };
-            f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), text_area);
-        }
-        Some(Analysis::Pending) => {
-            f.render_widget(Paragraph::new(Span::styled("measuring…", look.dim())), rest)
-        }
-        Some(Analysis::Failed(why)) => f.render_widget(
-            Paragraph::new(vec![
-                Line::from(Span::styled("✗ could not analyse the model", look.bad())),
-                Line::from(Span::styled(why.clone(), look.muted())),
-            ])
-            .wrap(Wrap { trim: false }),
-            rest,
+    ss.push(Span::styled(
+        format!(" α{:.0} β{:.0} coil {:.0} %", fx.helix, fx.strand, fx.coil),
+        look.text(),
+    ));
+    out.push(Line::from(ss));
+    let mut tri = vec![label("triage")];
+    tri.extend(gauge(look, fx.triage / 100.0, W, look.accent()));
+    tri.push(Span::styled(format!(" {:.0}", fx.triage), look.text()));
+    out.push(Line::from(tri));
+    out.push(Line::from(vec![
+        label("size"),
+        Span::styled(
+            format!(
+                "{residues} residues · {} chain{} · Rg ×{:.2}",
+                fx.chains,
+                if fx.chains == 1 { "" } else { "s" },
+                fx.rg_ratio
+            ),
+            look.text(),
         ),
-        None => {}
+    ]));
+    out
+}
+
+/// A bar of `width` cells, filled to `frac` with eighth-block precision.
+fn gauge(look: &Look, frac: f64, width: usize, fill: Style) -> Vec<Span<'static>> {
+    const EIGHTHS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let frac = frac.clamp(0.0, 1.0);
+    let eighths = (frac * width as f64 * 8.0).round() as usize;
+    let (full, part) = (eighths / 8, eighths % 8);
+    let mut s = "█".repeat(full);
+    s.push_str(EIGHTHS[part]);
+    let used = full + usize::from(part > 0);
+    vec![
+        Span::styled(s, fill),
+        Span::styled("░".repeat(width.saturating_sub(used)), look.line()),
+    ]
+}
+
+/// Every measurement, grouped under a quiet heading: interface (for a complex), then what the
+/// `analyze` report says, in its order.
+fn grouped_details(
+    look: &Look,
+    rows: &[[String; 2]],
+    interface: &[[String; 2]],
+    width: u16,
+) -> Vec<Line<'static>> {
+    let label_w = 22usize;
+    let side = width as usize >= label_w + 30;
+    let mut out = Vec::new();
+    let group = |name: &str, items: &[[String; 2]], out: &mut Vec<Line<'static>>| {
+        if items.is_empty() {
+            return;
+        }
+        out.push(Line::from(vec![
+            Span::styled(format!("({name}) "), look.muted()),
+            Span::styled(
+                "─".repeat((width as usize).saturating_sub(name.len() + 3)),
+                look.line(),
+            ),
+        ]));
+        for [k, v] in items {
+            if side {
+                out.push(Line::from(vec![
+                    Span::styled(format!("{k:<label_w$}"), look.dim()),
+                    Span::styled(v.clone(), look.text()),
+                ]));
+            } else {
+                out.push(Line::from(Span::styled(k.clone(), look.dim())));
+                out.push(Line::from(Span::styled(format!("  {v}"), look.text())));
+            }
+        }
+        out.push(Line::from(""));
+    };
+    group("interface", interface, &mut out);
+    // The card's gauges already show these; the rest is what they do not.
+    let shown = [
+        "pLDDT",
+        "Secondary structure",
+        "Ramachandran",
+        "Triage score",
+    ];
+    let rest: Vec<[String; 2]> = rows
+        .iter()
+        .filter(|[k, _]| !shown.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    group("measurements", &rest, &mut out);
+    out
+}
+
+/// The preview pane: under kitty graphics the pane is left empty and the picture is placed over
+/// it after the frame; otherwise the still is drawn in half-block cells. Either way the pane
+/// asks for a still of its own size, which the loop renders.
+fn draw_preview_pane(f: &mut Frame, area: Rect, app: &App, path: &Path) {
+    if area.width < 4 || area.height < 3 || app.look.pixel((0, 0, 0)).is_none() {
+        return;
+    }
+    let key = super::app::PreviewKey {
+        path: path.to_path_buf(),
+        cols: area.width,
+        rows: area.height,
+        pixels: app.cell_pixels.is_some(),
+    };
+    *app.preview_want.borrow_mut() = Some((key.clone(), area));
+    if key.pixels {
+        return;
+    }
+    match &app.preview {
+        Some((k, p)) if k.path == key.path => draw_preview(f, area, p, &app.look),
+        _ => f.render_widget(
+            Paragraph::new(Span::styled("rendering…", app.look.dim())),
+            area,
+        ),
     }
 }
 
@@ -636,34 +938,37 @@ fn human_size(n: u64) -> String {
 fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
     let look = &app.look;
     let files = &app.files;
-    let wide = area.width >= 90;
+    let wide = area.width >= 100;
     let [list_area, detail_area] = if wide {
-        Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).areas(area)
+        let [l, _, d] = Layout::horizontal([
+            Constraint::Percentage(34),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        [l, d]
     } else {
-        Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(area)
+        Layout::vertical([Constraint::Percentage(45), Constraint::Min(8)]).areas(area)
     };
 
-    let name_w = files
-        .entries
-        .iter()
-        .map(|e| e.name.chars().count())
-        .max()
-        .unwrap_or(0)
-        .min(40);
+    let inner_w = list_area.width.saturating_sub(4) as usize;
     let items: Vec<ListItem> = files
         .entries
         .iter()
         .map(|e| {
             if e.is_dir {
                 ListItem::new(Line::from(vec![
-                    Span::styled("▸ ", look.dim()),
+                    Span::styled("▸ ", look.sea()),
                     Span::styled(format!("{}/", e.name), look.sea()),
                 ]))
             } else {
+                let size = human_size(e.size);
+                let name_w = inner_w.saturating_sub(size.len() + 3);
+                let name = elide_middle(&e.name, name_w.max(8));
                 ListItem::new(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(format!("{:<name_w$}", e.name), look.text()),
-                    Span::styled(format!("  {:>7}", human_size(e.size)), look.dim()),
+                    Span::styled(format!("{name:<name_w$}"), look.text()),
+                    Span::styled(format!(" {size:>w$}", w = size.len()), look.dim()),
                 ]))
             }
         })
@@ -675,7 +980,10 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
             "structures",
             Some(format!(
                 "{n_files} in {}",
-                tilde(&files.dir.to_string_lossy())
+                elide_middle(
+                    &tilde(&files.dir.to_string_lossy()),
+                    inner_w.saturating_sub(20).max(12)
+                )
             )),
         ))
         .highlight_style(look.selected())
@@ -683,14 +991,13 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
     let mut state_ = ListState::default().with_selected(Some(files.selected));
     f.render_stateful_widget(list, list_area, &mut state_);
 
-    let detail_area = if wide {
-        detail_area.inner(ratatui::layout::Margin::new(2, 0))
-    } else {
-        detail_area
-    };
-    let body: Text = match (files.error.as_ref(), files.current()) {
-        (Some(e), _) => Text::from(Span::styled(format!("✗ {e}"), look.bad())),
-        (None, Some(e)) if e.is_dir => Text::from(vec![
+    match (files.error.as_ref(), files.current()) {
+        (Some(e), _) => f.render_widget(
+            Paragraph::new(Span::styled(format!("✗ {e}"), look.bad())).wrap(Wrap { trim: false }),
+            detail_area,
+        ),
+        (None, Some(e)) if e.is_dir => f.render_widget(
+            Paragraph::new(Text::from(vec![
             Line::from(Span::styled("⏎ opens the folder.", look.muted())),
             Line::from(""),
             Line::from(Span::styled(
@@ -707,113 +1014,50 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
                     look.accent(),
                 ),
             ]),
-        ]),
-        (None, Some(e)) => match app.analyses.get(&e.path) {
-            None | Some(Analysis::Pending) => Text::from(Span::styled("measuring…", look.dim())),
-            Some(Analysis::Failed(why)) => Text::from(vec![
-                Line::from(Span::styled("✗ could not analyse this file", look.bad())),
-                Line::from(Span::styled(why.clone(), look.muted())),
-            ]),
-            Some(Analysis::Done {
-                residues,
-                predicted,
-                rows,
-                interface,
-                verdict,
-                ..
-            }) => {
-                let mut lines = vec![
-                    Line::from(Span::styled(e.name.clone(), look.text().add_modifier(Modifier::BOLD))),
-                    Line::from(Span::styled(
-                        format!(
-                            "{residues} residues · B-factor column is {}",
-                            if *predicted {
-                                "a predicted pLDDT"
-                            } else {
-                                "experimental (not a confidence)"
-                            }
-                        ),
-                        look.dim(),
-                    )),
-                    Line::from(""),
+            ]))
+            .wrap(Wrap { trim: false }),
+            detail_area,
+        ),
+        (None, Some(e)) => {
+            let mut sub = vec![Span::styled(human_size(e.size), look.dim())];
+            if let Some(Analysis::Done { residues, predicted, facts, .. }) = app.analyses.get(&e.path) {
+                let chains = match facts {
+                    Some(f) => format!("  ·  {} chain{}  ·  ", f.chains, if f.chains == 1 { "" } else { "s" }),
+                    None => "  ·  ".into(),
+                };
+                sub = vec![
+                    Span::styled(format!("{residues} residues"), look.text()),
+                    Span::styled(chains, look.dim()),
+                    if *predicted {
+                        Span::styled("predicted model", look.text())
+                    } else {
+                        Span::styled("experimental", look.text())
+                    },
+                    Span::styled(format!("  ·  {}", human_size(e.size)), look.dim()),
                 ];
-                lines.extend(measurement_lines(look, rows, interface, verdict.as_ref(), detail_area.width));
-                Text::from(lines)
             }
-        },
-        (None, None) => Text::from(Span::styled(
-            "This folder has no structure files or subfolders.",
-            look.dim(),
-        )),
-    };
-    // A still of the structure above its numbers, when there is room and a picture.
-    let preview = files
-        .current()
-        .and_then(|e| match app.analyses.get(&e.path) {
-            Some(Analysis::Done {
-                preview: Some(p), ..
-            }) => Some(p),
-            _ => None,
-        })
-        .filter(|_| detail_area.height >= 22 && look.pixel((0, 0, 0)).is_some());
-    let text_area = match preview {
-        Some(p) => {
-            let h = (detail_area.height * 2 / 5).clamp(8, 20);
-            let [pic, rest] =
-                Layout::vertical([Constraint::Length(h), Constraint::Min(4)]).areas(detail_area);
-            f.render_widget(section(look, "preview", None), pic);
-            draw_preview(f, pic.inner(ratatui::layout::Margin::new(1, 1)), p, look);
-            rest
+            draw_inspector(
+                f,
+                detail_area,
+                app,
+                Inspect {
+                    title: e.name.clone(),
+                    badge: None,
+                    sub,
+                    notes: Vec::new(),
+                    path: Some(&e.path),
+                    empty: Some("Rest on a file to measure it."),
+                },
+            );
         }
-        None => detail_area,
-    };
-    f.render_widget(
-        Paragraph::new(body)
-            .wrap(Wrap { trim: false })
-            .block(section(look, "measurements", None)),
-        text_area,
-    );
-}
-
-/// Measurement rows (label, value), the interface verdict and lines of a complex, laid out side
-/// by side when `width` allows.
-fn measurement_lines(
-    look: &Look,
-    rows: &[[String; 2]],
-    interface: &[[String; 2]],
-    verdict: Option<&(bool, String)>,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let label_w = 22;
-    let side_by_side = width as usize >= label_w + 30;
-    let mut lines = Vec::new();
-    let push = |k: &str, v: &str, vs: Style, lines: &mut Vec<Line<'static>>| {
-        if side_by_side {
-            lines.push(Line::from(vec![
-                Span::styled(format!("{k:<label_w$}"), look.dim()),
-                Span::styled(v.to_string(), vs),
-            ]));
-        } else {
-            lines.push(Line::from(Span::styled(k.to_string(), look.dim())));
-            lines.push(Line::from(Span::styled(format!("  {v}"), vs)));
-        }
-    };
-    if let Some((ok, text)) = verdict {
-        lines.push(Line::from(Span::styled(
-            text.clone(),
-            if *ok { look.accent() } else { look.warm() },
-        )));
+        (None, None) => f.render_widget(
+            Paragraph::new(Span::styled(
+                "This folder has no structure files or subfolders.",
+                look.dim(),
+            )),
+            detail_area,
+        ),
     }
-    for [k, v] in interface {
-        push(k, v, look.text(), &mut lines);
-    }
-    if !interface.is_empty() {
-        lines.push(Line::from(""));
-    }
-    for [k, v] in rows {
-        push(k, v, look.text(), &mut lines);
-    }
-    lines
 }
 
 /// `s` cut to `max` characters by replacing its middle with "…", keeping the end (a file name)
@@ -895,46 +1139,80 @@ fn draw_preview(f: &mut Frame, area: Rect, p: &Preview, look: &Look) {
 // ---------------------------------------------------------------------------------------------
 // Run
 
+/// What the selected option of a choice means, in a sentence.
+fn option_note(label: &str, value: &str) -> &'static str {
+    match (label, value) {
+        ("Tier", "fast") => "ESMFold: one chain, seconds per sequence.",
+        ("Tier", "sota") => {
+            "Boltz-2 in your container, on the GPU if there is one: complexes, ligands, MSAs."
+        }
+        ("Tier", "full") => "sota plus relaxation. Not in this release: the job will say so.",
+        ("Runner", "auto") => {
+            "Your container if one is configured, otherwise the public ESMFold API."
+        }
+        ("Runner", "esm-api") => "Meta's public ESMFold API. The sequence leaves this machine.",
+        ("Runner", "oci") => "A local container (PROTEUS_IMAGE_FAST / PROTEUS_IMAGE_SOTA).",
+        ("Runner", "simulated") => "Offline and instant: a placeholder helix, not a prediction.",
+        ("Mutations", "alanine") => "One alanine at each position in the window.",
+        ("Mutations", "saturation") => "All 19 substitutions at each position in the window.",
+        ("Rank by", "structure") => "The fold's triage score.",
+        ("Rank by", "esm2") => "ESM-2 zero-shot likelihood of each substitution.",
+        ("Rank by", "hybrid") => "Both, the structure weighted 0.7.",
+        _ => "",
+    }
+}
+
 fn draw_run(f: &mut Frame, area: Rect, app: &App) {
     let look = &app.look;
     let run = &app.run;
     let fields = run.fields();
-    let [forms, _, form, command] = Layout::vertical([
+    let [forms, _, main] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(fields.len() as u16 + 3),
         Constraint::Min(0),
     ])
     .areas(area);
 
+    // The two forms as a segmented control, like the tabs.
     let pick = |k: FormKind| {
-        let name = format!("({})", k.title());
         if run.form == k {
-            Span::styled(
-                name,
-                look.accent()
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )
+            Span::styled(format!(" {} ", k.title()), look.tab_on())
         } else {
-            Span::styled(name, look.muted())
+            Span::styled(format!(" {} ", k.title()), look.muted())
         }
     };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             pick(FormKind::Fold),
-            Span::raw("   "),
+            Span::raw("  "),
             pick(FormKind::Scan),
-            Span::styled("     f switches", look.dim()),
+            Span::styled("    f switches", look.dim()),
         ])),
         forms,
     );
 
+    let wide = main.width >= 110;
+    let [form, card] = if wide {
+        let [l, _, r] = Layout::horizontal([
+            Constraint::Percentage(52),
+            Constraint::Length(4),
+            Constraint::Min(0),
+        ])
+        .areas(main);
+        [l, r]
+    } else {
+        let h = (fields.len() * 3 + 4) as u16;
+        Layout::vertical([Constraint::Length(h), Constraint::Min(0)]).areas(main)
+    };
+
+    // The form: each field a label and its value; the focused one says what it is for (or,
+    // for a choice, what the chosen option means) on the line under it.
     let label_w = fields.iter().map(|f| f.label.len()).max().unwrap_or(0) + 3;
     let mut lines = Vec::new();
     for (i, field) in fields.iter().enumerate() {
         let focused = run.focus == i;
         let marker = Span::styled(if focused { "▌ " } else { "  " }, look.accent());
-        let label_style = if focused { look.accent() } else { look.dim() };
+        let label_style = if focused { look.accent() } else { look.muted() };
         let value = match &field.kind {
             FieldKind::Text(s) => {
                 let shown = s.replace('\n', " ⏎ ");
@@ -951,12 +1229,23 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
                 }
             }
             FieldKind::Choice { options, index } => {
-                let arrows = if focused { look.accent() } else { look.dim() };
-                vec![
-                    Span::styled("‹ ", arrows),
-                    Span::styled(options[*index].to_string(), look.text()),
-                    Span::styled(" ›", arrows),
-                ]
+                // Every option in a row, the chosen one filled.
+                let mut v = Vec::new();
+                for (k, o) in options.iter().enumerate() {
+                    if k == *index {
+                        v.push(Span::styled(
+                            format!(" {o} "),
+                            if focused {
+                                look.tab_on()
+                            } else {
+                                look.text().add_modifier(Modifier::BOLD)
+                            },
+                        ));
+                    } else {
+                        v.push(Span::styled(format!(" {o} "), look.dim()));
+                    }
+                }
+                v
             }
         };
         let mut spans = vec![
@@ -968,38 +1257,91 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
         ];
         spans.extend(value);
         lines.push(Line::from(spans));
+        let note = match &field.kind {
+            FieldKind::Choice { .. } => option_note(field.label, field.value()),
+            FieldKind::Text(_) if focused => field.hint,
+            FieldKind::Text(_) => "",
+        };
+        lines.push(Line::from(vec![
+            Span::raw(" ".repeat(label_w + 2)),
+            Span::styled(
+                note.to_string(),
+                if focused { look.muted() } else { look.dim() },
+            ),
+        ]));
+        lines.push(Line::from(""));
     }
     let run_focused = run.focus == fields.len();
-    lines.push(Line::from(""));
-    let button = if run_focused {
-        look.accent()
-            .add_modifier(Modifier::REVERSED | Modifier::BOLD)
-    } else {
-        look.accent()
+    let ready = run.command().is_ok();
+    let button = match (run_focused, ready) {
+        (true, true) => look.tab_on(),
+        (false, true) => look.accent().add_modifier(Modifier::BOLD),
+        (_, false) => look.dim(),
     };
     lines.push(Line::from(vec![
         Span::styled(if run_focused { "▌ " } else { "  " }, look.accent()),
-        Span::styled("[ run ▸ ]", button),
+        Span::styled(" run ▸ ", button),
+        Span::styled(
+            if ready {
+                "  ⏎ runs it"
+            } else {
+                "  fill in the sequence first"
+            },
+            look.dim(),
+        ),
     ]));
-    f.render_widget(Paragraph::new(lines), form);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), form);
 
+    // What happens: in words, then the exact command, then where to look afterwards.
+    let (what, after) = match run.form {
+        FormKind::Fold => (
+            "Folds one sequence and keeps the model as a job, with every measurement.",
+            "It appears in (jobs): ⏎ opens the 3-D viewer, w the browser page.",
+        ),
+        FormKind::Scan => (
+            "Writes the variants of the wild type, folds each and ranks them.",
+            "The leaderboard prints when the last variant is folded; each is also a job.",
+        ),
+    };
+    // The command (or what is missing) first: it is what a short terminal must still show.
     let mut info = Vec::new();
-    if let Some(field) = fields.get(run.focus) {
-        info.push(Line::from(Span::styled(field.hint, look.dim())));
-        info.push(Line::from(""));
-    }
     match run.command() {
-        Ok(spec) => info.push(Line::from(vec![
-            Span::styled("~ $ ", look.dim()),
-            Span::styled(spec.display(), look.text()),
-        ])),
-        Err(why) => info.push(Line::from(Span::styled(format!("! {why}"), look.warm()))),
+        Ok(spec) => {
+            info.push(Line::from(vec![
+                Span::styled("~ $ ", look.dim()),
+                Span::styled(spec.display(), look.accent()),
+            ]));
+            info.push(Line::from(""));
+            info.push(Line::from(Span::styled(what, look.text())));
+            info.push(Line::from(Span::styled(after, look.muted())));
+            info.push(Line::from(Span::styled(
+                "The same line works in a script.",
+                look.dim(),
+            )));
+        }
+        Err(why) => {
+            info.push(Line::from(vec![
+                Span::styled("! ", look.warm()),
+                Span::styled(why, look.warm()),
+            ]));
+            info.push(Line::from(""));
+            info.push(Line::from(Span::styled(what, look.text())));
+            info.push(Line::from(""));
+            info.push(Line::from(Span::styled(
+                "For example, human ubiquitin:",
+                look.dim(),
+            )));
+            info.push(Line::from(Span::styled(
+                "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
+                look.muted(),
+            )));
+        }
     }
     f.render_widget(
         Paragraph::new(info)
             .wrap(Wrap { trim: false })
-            .block(section(look, "command", None)),
-        command,
+            .block(section(look, "what happens", None)),
+        card,
     );
 }
 

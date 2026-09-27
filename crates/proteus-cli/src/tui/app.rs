@@ -294,25 +294,60 @@ impl FilesView {
     }
 }
 
-/// The measurements of one structure file, as the Structures tab shows them.
+/// The measurements of one structure file, as the inspector shows them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Analysis {
     Pending,
     Done {
         residues: usize,
         predicted: bool,
+        /// Every measurement as a labelled line (the `analyze` report, summarised).
         rows: Vec<[String; 2]>,
         /// For a complex: the interface the viewers open on, as label/value rows.
         interface: Vec<[String; 2]>,
         /// For a complex with the predictor's PAE: whether ipSAE_min clears 0.61, and the line.
         verdict: Option<(bool, String)>,
-        preview: Option<Preview>,
+        /// The numbers the inspector draws as gauges.
+        facts: Option<Box<Facts>>,
     },
     Failed(String),
 }
 
-/// A small still of a structure, for the preview panes: row-major pixels, `None` where
-/// nothing was drawn (the terminal's background shows there).
+/// The headline numbers of a structure, for the inspector's gauges and groups.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Facts {
+    pub chains: usize,
+    pub plddt: Option<f64>,
+    pub ptm: Option<f64>,
+    pub iptm: Option<f64>,
+    pub rama_favored: f64,
+    pub rama_outliers: usize,
+    pub helix: f64,
+    pub strand: f64,
+    pub coil: f64,
+    pub rg_ratio: f64,
+    pub sasa: f64,
+    pub burial: f64,
+    pub overlaps_per_1k: f64,
+    pub bond_outliers: Option<usize>,
+    pub angle_outliers: Option<usize>,
+    pub rotamer_outliers: Option<f64>,
+    pub hbonds: usize,
+    pub salt_bridges: usize,
+    pub pi: usize,
+    pub triage: f64,
+}
+
+/// A still wanted for a preview pane: which file, how many cells, and whether the terminal
+/// draws real pixels (kitty) or half-block cells.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PreviewKey {
+    pub path: PathBuf,
+    pub cols: u16,
+    pub rows: u16,
+    pub pixels: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preview {
     pub width: usize,
@@ -607,6 +642,14 @@ pub struct App {
     pub look: super::style::Look,
     /// Half-second ticks since start, for the running-state pulse.
     pub tick: u64,
+    /// Parsed structures, kept to render previews at whatever size the pane has.
+    pub scenes: HashMap<PathBuf, std::sync::Arc<proteus_render::StructureRenderData>>,
+    /// The preview the last frame drew a pane for (set while drawing, read by the loop).
+    pub preview_want: std::cell::RefCell<Option<(PreviewKey, ratatui::layout::Rect)>>,
+    /// The latest rendered preview.
+    pub preview: Option<(PreviewKey, Preview)>,
+    /// Pixels per cell when the terminal draws kitty graphics, else `None`.
+    pub cell_pixels: Option<(f32, f32)>,
 }
 
 impl App {
@@ -618,6 +661,10 @@ impl App {
             analyses: HashMap::new(),
             stamps: HashMap::new(),
             run: RunView::default(),
+            scenes: HashMap::new(),
+            preview_want: std::cell::RefCell::new(None),
+            preview: None,
+            cell_pixels: None,
             help: false,
             status: None,
             last_command: None,
