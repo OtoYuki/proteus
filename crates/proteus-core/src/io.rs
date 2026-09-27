@@ -507,7 +507,7 @@ pub fn is_protein_residue(residue: &pdbtbx::Residue) -> bool {
     }) || (has("CA") && is_standard_amino_acid(residue.name().unwrap_or("")))
 }
 
-fn is_standard_amino_acid(name: &str) -> bool {
+pub(crate) fn is_standard_amino_acid(name: &str) -> bool {
     matches!(
         name.trim(),
         "ALA"
@@ -543,7 +543,7 @@ fn is_standard_amino_acid(name: &str) -> bool {
 const PROTEIN_ELEMENTS: &[&str] = &["C", "N", "O", "S", "SE", "H", "D"];
 
 /// Hydrogen or deuterium, including deuterium that pdbtbx leaves without an element.
-fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
+pub(crate) fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
     let e = element_symbol(atom);
     e.eq_ignore_ascii_case("H") || e.eq_ignore_ascii_case("D")
 }
@@ -555,7 +555,7 @@ fn is_hydrogen(atom: &pdbtbx::Atom) -> bool {
 /// order), and two same-numbered residues of different names, which pdbtbx stores as
 /// conformers without an alternate-location id, become two residues. Real alternate
 /// conformations are left alone.
-fn split_merged_residues(pdb: &mut pdbtbx::PDB) {
+pub(crate) fn split_merged_residues(pdb: &mut pdbtbx::PDB) {
     fn pieces(r: &pdbtbx::Residue) -> Option<Vec<pdbtbx::Residue>> {
         if r.conformers().any(|c| c.alternative_location().is_some()) {
             return None;

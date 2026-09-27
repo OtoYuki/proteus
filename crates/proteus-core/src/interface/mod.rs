@@ -259,10 +259,21 @@ pub fn interface_metrics(
         target_contacts,
     };
     if let Some(pae) = pae {
+        // A complex with ligands or modified residues has more tokens than protein residues:
+        // keep the protein residues' rows and columns.
+        let protein_rows = (pae.n != residue_chain.len())
+            .then(|| crate::pae::protein_token_rows(pdb))
+            .filter(|(n, rows)| *n == pae.n && rows.len() == residue_chain.len())
+            .and_then(|(_, rows)| {
+                pae.collapse(&rows.into_iter().map(|r| vec![r]).collect::<Vec<_>>())
+            });
+        let pae = protein_rows.as_ref().unwrap_or(pae);
         if pae.n != residue_chain.len() {
+            let (tokens, _) = crate::pae::protein_token_rows(pdb);
             out.pae_note = Some(format!(
-                "the PAE matrix has {} rows and the model {} protein residues; PAE metrics need \
-                 one row per residue in file order",
+                "the PAE matrix has {} rows, but the model has {} protein residues and {tokens} \
+                 tokens (one per standard residue, one per heavy atom of anything else); it may \
+                 belong to a different model",
                 pae.n,
                 residue_chain.len()
             ));
@@ -473,6 +484,32 @@ mod tests {
         assert_eq!(ipsae_d0(26), 1.0);
         let d100 = 1.24 * 85f64.cbrt() - 1.8;
         assert!((ipsae_d0(100) - d100).abs() < 1e-12);
+    }
+
+    /// A PAE over all 11 tokens of a complex with a ligand and a modified residue is read at
+    /// the protein residues' rows; one of the wrong size is refused with a reason.
+    #[test]
+    fn pae_with_ligand_and_modified_residue_tokens() {
+        let pdb =
+            crate::io::open_structure_bytes(crate::pae::TOKEN_TEST_PDB, Some("x.pdb")).unwrap();
+        let spec = InterfaceSpec::parse("A:B").unwrap();
+        let protein = [0, 2, 6, 10];
+        // 2 Å between protein residues, 30 Å at every ligand or non-CA token.
+        let full = pae(11, |i, j| {
+            if protein.contains(&i) && protein.contains(&j) {
+                2.0
+            } else {
+                30.0
+            }
+        });
+        let m = interface_metrics(&pdb, &spec, Some(&full)).unwrap();
+        assert_eq!(m.pae_note, None);
+        assert_eq!(m.ipae, Some(2.0));
+        assert!(m.ipsae_min.unwrap() > 0.0);
+        let wrong = pae(10, |_, _| 2.0);
+        let m = interface_metrics(&pdb, &spec, Some(&wrong)).unwrap();
+        assert_eq!(m.ipsae_min, None);
+        assert!(m.pae_note.unwrap().contains("11 tokens"));
     }
 
     /// Hand-computed: binder A = residues 0–1, target B = 2–4.

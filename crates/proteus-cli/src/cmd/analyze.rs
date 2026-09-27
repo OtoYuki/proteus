@@ -436,6 +436,17 @@ pub async fn run(args: Args) -> Result<()> {
             .map(|p| format!(", written to {}", p.display()))
             .unwrap_or_default()
     );
+    // A PAE that was found but could not be matched leaves ipSAE empty; say why, briefly.
+    let noted: Vec<_> = rows
+        .iter()
+        .filter_map(|r| r.interface.interface_note.as_ref().map(|n| (&r.file, n)))
+        .collect();
+    for (file, note) in noted.iter().take(5) {
+        eprintln!("  no PAE metrics: {file}: {note}");
+    }
+    if noted.len() > 5 {
+        eprintln!("  … and {} more without PAE metrics", noted.len() - 5);
+    }
     for (path, e) in &failures {
         eprintln!("  failed: {}: {e}", path.display());
     }

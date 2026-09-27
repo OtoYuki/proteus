@@ -63,6 +63,19 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   with a lab result, Boltz-2 models and PAE from ProteinBase). ipSAE_min ranks with AP 0.191
   against a random 0.093 on a set already filtered by ipSAE. Results are in
   `validate/nipah/last_run.md`.
+- PAE files from complexes with ligands or modified residues are read. AlphaFold 3-style
+  predictors write one row per token (one per standard residue, one per heavy atom of anything
+  else); the protein residues' rows are now picked out in file order, where before the matrix
+  was refused as the wrong size. On a Boltz-2 HIV protease + MK1 model (198 residues, 243
+  tokens) ipSAE and LIS equal `ipsae.py`'s. This is the case behind `ipsae.py`'s
+  `index N is out of bounds` failures (DunbrackLab/IPSAE #20, #28).
+- Protenix (`*_sample_N.cif`, `token_pair_pae`), OpenFold3 (`*_confidences.json`/`.npz`,
+  `*_confidences_aggregated.json`) and Chai-1 (`scores.model_idx_N.npz`) outputs are found
+  beside their models, file names checked against each predictor's writer. float16 `.npy`
+  arrays are read (OpenFold3's `.npz` default).
+- `analyze --interface` keeps a model whose PAE file cannot be used and says why on stderr
+  (`no PAE metrics: …`, and in the JSON as `interface_note`), instead of failing the model or
+  leaving ipSAE silently empty.
 - AlphaFold 3 local-run output names (`<name>_confidences.json` beside `<name>_model.cif`, and
   `confidences.json` beside a sample's `model.cif`) are recognised as PAE and scores files.
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
