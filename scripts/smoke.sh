@@ -65,6 +65,9 @@ expect "json: no pLDDT for an X-ray structure" '"plddt_mean":null'
 check "a bad file fails the run but not the others" bash -c "! '$BIN' analyze '$WORK/models' '$FASTA' --export '$WORK/qc2.json' 2>'$WORK/err'"
 check "…and the good rows are still written" grep -q '"model": "a"' "$WORK/qc2.json"
 check "…and the failure is named" grep -q 'failed: .*1crn.fasta' "$WORK/err"
+check "a missing path fails the run but not the others" bash -c "! '$BIN' analyze '$WORK/models' '$WORK/no-such.pdb' --export '$WORK/qc4.json' 2>'$WORK/err'"
+check "…and the good rows are still written" grep -q '"model": "a"' "$WORK/qc4.json"
+check "…and the missing path is named" grep -q 'failed: .*no-such.pdb: no such file or directory' "$WORK/err"
 ln -s .. "$WORK/models/sub/loop"
 check "a symlink loop is walked once" "$BIN" analyze "$WORK/models" --export "$WORK/qc3.CSV"
 expect "…still three structures" '3 of 3 structures analysed'

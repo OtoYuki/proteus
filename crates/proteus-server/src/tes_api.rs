@@ -124,10 +124,13 @@ pub async fn create_task(
         .telemetry
         .http_requests_total
         .fetch_add(1, Ordering::Relaxed);
-    state.telemetry.tasks_queued.fetch_add(1, Ordering::Relaxed);
 
     match state.scheduler.submit_tes_task(task).await {
-        Ok(id) => Ok((StatusCode::OK, Json(TesCreateTaskResponse { id }))),
+        Ok(id) => {
+            // Counted only once accepted: a rejected task never entered the queue.
+            state.telemetry.tasks_queued.fetch_add(1, Ordering::Relaxed);
+            Ok((StatusCode::OK, Json(TesCreateTaskResponse { id })))
+        }
         // Policy/validation rejections (image allow-list, relative paths) are client errors.
         Err(proteus_engine::error::EngineError::Tes(msg)) => Err((
             StatusCode::BAD_REQUEST,

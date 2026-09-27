@@ -13,6 +13,10 @@ pub enum EngineError {
     #[error("Container runtime error: {0}")]
     Container(String),
 
+    /// A remote prediction service (the ESMFold API) failed; no container was involved.
+    #[error("Remote folding API error: {0}")]
+    RemoteApi(String),
+
     #[error("Pipeline error: {0}")]
     Pipeline(String),
 

@@ -42,8 +42,10 @@ impl ComputeRunner for SimulatedRunner {
         let pdb_filename = format!("{}_predicted.pdb", job.id);
         let pdb_path: PathBuf = work_dir.join(&pdb_filename);
 
-        // Generate synthetic alpha-helix backbone with valid CA coordinates
-        // pitch: 1.5A per residue, 3.6 residues per turn (100 deg = 1.745 rad)
+        // An ideal right-handed α-helix with a full N/CA/C/O backbone, so that the label every
+        // surface prints ("synthetic helix") is what DSSP and the Ramachandran check measure.
+        // A Cα-only trace, as this used to be, has no backbone H-bonds and no φ/ψ, and reads
+        // as 0 % helix and 0 % favoured.
         let mut pdb_lines = Vec::new();
         pdb_lines.push(format!(
             "HEADER    SYNTHETIC STRUCTURE FOR {}",
@@ -57,31 +59,34 @@ impl ComputeRunner for SimulatedRunner {
             PipelineTier::FullValidation => 94.0,
         };
 
-        let radius = 2.3; // alpha helix CA radius
-        for (i, aa) in sequence.fasta.chars().enumerate() {
-            let angle = (i as f64) * 1.74533;
-            let x = radius * angle.cos();
-            let y = radius * angle.sin();
-            let z = (i as f64) * 1.5;
-
+        let residues: Vec<char> = sequence.fasta.chars().collect();
+        let backbone = ideal_helix_backbone(residues.len());
+        let mut serial = 0;
+        for (i, (aa, atoms)) in residues.iter().zip(&backbone).enumerate() {
             // Introduce slight variation in plddt
             let plddt = (base_plddt + ((i % 5) as f64 * 1.2) - 2.0).clamp(50.0, 99.0);
-
-            // PDB ATOM record format
-            let record = format!(
-                "ATOM  {:5} {:^4} {:3} A{:4}    {:8.3}{:8.3}{:8.3}{:6.2}{:6.2}          {:>2}",
-                i + 1,
-                "CA",
-                aa_to_three_letter(aa),
-                i + 1,
-                x,
-                y,
-                z,
-                1.00,
-                plddt,
-                "C"
-            );
-            pdb_lines.push(record);
+            for (name, element, [x, y, z]) in [
+                ("N", "N", atoms[0]),
+                ("CA", "C", atoms[1]),
+                ("C", "C", atoms[2]),
+                ("O", "O", atoms[3]),
+            ] {
+                serial += 1;
+                // PDB ATOM record format
+                pdb_lines.push(format!(
+                    "ATOM  {:5} {:^4} {:3} A{:4}    {:8.3}{:8.3}{:8.3}{:6.2}{:6.2}          {:>2}",
+                    serial,
+                    name,
+                    aa_to_three_letter(*aa),
+                    i + 1,
+                    x,
+                    y,
+                    z,
+                    1.00,
+                    plddt,
+                    element
+                ));
+            }
         }
         pdb_lines.push("END".to_string());
 
@@ -101,6 +106,81 @@ impl ComputeRunner for SimulatedRunner {
             metadata: Some(metadata),
         })
     }
+}
+
+type Vec3 = [f64; 3];
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit(a: Vec3) -> Vec3 {
+    let n = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    [a[0] / n, a[1] / n, a[2] / n]
+}
+
+/// Place atom D bonded to C, given A–B–C: bond length |CD|, angle B–C–D and torsion A–B–C–D
+/// (degrees). The natural-extension reference frame construction (Parsons et al. 2005).
+fn place(a: Vec3, b: Vec3, c: Vec3, bond: f64, angle: f64, torsion: f64) -> Vec3 {
+    let (theta, phi) = (angle.to_radians(), torsion.to_radians());
+    let d2 = [
+        -bond * theta.cos(),
+        bond * theta.sin() * phi.cos(),
+        bond * theta.sin() * phi.sin(),
+    ];
+    let bc = unit(sub(c, b));
+    let n = unit(cross(sub(b, a), bc));
+    let m = cross(n, bc);
+    [
+        c[0] + bc[0] * d2[0] + m[0] * d2[1] + n[0] * d2[2],
+        c[1] + bc[1] * d2[0] + m[1] * d2[1] + n[1] * d2[2],
+        c[2] + bc[2] * d2[0] + m[2] * d2[1] + n[2] * d2[2],
+    ]
+}
+
+/// N, CA, C, O of `n` residues of an ideal α-helix: φ −57.8°, ψ −47.0°, ω 180°, Engh & Huber
+/// (1991) bond lengths and angles.
+fn ideal_helix_backbone(n: usize) -> Vec<[Vec3; 4]> {
+    const N_CA: f64 = 1.458;
+    const CA_C: f64 = 1.525;
+    const C_N: f64 = 1.329;
+    const C_O: f64 = 1.231;
+    const N_CA_C: f64 = 111.2;
+    const CA_C_N: f64 = 116.2;
+    const C_N_CA: f64 = 121.7;
+    const CA_C_O: f64 = 120.1;
+    const PHI: f64 = -57.8;
+    const PSI: f64 = -47.0;
+    const OMEGA: f64 = 180.0;
+
+    let mut out: Vec<[Vec3; 4]> = Vec::with_capacity(n);
+    if n == 0 {
+        return out;
+    }
+    let mut nn = [0.0, 0.0, 0.0];
+    let mut ca = [N_CA, 0.0, 0.0];
+    let theta = (180.0 - N_CA_C).to_radians();
+    let mut c = [ca[0] + CA_C * theta.cos(), CA_C * theta.sin(), 0.0];
+    for i in 0..n {
+        let o = place(nn, ca, c, C_O, CA_C_O, PSI + 180.0);
+        out.push([nn, ca, c, o]);
+        if i + 1 == n {
+            break;
+        }
+        let next_n = place(nn, ca, c, C_N, CA_C_N, PSI);
+        let next_ca = place(ca, c, next_n, N_CA, C_N_CA, OMEGA);
+        let next_c = place(c, next_n, next_ca, CA_C, N_CA_C, PHI);
+        (nn, ca, c) = (next_n, next_ca, next_c);
+    }
+    out
 }
 
 fn aa_to_three_letter(c: char) -> &'static str {
@@ -126,5 +206,65 @@ fn aa_to_three_letter(c: char) -> &'static str {
         'W' => "TRP",
         'Y' => "TYR",
         _ => "UNK",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proteus_core::models::JobStatus;
+
+    /// The simulator is labelled "synthetic helix" everywhere; DSSP and the Ramachandran check
+    /// must agree with the label, not report a helix-shaped Cα trace as 0 % helix.
+    #[tokio::test]
+    async fn the_synthetic_helix_measures_as_a_helix() {
+        let job = PipelineJob {
+            id: uuid::Uuid::new_v4(),
+            sequence_id: uuid::Uuid::new_v4(),
+            tier: PipelineTier::FastScreening,
+            status: JobStatus::Queued,
+            priority: 0,
+            created_at: chrono::Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error_log: None,
+        };
+        let fasta = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG";
+        let seq = Sequence {
+            id: job.sequence_id,
+            header: "ubq".into(),
+            fasta: fasta.into(),
+            length: fasta.len(),
+            created_at: chrono::Utc::now(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let r = SimulatedRunner::new()
+            .execute_job(&job, &seq, dir.path())
+            .await
+            .unwrap();
+        let qc = proteus_core::qc::structure_qc(&r.pdb_path, None, None).unwrap();
+        assert_eq!(qc.n_residues, fasta.len());
+        assert!(qc.helix_pct > 90.0, "helix {:.1} %", qc.helix_pct);
+        assert!(
+            qc.rama_favored_pct > 95.0,
+            "favoured {:.1} %",
+            qc.rama_favored_pct
+        );
+        assert_eq!(qc.rama_outliers, 0);
+    }
+
+    #[test]
+    fn ideal_backbone_has_ideal_geometry() {
+        let bb = ideal_helix_backbone(10);
+        let d = |a: Vec3, b: Vec3| {
+            let v = sub(a, b);
+            (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+        };
+        for w in bb.windows(2) {
+            assert!((d(w[0][2], w[1][0]) - 1.329).abs() < 1e-9); // C–N peptide bond
+            assert!((d(w[0][1], w[1][1]) - 3.80).abs() < 0.02); // trans Cα–Cα
+        }
+        // 3.6 residues per turn, 1.5 Å rise: CA(i)–CA(i+4) about 6.2 Å.
+        assert!((d(bb[0][1], bb[4][1]) - 6.2).abs() < 0.3);
     }
 }

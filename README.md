@@ -225,8 +225,12 @@ Proteus is not the only Rust implementation of any one of its parts.
 | if you want | use |
 |---|---|
 | a TES server for a **Kubernetes cluster** | [planetary](https://github.com/stjude-rust-labs/planetary) (St. Jude Rust Labs). Proteus is the single-binary-against-a-local-socket model, which is the other deployment shape, not a better one |
+| a single-binary TES on Docker with **S3 staging and a web UI** | [poiesisd](https://github.com/JaeAeich/poiesisd), the same deployment shape as `proteus serve`; its author describes it as development-focused |
 | structure parsing, BinaryCIF, density maps, **Python/C bindings** | [molex](https://github.com/foldit-org/molex) |
+| batch structure features with **interface metrics** (buried area, shape complementarity) and protein–ligand features, into Parquet | [structscope](https://github.com/Danialgharaie/structscope) (work in progress by its own account) |
 | ESM **embeddings** across CUDA and MLX backends | [esm-rs](https://github.com/tcztzy/esm-rs). Proteus's ESM work is variant-effect scoring, not representation |
+| ESM-2, ESM C and ESM3 on candle as a library | [ferritin](https://github.com/ferritin-bio/ferritin) (`ferritin-plms`) |
+| structure prediction and design **inside the binary** (ESMFold, ProteinMPNN, RFdiffusion2 on CPU) | [folding-everywhere](https://github.com/lingxusb/folding-everywhere). Proteus dispatches prediction to containers and APIs instead |
 | a terminal viewer with iTerm2 support and more polish | [ProteinView](https://github.com/001TMF/ProteinView) |
 | interactive analysis in a browser | [Mol\*](https://molstar.org), which Proteus does not try to replace |
 
@@ -238,8 +242,8 @@ ChimeraX for interactive analysis. The terminal viewer is not unusual any more: 
 [pixelfold](https://github.com/fuyu-myk/pixelfold) all render structures in a terminal.
 
 What is actually unoccupied is narrower than any of those: the whole loop in one binary that
-runs against a local container socket, with every number it prints checked against someone
-else's implementation.
+runs against a local container socket, with every number that has an independent
+implementation elsewhere checked against it on every push.
 
 ## Speed
 

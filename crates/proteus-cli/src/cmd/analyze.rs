@@ -92,9 +92,9 @@ fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
     let mut seen_dirs = HashSet::new();
     for p in paths {
         if p.is_dir() {
-            let before = out.len();
+            let (files, failed) = (out.len(), unreadable.len());
             walk(p, &mut out, &mut unreadable, &mut seen_dirs);
-            if out.len() == before && unreadable.is_empty() {
+            if out.len() == files && unreadable.len() == failed {
                 bail!(
                     "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under {}",
                     p.display()
@@ -103,7 +103,13 @@ fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
         } else if p.exists() {
             out.push(p.clone());
         } else {
-            bail!("no such file or directory: {}", p.display());
+            // One mistyped path among many is a failure to report, not a reason to drop the rest.
+            unreadable.push((p.clone(), "no such file or directory".into()));
+        }
+    }
+    if out.is_empty() {
+        if let [(p, why)] = unreadable.as_slice() {
+            bail!("{}: {why}", p.display());
         }
     }
     let mut seen_files = HashSet::new();
@@ -521,4 +527,30 @@ fn print_report(
 
     println!("{table}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_path_is_a_failure_not_an_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("a.pdb");
+        std::fs::write(&good, "END\n").unwrap();
+        let missing = dir.path().join("no-such.pdb");
+        let (inputs, failed) = collect_inputs(&[good.clone(), missing.clone()]).unwrap();
+        assert_eq!(inputs, vec![good]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, missing);
+        assert!(failed[0].1.contains("no such file"));
+    }
+
+    #[test]
+    fn a_lone_missing_path_is_still_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("typo.pdb");
+        let err = collect_inputs(&[missing]).unwrap_err().to_string();
+        assert!(err.contains("typo.pdb: no such file or directory"), "{err}");
+    }
 }
