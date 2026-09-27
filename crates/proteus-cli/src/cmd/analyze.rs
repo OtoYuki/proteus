@@ -33,8 +33,8 @@ pub struct Args {
     /// Measure a binder–target interface: `A` (chain A against every other chain), `A:B`,
     /// `H,L:A`; with no value, the first chain against the rest. Adds contacts, buried surface
     /// (dSASA), shape complementarity, cross-interface H-bonds and salt bridges and, when the
-    /// predictor's PAE and scores files sit next to the model (Boltz, ColabFold, AlphaFold 3),
-    /// ipTM, ipAE, ipSAE and LIS
+    /// predictor's PAE and scores files sit next to the model (Boltz, AlphaFold 3, Protenix,
+    /// OpenFold3, ColabFold; Chai-1 gives ipTM only), ipTM, ipAE, ipSAE and LIS
     #[arg(long, value_name = "BINDER[:TARGET]", num_args = 0..=1, default_missing_value = "")]
     interface: Option<String>,
 

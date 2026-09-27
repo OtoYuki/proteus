@@ -82,9 +82,11 @@ flowchart LR
 ```
 
 Models are measured in parallel (`-j` sets the thread count). A file that cannot be read is named
-on stderr and makes the exit status non-zero without stopping the rest. The structure
-measurements are compared with mdtraj, cctbx, FreeSASA, PLIP and sc-rs on every push (section 3);
-the interface ranking is compared with lab results by `make validate-binders` (section 1).
+on stderr and makes the exit status non-zero without stopping the rest. Chai-1's command line
+writes no PAE, so its models get ipTM but no PAE-based scores unless a PAE saved from its Python
+API sits beside them. The structure measurements are compared with mdtraj, cctbx, FreeSASA, PLIP
+and sc-rs in CI (section 3); the interface ranking is compared with lab results by
+`make validate-binders` (section 1).
 
 ---
 
@@ -110,7 +112,7 @@ chain A against every other chain. For every model it adds two groups of columns
 The terminal table sorts by `ipsae_min`, the export has every column, and the rest of the
 per-model QC (section 2) comes with it. Here is the result on twelve designs against IL-7Rα,
 drawn at random from the dataset below, with some columns left out (the terminal also shows
-pLDDT, contact counts, H-bonds, salt bridges and bond RMSZ). The last column is the lab result,
+the binder:target chains, pLDDT, contact counts, H-bonds, salt bridges and bond RMSZ). The last column is the lab result,
 which Proteus never sees:
 
 | model | ipsae_min | iptm | ipae | lis | interface_sc | interface_dsasa | bound in the lab |
