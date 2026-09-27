@@ -4,6 +4,12 @@ at position 14, chain B ubiquitin 1-56 (MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQ
 and one ATP. No MSA, one sample. Structures are gzipped; confidence files are cut to the keys
 Proteus reads, values unchanged.
 
+boltz2/    Boltz 2.2.1 (ghcr.io/jwohlwend/boltz), msa: empty, one sample, mmCIF. 117 tokens: the SEP
+           is one token (Boltz-2's convention). ipSAE 0.253391 / 0.063016 and LIS 0.3937 are what
+           DunbrackLab ipsae.py (6174cf9) gives on this model with the ATP removed, the SEP read as
+           SER and the PAE cut to its first 86 rows; on the files as they are it reports
+           0.619150 / 0.264946 (DunbrackLab/IPSAE#28). Boltz is MIT.
+
 protenix/  Protenix 2.0.0, model protenix_mini_default_v0.5.0, seed 101, --need_atom_confidence.
            126 tokens: the SEP is one token per heavy atom (AlphaFold 3's convention).
            The expected values in tests/interface.rs were computed by hand from Protenix's own
