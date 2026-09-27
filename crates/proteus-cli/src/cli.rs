@@ -37,6 +37,11 @@ pub enum Commands {
     Submit(cmd::submit::Args),
     /// State, tier and timings of a job
     Status(cmd::status::Args),
+    /// Give a job the name the lists show
+    Rename(cmd::rename::Args),
+    /// Remove a job, its records and its files
+    #[command(alias = "rm")]
+    Delete(cmd::delete::Args),
     /// Full biophysical report of a finished job
     Inspect(cmd::inspect::Args),
     /// Quality metrics of structure files: one full report, or a table over many (Parquet/CSV/JSON)

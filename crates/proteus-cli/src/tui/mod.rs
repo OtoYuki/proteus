@@ -161,7 +161,11 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
                     ratatui::restore();
                 } else {
-                    app.status = Some(format!("running: {}", spec.display()));
+                    app.status = Some(
+                        spec.doing
+                            .clone()
+                            .unwrap_or_else(|| format!("running {}…", spec.display())),
+                    );
                     terminal.draw(|f| ui::draw(f, &app))?;
                 }
                 let outcome = tokio::task::block_in_place(|| run_child(&exe, &spec));
@@ -176,8 +180,10 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                 }
                 app.last_command = Some(spec.display());
                 app.status = Some(match outcome {
-                    Ok(line) => line,
-                    Err(e) => format!("could not run `{}`: {e:#}", spec.display()),
+                    // A failure keeps the child's own words; a success says what happened.
+                    Ok((false, line)) => format!("✗ {line}"),
+                    Ok((true, line)) => format!("✓ {}", spec.done.clone().unwrap_or(line)),
+                    Err(e) => format!("✗ could not run `{}`: {e:#}", spec.display()),
                 });
                 // A job may have been added or finished; the folder may have a new file.
                 last_refresh = None;
@@ -439,11 +445,11 @@ fn place_picture(app: &App, placed: &mut Option<(app::PreviewKey, Rect)>) {
     }
 }
 
-/// Run `spec` and return one line for the status bar. For [`RunMode::Quiet`] the output goes
+/// Run `spec` and return whether it succeeded and one line for the status bar. For [`RunMode::Quiet`] the output goes
 /// to a temporary file rather than a pipe: `view --web` starts a browser through `xdg-open`,
 /// which inherits the output and may hold a pipe open for as long as the browser runs, so
 /// reading a pipe to its end could wait for the browser to close.
-fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
+fn run_child(exe: &Path, spec: &CommandSpec) -> Result<(bool, String)> {
     let quiet = spec.mode == RunMode::Quiet;
     if !quiet {
         let a = proteus_render::brand::ansi::Ansi::detect();
@@ -541,7 +547,7 @@ fn run_child(exe: &Path, spec: &CommandSpec) -> Result<String> {
         let mut line = String::new();
         let _ = std::io::stdin().read_line(&mut line);
     }
-    Ok(strip_ansi(&summary).trim().to_string())
+    Ok((failure.is_none(), strip_ansi(&summary).trim().to_string()))
 }
 
 fn last_line(s: &str) -> Option<&str> {

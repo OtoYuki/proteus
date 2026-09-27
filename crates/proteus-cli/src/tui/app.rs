@@ -25,6 +25,15 @@ impl Tab {
         }
     }
 
+    /// The glyph beside the tab's name: a list, a ring, a play mark.
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::Jobs => "≡",
+            Tab::Structures => "⌬",
+            Tab::Run => "▸",
+        }
+    }
+
     fn index(self) -> usize {
         Tab::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
@@ -49,6 +58,10 @@ pub struct CommandSpec {
     /// Lines fed to the first stage's standard input.
     pub stdin: Option<Vec<String>>,
     pub mode: RunMode,
+    /// What the status bar says while it runs and after it succeeds ("opening ubq…", "opened
+    /// ubq in your browser"); without them it shows the command and its last line of output.
+    pub doing: Option<String>,
+    pub done: Option<String>,
 }
 
 impl CommandSpec {
@@ -57,7 +70,15 @@ impl CommandSpec {
             stages: vec![args.iter().map(|a| a.to_string()).collect()],
             stdin: None,
             mode,
+            doing: None,
+            done: None,
         }
+    }
+
+    fn says(mut self, doing: impl Into<String>, done: impl Into<String>) -> Self {
+        self.doing = Some(doing.into());
+        self.done = Some(done.into());
+        self
     }
 
     /// The command line as a user would type it in a POSIX shell.
@@ -129,13 +150,60 @@ pub struct JobsView {
     pub filter: String,
     pub filtering: bool,
     pub selected: usize,
+    pub sort: JobSort,
+    /// The new name being typed for the selected job (`n`).
+    pub renaming: Option<String>,
+    /// The job a delete waits on `y` for (`x`).
+    pub deleting: Option<uuid::Uuid>,
+}
+
+/// The order of the jobs list; `s` cycles through them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum JobSort {
+    #[default]
+    Newest,
+    Name,
+    State,
+    Confidence,
+}
+
+impl JobSort {
+    pub fn label(self) -> &'static str {
+        match self {
+            JobSort::Newest => "newest first",
+            JobSort::Name => "by name",
+            JobSort::State => "by state",
+            JobSort::Confidence => "most confident first",
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            JobSort::Newest => JobSort::Name,
+            JobSort::Name => JobSort::State,
+            JobSort::State => JobSort::Confidence,
+            JobSort::Confidence => JobSort::Newest,
+        }
+    }
+}
+
+/// Where a state sorts: work in flight first, then failures to look at, then finished work.
+fn state_rank(s: &JobStatus) -> u8 {
+    match s {
+        JobStatus::Running => 0,
+        JobStatus::Queued | JobStatus::Pending => 1,
+        JobStatus::Failed => 2,
+        JobStatus::Completed => 3,
+        JobStatus::Cancelled => 4,
+    }
 }
 
 impl JobsView {
     /// Jobs matching the filter (case-insensitive, over id, name, status and engine).
     pub fn visible(&self) -> Vec<&JobSummary> {
         let needle = self.filter.to_lowercase();
-        self.all
+        let mut v: Vec<&JobSummary> = self
+            .all
             .iter()
             .filter(|j| {
                 needle.is_empty()
@@ -147,7 +215,19 @@ impl JobsView {
                     || state_word(&j.job.status).contains(&needle)
                     || engine(j).to_lowercase().contains(&needle)
             })
-            .collect()
+            .collect();
+        // Stable sorts over the newest-first list, so ties stay newest first.
+        match self.sort {
+            JobSort::Newest => {}
+            JobSort::Name => v.sort_by_cached_key(|j| j.header.to_lowercase()),
+            JobSort::State => v.sort_by_key(|j| state_rank(&j.job.status)),
+            JobSort::Confidence => v.sort_by(|a, b| {
+                b.plddt
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .total_cmp(&a.plddt.unwrap_or(f64::NEG_INFINITY))
+            }),
+        }
+        v
     }
 
     pub fn current(&self) -> Option<&JobSummary> {
@@ -372,6 +452,8 @@ pub struct Field {
     pub label: &'static str,
     pub hint: &'static str,
     pub kind: FieldKind,
+    /// A number: digits typed on it are its value, not tab switches.
+    pub numeric: bool,
 }
 
 impl Field {
@@ -380,6 +462,14 @@ impl Field {
             label,
             hint,
             kind: FieldKind::Text(String::new()),
+            numeric: false,
+        }
+    }
+
+    fn number(label: &'static str, hint: &'static str) -> Self {
+        Self {
+            numeric: true,
+            ..Self::text(label, hint)
         }
     }
 
@@ -388,6 +478,7 @@ impl Field {
             label,
             hint,
             kind: FieldKind::Choice { options, index: 0 },
+            numeric: false,
         }
     }
 
@@ -460,8 +551,8 @@ impl Default for RunView {
                     "alanine = one Ala per position; saturation = all 19 per position",
                     MODES,
                 ),
-                Field::text("From residue", "optional, 1-based, inclusive"),
-                Field::text("To residue", "optional, 1-based, inclusive"),
+                Field::number("From residue", "optional, 1-based, inclusive"),
+                Field::number("To residue", "optional, 1-based, inclusive"),
                 Field::choice(
                     "Runner",
                     "auto tries a container, then the ESMFold API; simulated is offline and fake",
@@ -517,6 +608,8 @@ impl RunView {
                     stages: vec![args],
                     stdin: None,
                     mode: RunMode::Pause,
+                    doing: None,
+                    done: Some("folded; the job is at the top of Jobs".into()),
                 })
             }
             FormKind::Scan => {
@@ -551,6 +644,8 @@ impl RunView {
                     stages: vec![mutate, screen],
                     stdin,
                     mode: RunMode::Pause,
+                    doing: None,
+                    done: Some("scan finished".into()),
                 })
             }
         }
@@ -562,7 +657,7 @@ impl RunView {
 enum SequenceInput {
     /// An existing file.
     File(String),
-    /// A FASTA record, as lines (a bare sequence gets a `>query` header).
+    /// A FASTA record, as lines (a bare sequence is named by its first residues).
     Fasta(Vec<String>),
 }
 
@@ -605,7 +700,10 @@ impl SequenceInput {
         }
         let seq: String = raw.split_whitespace().collect();
         if !raw.contains('/') && seq.chars().all(|c| c.is_ascii_alphabetic()) {
-            return Ok(Self::Fasta(vec![">query".into(), seq.to_ascii_uppercase()]));
+            // Named by its first residues, so two pasted sequences tell apart in Jobs.
+            let seq = seq.to_ascii_uppercase();
+            let name: String = seq.chars().take(8).collect();
+            return Ok(Self::Fasta(vec![format!(">{name}"), seq]));
         }
         Err(format!(
             "'{raw}' is neither a file nor a sequence of amino-acid letters"
@@ -674,9 +772,18 @@ impl App {
         }
     }
 
+    /// The name of job `id` as the list shows it.
+    fn job_name(&self, id: uuid::Uuid) -> String {
+        self.jobs.all.iter().find(|j| j.job.id == id).map_or_else(
+            || id.to_string()[..8].to_string(),
+            |j| display_name(&j.header),
+        )
+    }
+
     /// Whether keys are going into a text box rather than being commands.
     pub fn typing(&self) -> bool {
-        (self.tab == Tab::Jobs && self.jobs.filtering) || (self.tab == Tab::Run && self.run.editing)
+        (self.tab == Tab::Jobs && (self.jobs.filtering || self.jobs.renaming.is_some()))
+            || (self.tab == Tab::Run && self.run.editing)
     }
 
     /// The structure file the current tab needs measurements (and a preview) for, if not
@@ -703,6 +810,19 @@ impl App {
         if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q')) {
             return Action::Quit;
         }
+        // A delete waits for `y`; any other key keeps the job.
+        if let Some(id) = self.jobs.deleting.take() {
+            if key.code == KeyCode::Char('y') {
+                let short = id.to_string()[..8].to_string();
+                let name = self.job_name(id);
+                return Action::Run(
+                    CommandSpec::one(&["delete", &short], RunMode::Quiet)
+                        .says(format!("deleting {name}…"), format!("deleted {name}")),
+                );
+            }
+            self.status = Some("kept it; nothing was deleted".into());
+            return Action::None;
+        }
         if self.help {
             // Any key closes the help.
             self.help = false;
@@ -713,22 +833,37 @@ impl App {
             self.help = true;
             return Action::None;
         }
+        // Alt+1..3 switches tabs from anywhere, even mid-edit; the edit is kept.
+        if let KeyCode::Char(c @ '1'..='3') = key.code {
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                self.jobs.filtering = false;
+                self.jobs.renaming = None;
+                self.run.editing = false;
+                self.tab = Tab::ALL[(c as u8 - b'1') as usize];
+                return Action::None;
+            }
+        }
         if self.typing() {
             return self.type_key(key);
         }
         // On a focused text field of the Run form, a printable key is text: it starts editing
-        // rather than acting as a command (a sequence typed straight in used to jump tabs at a
-        // digit and quit at a q, losing the form).
+        // rather than acting as a command (a sequence typed straight in used to quit at a q,
+        // losing the form). Digits are the exception: they switch tabs, as everywhere else,
+        // unless the field holds a number.
         if let KeyCode::Char(c) = key.code {
+            let tab_digit = matches!(c, '1'..='3');
             if self.tab == Tab::Run && !ctrl && !c.is_control() {
                 if let Some(Field {
                     kind: FieldKind::Text(s),
+                    numeric,
                     ..
                 }) = self.run.focused_mut()
                 {
-                    s.push(c);
-                    self.run.editing = true;
-                    return Action::None;
+                    if !tab_digit || *numeric {
+                        s.push(c);
+                        self.run.editing = true;
+                        return Action::None;
+                    }
                 }
             }
         }
@@ -791,6 +926,35 @@ impl App {
     }
 
     fn type_key(&mut self, key: KeyEvent) -> Action {
+        if self.tab == Tab::Jobs {
+            if let Some(name) = self.jobs.renaming.as_mut() {
+                match key.code {
+                    KeyCode::Char(c) => name.push(c),
+                    KeyCode::Backspace => {
+                        name.pop();
+                    }
+                    KeyCode::Esc => self.jobs.renaming = None,
+                    KeyCode::Enter => {
+                        let name = self.jobs.renaming.take().unwrap_or_default();
+                        let name = name.trim();
+                        let Some(j) = self.jobs.current() else {
+                            return Action::None;
+                        };
+                        if name.is_empty() || name == j.header {
+                            self.status = Some("name unchanged".into());
+                            return Action::None;
+                        }
+                        let short = short_id(&j.job.id.to_string()).to_string();
+                        return Action::Run(
+                            CommandSpec::one(&["rename", &short, name], RunMode::Quiet)
+                                .says("renaming…", format!("renamed to {name}")),
+                        );
+                    }
+                    _ => {}
+                }
+                return Action::None;
+            }
+        }
         let text: &mut String = if self.tab == Tab::Jobs {
             &mut self.jobs.filter
         } else {
@@ -839,6 +1003,25 @@ impl App {
         match key.code {
             KeyCode::Char('/') => self.jobs.filtering = true,
             KeyCode::Char('r') => return Action::RefreshJobs,
+            KeyCode::Char('s') => {
+                self.jobs.sort = self.jobs.sort.next();
+                self.jobs.selected = 0;
+            }
+            KeyCode::Char('n') => {
+                if let Some(j) = self.jobs.current() {
+                    self.jobs.renaming = Some(j.header.clone());
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(j) = self.jobs.current() {
+                    if j.job.status == JobStatus::Running {
+                        self.status =
+                            Some("that job is still running; delete it when it ends".into());
+                    } else {
+                        self.jobs.deleting = Some(j.job.id);
+                    }
+                }
+            }
             KeyCode::Esc if !self.jobs.filter.is_empty() => {
                 self.jobs.filter.clear();
                 self.jobs.clamp();
@@ -847,7 +1030,10 @@ impl App {
                 let Some(j) = self.jobs.current() else {
                     return Action::None;
                 };
-                let id = j.job.id.to_string();
+                let full = j.job.id.to_string();
+                // The short id: `proteus` takes any unique prefix, and it reads at a glance.
+                let id = short_id(&full).to_string();
+                let name = display_name(&j.header);
                 if key.code == KeyCode::Char('i') {
                     return Action::Run(CommandSpec::one(&["inspect", &id], RunMode::Pause));
                 }
@@ -860,7 +1046,10 @@ impl App {
                     return Action::None;
                 }
                 return Action::Run(if key.code == KeyCode::Char('w') {
-                    CommandSpec::one(&["view", &id, "--web"], RunMode::Quiet)
+                    CommandSpec::one(&["view", &id, "--web"], RunMode::Quiet).says(
+                        format!("opening {name} in your browser…"),
+                        format!("opened {name} in your browser"),
+                    )
                 } else {
                     CommandSpec::one(&["view", &id, "--interactive"], RunMode::Interactive)
                 });
@@ -900,10 +1089,21 @@ impl App {
                     }
                     return Action::None;
                 }
-                let path = e.path.to_string_lossy().into_owned();
+                // Relative to the folder proteus started in (the children's working directory),
+                // so the command reads short.
+                let shown = std::env::current_dir()
+                    .ok()
+                    .and_then(|cwd| e.path.strip_prefix(cwd).ok().map(Path::to_path_buf))
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .unwrap_or_else(|| e.path.clone());
+                let path = shown.to_string_lossy().into_owned();
+                let name = e.name.clone();
                 return Action::Run(match key.code {
                     KeyCode::Char('w') => {
-                        CommandSpec::one(&["view", &path, "--web"], RunMode::Quiet)
+                        CommandSpec::one(&["view", &path, "--web"], RunMode::Quiet).says(
+                            format!("opening {name} in your browser…"),
+                            format!("opened {name} in your browser"),
+                        )
                     }
                     KeyCode::Char('a') => CommandSpec::one(&["analyze", &path], RunMode::Pause),
                     _ => CommandSpec::one(&["view", &path, "--interactive"], RunMode::Interactive),
@@ -983,6 +1183,16 @@ fn move_selection(selected: &mut usize, n: usize, code: KeyCode) {
 pub fn file_stamp(path: &Path) -> Option<(std::time::SystemTime, u64)> {
     let m = std::fs::metadata(path).ok()?;
     Some((m.modified().ok()?, m.len()))
+}
+
+/// A job's name as the lists show it: the header, or "untitled" when there is none.
+pub fn display_name(header: &str) -> String {
+    let h = header.trim();
+    if h.is_empty() {
+        "untitled".into()
+    } else {
+        h.to_string()
+    }
 }
 
 pub fn short_id(id: &str) -> &str {

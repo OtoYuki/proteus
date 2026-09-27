@@ -139,7 +139,7 @@ fn the_fold_form_builds_a_submit_command() {
         vec![args(&[
             "submit",
             "--fasta",
-            ">query\nMKTAYIAKQ",
+            ">MKTAYIAK\nMKTAYIAKQ",
             "--tier",
             "sota",
             "--runner",
@@ -149,7 +149,7 @@ fn the_fold_form_builds_a_submit_command() {
     assert_eq!(spec.mode, RunMode::Pause);
     assert_eq!(
         spec.display(),
-        r"proteus submit --fasta $'>query\nMKTAYIAKQ' --tier sota --runner esm-api"
+        r"proteus submit --fasta $'>MKTAYIAK\nMKTAYIAKQ' --tier sota --runner esm-api"
     );
 }
 
@@ -199,10 +199,10 @@ fn the_scan_form_pipes_mutate_into_screen() {
             ]),
         ]
     );
-    assert_eq!(spec.stdin, Some(args(&[">query", "MKTAYIAKQR"])));
+    assert_eq!(spec.stdin, Some(args(&[">MKTAYIAK", "MKTAYIAKQR"])));
     assert_eq!(
         spec.display(),
-        "printf '%s\\n' '>query' MKTAYIAKQR | proteus mutate - --mode alanine --start 3 --end 7 \
+        "printf '%s\\n' '>MKTAYIAK' MKTAYIAKQR | proteus mutate - --mode alanine --start 3 --end 7 \
          | proteus screen - --runner auto --scorer structure --export 'out dir/scan.parquet'"
     );
 
@@ -263,7 +263,8 @@ fn job_keys_move_filter_and_open() {
     let Action::Run(spec) = app.handle_key(key(KeyCode::Enter)) else {
         panic!()
     };
-    let id = app.jobs.all[0].job.id.to_string();
+    // The short id: it reads at a glance, and proteus takes any unique prefix.
+    let id = app.jobs.all[0].job.id.to_string()[..8].to_string();
     assert_eq!(spec.stages, vec![args(&["view", &id, "--interactive"])]);
     assert_eq!(spec.mode, RunMode::Interactive);
     let Action::Run(spec) = press(&mut app, "w") else {
@@ -663,7 +664,7 @@ fn the_home_screen_shows_tabs_gauges_and_guidance() {
         },
     );
     let screen = rendered(&app, 160, 40);
-    assert!(screen.contains("2 structures"), "{screen}");
+    assert!(screen.contains("⌬ structures 2"), "{screen}");
     assert!(screen.contains("98 % favoured"), "{screen}");
     assert!(screen.contains("α30 β40 coil 30 %"), "{screen}");
     assert!(screen.contains("11.8 Å"), "{screen}");
@@ -674,4 +675,161 @@ fn the_home_screen_shows_tabs_gauges_and_guidance() {
     assert!(screen.contains("ESMFold: one chain"), "{screen}");
     assert!(screen.contains("what happens"), "{screen}");
     assert!(screen.contains("human ubiquitin"), "{screen}");
+}
+
+// ---- tabs from the Run form, sorting, renaming, deleting ----------------------------------
+
+#[test]
+fn digits_switch_tabs_from_the_run_form_except_on_a_number_field() {
+    let mut app = app_in(Path::new("/"));
+    app.tab = Tab::Run;
+    // The sequence field is focused: letters are text, a digit is a tab key.
+    press(&mut app, "2");
+    assert_eq!(
+        app.tab,
+        Tab::Structures,
+        "a digit on a text field switched tabs"
+    );
+    press(&mut app, "3");
+    assert_eq!(app.tab, Tab::Run);
+    press(&mut app, "MKT");
+    assert!(app.run.editing);
+    assert_eq!(app.run.fold[0].value(), "MKT");
+    // Esc stops typing; the digit then switches tabs again.
+    app.handle_key(key(KeyCode::Esc));
+    assert!(!app.run.editing);
+    press(&mut app, "1");
+    assert_eq!(app.tab, Tab::Jobs);
+
+    // On a number field, digits are the number.
+    press(&mut app, "3");
+    app.run.form = FormKind::Scan;
+    app.run.focus = 2;
+    press(&mut app, "12");
+    assert_eq!(app.tab, Tab::Run);
+    assert_eq!(app.run.scan[2].value(), "12");
+
+    // Alt+digit switches from anywhere, even mid-edit, and keeps the edit.
+    let alt1 = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT);
+    app.handle_key(alt1);
+    assert_eq!(app.tab, Tab::Jobs);
+    assert!(!app.typing());
+    assert_eq!(app.run.scan[2].value(), "12");
+}
+
+#[test]
+fn s_cycles_the_order_of_the_jobs() {
+    let mut app = app_in(Path::new("/"));
+    let mut low = job("zeta", JobStatus::Completed, true);
+    low.plddt = Some(40.0);
+    let mut high = job("alpha", JobStatus::Completed, true);
+    high.plddt = Some(90.0);
+    app.jobs
+        .replace(vec![low, job("mid", JobStatus::Running, false), high]);
+    let names = |app: &App| -> Vec<String> {
+        app.jobs
+            .visible()
+            .iter()
+            .map(|j| j.header.clone())
+            .collect()
+    };
+    assert_eq!(names(&app), ["zeta", "mid", "alpha"]);
+    press(&mut app, "s");
+    assert_eq!(app.jobs.sort, JobSort::Name);
+    assert_eq!(names(&app), ["alpha", "mid", "zeta"]);
+    press(&mut app, "s");
+    assert_eq!(names(&app), ["mid", "zeta", "alpha"], "running first");
+    press(&mut app, "s");
+    assert_eq!(names(&app), ["alpha", "zeta", "mid"], "no pLDDT last");
+    assert!(rendered(&app, 120, 30).contains("most confident first"));
+    press(&mut app, "s");
+    assert_eq!(app.jobs.sort, JobSort::Newest);
+}
+
+#[test]
+fn n_renames_the_selected_job() {
+    let mut app = app_in(Path::new("/"));
+    app.jobs
+        .replace(vec![job("A +1 chain(s)", JobStatus::Completed, true)]);
+    let id = app.jobs.all[0].job.id.to_string()[..8].to_string();
+    press(&mut app, "n");
+    assert!(app.typing());
+    assert_eq!(app.jobs.renaming.as_deref(), Some("A +1 chain(s)"));
+    // Keys are text now: q does not quit, digits do not switch tabs.
+    for _ in 0..13 {
+        app.handle_key(key(KeyCode::Backspace));
+    }
+    assert_eq!(press(&mut app, "PD-L1 q2"), Action::None);
+    assert_eq!(app.tab, Tab::Jobs);
+    assert!(rendered(&app, 120, 30).contains(&format!("rename {id}  PD-L1 q2")));
+    let Action::Run(spec) = app.handle_key(key(KeyCode::Enter)) else {
+        panic!("Enter did not rename")
+    };
+    assert_eq!(spec.stages, vec![args(&["rename", &id, "PD-L1 q2"])]);
+    assert_eq!(spec.mode, RunMode::Quiet);
+    assert_eq!(spec.done.as_deref(), Some("renamed to PD-L1 q2"));
+    assert!(!app.typing());
+
+    // Esc cancels; an unchanged name runs nothing.
+    press(&mut app, "n");
+    app.handle_key(key(KeyCode::Esc));
+    assert!(app.jobs.renaming.is_none());
+    press(&mut app, "n");
+    assert_eq!(app.handle_key(key(KeyCode::Enter)), Action::None);
+}
+
+#[test]
+fn x_deletes_only_after_y() {
+    let mut app = app_in(Path::new("/"));
+    app.jobs.replace(vec![
+        job("ubq", JobStatus::Completed, true),
+        job("busy", JobStatus::Running, false),
+    ]);
+    let id = app.jobs.all[0].job.id.to_string()[..8].to_string();
+    press(&mut app, "x");
+    let screen = rendered(&app, 120, 30);
+    assert!(
+        screen.contains(&format!("delete ubq ({id}) and its files?")),
+        "{screen}"
+    );
+    // Any other key keeps it, and is not acted on.
+    assert_eq!(press(&mut app, "q"), Action::None);
+    assert!(app.jobs.deleting.is_none());
+    assert!(app
+        .status
+        .as_deref()
+        .unwrap()
+        .contains("nothing was deleted"));
+
+    press(&mut app, "x");
+    let Action::Run(spec) = press(&mut app, "y") else {
+        panic!("y did not delete")
+    };
+    assert_eq!(spec.stages, vec![args(&["delete", &id])]);
+    assert_eq!(spec.done.as_deref(), Some("deleted ubq"));
+
+    // A running job is not deleted from under its runner.
+    press(&mut app, "j");
+    press(&mut app, "x");
+    assert!(app.jobs.deleting.is_none());
+}
+
+#[test]
+fn the_status_line_says_what_happened_not_the_raw_output() {
+    let mut app = app_in(Path::new("/"));
+    app.last_command = Some("proteus view 73d5e504 --web".into());
+    app.status = Some("✓ opened ubq in your browser".into());
+    let screen = rendered(&app, 120, 30);
+    let last = screen.lines().last().unwrap();
+    assert!(last.contains("✓ opened ubq in your browser"), "{last}");
+    assert!(last.contains("$ proteus view 73d5e504 --web"), "{last}");
+    // Narrow: the message wins and the command gives way.
+    let screen = rendered(&app, 40, 30);
+    let last = screen.lines().last().unwrap();
+    assert!(last.contains("✓ opened ubq"), "{last}");
+    assert!(!last.contains("$ proteus"), "{last}");
+    // A long message is cut with an ellipsis, never wrapped or run off the edge.
+    app.status = Some(format!("✗ {}", "x".repeat(200)));
+    let screen = rendered(&app, 60, 30);
+    assert!(screen.lines().last().unwrap().trim_end().ends_with('…'));
 }

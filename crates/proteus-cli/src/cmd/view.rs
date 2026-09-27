@@ -714,6 +714,33 @@ fn looks_like_job_ref(target: &str) -> bool {
         || (!target.is_empty() && target.chars().all(|c| c.is_ascii_hexdigit() || c == '-'))
 }
 
+/// The part of a page title fit for a file name: its name and id, before any note in brackets
+/// or after a dash, as lowercase words joined by `-` (`ubq · 73d5e504 (SIMULATED — …)` gives
+/// `ubq-73d5e504`).
+fn page_slug(title: &str) -> String {
+    let head = title.split(['(', '—']).next().unwrap_or(title);
+    let words: Vec<String> = head
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let mut slug = String::new();
+    for w in words {
+        if slug.len() + w.len() > 40 {
+            break;
+        }
+        if !slug.is_empty() {
+            slug.push('-');
+        }
+        slug.push_str(&w);
+    }
+    if slug.is_empty() {
+        "structure".into()
+    } else {
+        slug
+    }
+}
+
 /// Create the `--web` page as a new file with an unpredictable name in `dir`.
 ///
 /// The name used to be fixed (`proteus_view_<title>.html` in the shared temp directory), so
@@ -722,13 +749,8 @@ fn looks_like_job_ref(target: &str) -> bool {
 /// (never following a link) under a random name, readable only by its owner; the file is kept
 /// so the browser can open it after this process exits.
 fn create_web_page_file(dir: &Path, title: &str) -> Result<(std::fs::File, PathBuf)> {
-    let sanitized: String = title
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .take(48)
-        .collect();
     let file = tempfile::Builder::new()
-        .prefix(&format!("proteus_view_{sanitized}_"))
+        .prefix(&format!("proteus-{}-", page_slug(title)))
         .suffix(".html")
         .tempfile_in(dir)
         .with_context(|| format!("Failed to create an HTML file in {}", dir.display()))?;
@@ -911,6 +933,18 @@ mod tests {
         let meta = std::fs::symlink_metadata(&path).unwrap();
         assert!(meta.file_type().is_file(), "the page is not a regular file");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "<html></html>");
+    }
+
+    #[test]
+    fn page_names_keep_the_name_and_id_only() {
+        use super::page_slug;
+        assert_eq!(
+            page_slug("ubq · 73d5e504 (SIMULATED — synthetic helix, not a prediction)"),
+            "ubq-73d5e504"
+        );
+        assert_eq!(page_slug("1crn.pdb"), "1crn-pdb");
+        assert_eq!(page_slug("— · —"), "structure");
+        assert!(page_slug(&"long name ".repeat(20)).len() <= 40);
     }
 
     /// `proteus view typo.pdb` used to create `proteus.db` (and its -wal/-shm files) before
