@@ -137,6 +137,30 @@ impl Ansi {
         }
     }
 
+    /// A selected tab, as the home screen draws it: ground on accent, bold; reverse video and
+    /// bold without colours, so the selection never rests on colour alone; brackets in place
+    /// of the outer spaces for a pipe.
+    pub fn tab_on(&self, text: &str) -> String {
+        if self.plain {
+            let inner = text.strip_prefix(' ').unwrap_or(text);
+            let inner = inner.strip_suffix(' ').unwrap_or(inner);
+            return format!("[{inner}]");
+        }
+        let (g, a) = (self.theme.ground, self.theme.accent);
+        match self.depth {
+            ColorDepth::TrueColor => format!(
+                "\x1b[1;38;2;{};{};{};48;2;{};{};{}m{text}{RESET}",
+                g.r, g.g, g.b, a.r, a.g, a.b
+            ),
+            ColorDepth::Ansi256 => format!(
+                "\x1b[1;38;5;{};48;5;{}m{text}{RESET}",
+                to_ansi256(g),
+                to_ansi256(a)
+            ),
+            _ => format!("\x1b[1;7m{text}{RESET}"),
+        }
+    }
+
     pub fn colours(&self) -> bool {
         self.depth != ColorDepth::None
     }

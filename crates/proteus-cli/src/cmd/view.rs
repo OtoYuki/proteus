@@ -590,7 +590,17 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let score_colors = proteus_render::tui::ScoreColors::of(&structure_data);
         let interface_colors = proteus_render::tui::InterfaceColors::of(&structure_data);
         let findings = proteus_render::tui::TerminalFinding::of(&structure_data);
+        // Consecutive runs of one chain along the ribbon, for the panel's chain rulers.
+        let mut chains: Vec<(String, usize)> = Vec::new();
+        for l in &structure_data.residue_labels {
+            match chains.last_mut() {
+                Some((id, k)) if *id == l.chain => *k += 1,
+                _ => chains.push((l.chain.clone(), 1)),
+            }
+        }
         let dashboard_data = Some(proteus_render::tui::DashboardData {
+            chains,
+            dssp: structure_data.dssp.clone(),
             title: title.clone(),
             num_residues: structure_data.num_residues,
             num_disulfides: structure_data.num_disulfides,
