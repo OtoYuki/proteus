@@ -169,9 +169,11 @@ output terms, so none are committed to this repository.
 | shape complementarity | sc-rs (the code it was ported from) | 1e-12 on 2PTC |
 | shape complementarity | dataset Rosetta Sc | Pearson r 0.57 (protocol not published; see `last_run.md`) |
 
-What the metrics are worth, measured on the lab results (average precision; random = 0.107):
-ipSAE_min 0.358 (the dataset's own AF3 ipSAE_min: 0.350), LIS 0.313, −ipAE 0.298, Sc 0.267 (the
-dataset's Rosetta Sc: 0.178), ipTM 0.236, mean pLDDT 0.208. Keeping `ipsae_min > 0.61`, the paper's
+What the metrics are worth, measured on the lab results as average precision per target, averaged
+over the 15 targets (random = the binder rate, 0.131 on average): ipSAE_min 0.513 (the dataset's
+own AF3 ipSAE_min: 0.513), LIS 0.477, −ipAE 0.444, pDockQ2 (dataset) 0.436, ipTM 0.425, mean pLDDT
+0.409, Sc 0.381 (the dataset's Rosetta Sc: 0.267, Rosetta interface ΔG: 0.332). Pooled over all
+designs instead, ipSAE_min scores 0.358 against 0.107. Keeping `ipsae_min > 0.61`, the paper's
 threshold, keeps 509 of 3 669 designs, of which 203 bound (precision 0.40, recall 0.52).
 
 Known differences, each explained in `binders/tolerances.toml`:

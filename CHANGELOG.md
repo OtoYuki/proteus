@@ -55,8 +55,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
 - `make validate-binders`: the interface metrics against the Overath et al. 2025 meta-analysis
   (3 669 designs with a lab result, Zenodo 10.5281/zenodo.15722219). On single-chain targets,
   ipSAE and ipAE agree with the dataset's own values to its rounding. On the lab results,
-  ipSAE_min ranks binders with average precision 0.358 (random 0.107). Results are in
-  `validate/binders/last_run.md`. CI checks one Boltz-1 design from the same dataset.
+  ipSAE_min ranks each target's designs with average precision 0.513 on average (random 0.131),
+  ahead of every other score in the dataset, pDockQ2 and Rosetta's interface ΔG included.
+  Results, per target and pooled, are in `validate/binders/last_run.md`. CI checks one Boltz-1 design from the same dataset.
 - AlphaFold 3 local-run output names (`<name>_confidences.json` beside `<name>_model.cif`, and
   `confidences.json` beside a sample's `model.cif`) are recognised as PAE and scores files.
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
