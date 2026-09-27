@@ -99,6 +99,20 @@ const TIER_SHM_BYTES: i64 = 2 << 30;
 /// Where the NVIDIA Container Toolkit writes its CDI spec (`nvidia-ctk cdi generate`).
 const NVIDIA_CDI_SPECS: [&str; 2] = ["/etc/cdi/nvidia.yaml", "/var/run/cdi/nvidia.yaml"];
 
+/// What to try after the predictor ran the GPU out of memory. With an alignment, its depth is
+/// the cheapest thing to give up: on a 6 GB GPU a 281-residue complex (trypsin + BPTI) failed
+/// at 1 024 sequences and folded at 256 (pLDDT 97.2).
+fn oom_advice(with_msa: bool, max_msa: &str) -> String {
+    let mut s = String::from("the GPU ran out of memory and the predictor skipped the input: ");
+    if with_msa {
+        s.push_str(&format!(
+            "a shallower alignment (PROTEUS_BOLTZ_MAX_MSA_SEQS=256; now {max_msa}), "
+        ));
+    }
+    s.push_str("fewer --samples, a smaller complex, or a larger GPU");
+    s
+}
+
 /// The CDI device a tier container is given, from `PROTEUS_GPU`: `off` runs on CPU, any
 /// other value is a CDI device name (`nvidia.com/gpu=0`), and unset means
 /// `nvidia.com/gpu=all` when an NVIDIA CDI spec is installed, else CPU.
@@ -498,11 +512,12 @@ impl ComputeRunner for OciRunner {
 
         let found_pdb = best_model(work_dir)?;
         if found_pdb.is_none() && out_of_memory {
-            return Err(EngineError::Container(
-                "the GPU ran out of memory and the predictor skipped the input: fewer --samples, \
-                 a smaller complex, or a larger GPU"
-                    .into(),
-            ));
+            return Err(EngineError::Container(oom_advice(
+                boltz
+                    .as_ref()
+                    .is_some_and(|b| b.use_msa_server || !b.msa_files.is_empty()),
+                &max_msa,
+            )));
         }
         let pdb_path = found_pdb.ok_or_else(|| {
             EngineError::Container(format!(
@@ -590,6 +605,16 @@ mod tests {
         }
         let best = best_model(dir.path()).unwrap().unwrap();
         assert!(best.ends_with("input_model_0.pdb"), "{best:?}");
+    }
+
+    #[test]
+    fn out_of_memory_advice_names_the_alignment_depth_when_there_is_one() {
+        let a = oom_advice(true, "1024");
+        assert!(
+            a.contains("PROTEUS_BOLTZ_MAX_MSA_SEQS=256; now 1024"),
+            "{a}"
+        );
+        assert!(!oom_advice(false, "1024").contains("MSA"));
     }
 
     #[test]

@@ -108,6 +108,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- When Boltz runs the GPU out of memory on a run with an alignment, the error suggests a
+  shallower one (`PROTEUS_BOLTZ_MAX_MSA_SEQS=256`) first: on a 6 GB GPU trypsin + BPTI (281
+  residues) failed at the default 1 024 sequences and folded at 256.
 - The jobs list's engine column is now the model: `boltz`, `boltz+msa`, `esmfold` or
   `simulated` (a container run names its image; `+msa` marks a run with an alignment, which
   explains most confidence gaps between two runs of one protein). The job line reads
