@@ -67,6 +67,53 @@ impl Framebuffer {
         }
     }
 
+    /// Box-filter this `k`-times supersampled buffer into `out` (`out` is `width / k` by
+    /// `height / k`). A pixel is drawn when enough of its `k × k` samples hit geometry (depth
+    /// finite): at least 2 of 9, so a ribbon thinner than a pixel still shows instead of falling
+    /// between samples. It takes the mean colour of the samples that hit, so it stays exactly
+    /// black (the "empty" colour the terminal compositors leave transparent) only where nothing
+    /// was drawn, and edges never blend towards a background the terminal may not share.
+    pub fn downsample_into(&self, out: &mut Framebuffer, k: usize) {
+        let k = k.max(1);
+        let (w, h) = (self.width / k, self.height / k);
+        out.resize(w, h);
+        let need = ((k * k * 2) as f32 / 9.0).ceil().max(1.0) as usize;
+        for y in 0..h {
+            for x in 0..w {
+                let (mut r, mut g, mut b, mut n) = (0u32, 0u32, 0u32, 0usize);
+                let mut depth = f32::INFINITY;
+                for sy in 0..k {
+                    let row = (y * k + sy) * self.width + x * k;
+                    for sx in 0..k {
+                        let i = row + sx;
+                        if self.depths[i].is_finite() {
+                            let c = self.colors[i];
+                            r += c.r as u32;
+                            g += c.g as u32;
+                            b += c.b as u32;
+                            n += 1;
+                            depth = depth.min(self.depths[i]);
+                        }
+                    }
+                }
+                let o = y * w + x;
+                if n >= need {
+                    let n32 = n as u32;
+                    let mut c = ColorRGB::new((r / n32) as u8, (g / n32) as u8, (b / n32) as u8);
+                    // Pure black means "empty" downstream; a drawn pixel never is.
+                    if c == ColorRGB::BLACK {
+                        c = ColorRGB::new(1, 1, 1);
+                    }
+                    out.colors[o] = c;
+                    out.depths[o] = depth;
+                } else {
+                    out.colors[o] = ColorRGB::BLACK;
+                    out.depths[o] = f32::INFINITY;
+                }
+            }
+        }
+    }
+
     pub fn clear(&mut self, bg: ColorRGB) {
         self.colors.fill(bg);
         self.depths.fill(f32::INFINITY);
@@ -90,5 +137,28 @@ impl Framebuffer {
                 self.colors[idx] = color;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod downsample_tests {
+    use super::*;
+
+    /// A 3×3-supersampled pixel is drawn when at least 2 of its 9 samples hit, in the mean colour
+    /// of those samples; otherwise it stays empty (pure black, transparent downstream).
+    #[test]
+    fn coverage_decides_and_hits_are_averaged() {
+        let mut hi = Framebuffer::new(6, 3);
+        // Left pixel: one hit only. Right pixel: two hits, 100 and 200.
+        hi.set_pixel(0, 0, ColorRGB::new(50, 50, 50), 1.0);
+        hi.set_pixel(3, 0, ColorRGB::new(100, 0, 0), 1.0);
+        hi.set_pixel(5, 2, ColorRGB::new(200, 0, 0), 2.0);
+        let mut out = Framebuffer::new(1, 1);
+        hi.downsample_into(&mut out, 3);
+        assert_eq!((out.width, out.height), (2, 1));
+        assert_eq!(out.colors[0], ColorRGB::BLACK);
+        assert!(out.depths[0].is_infinite());
+        assert_eq!(out.colors[1], ColorRGB::new(150, 0, 0));
+        assert_eq!(out.depths[1], 1.0);
     }
 }

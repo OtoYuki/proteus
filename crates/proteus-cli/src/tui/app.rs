@@ -302,8 +302,22 @@ pub enum Analysis {
         residues: usize,
         predicted: bool,
         rows: Vec<[String; 2]>,
+        /// For a complex: the interface the viewers open on, as label/value rows.
+        interface: Vec<[String; 2]>,
+        /// For a complex with the predictor's PAE: whether ipSAE_min clears 0.61, and the line.
+        verdict: Option<(bool, String)>,
+        preview: Option<Preview>,
     },
     Failed(String),
+}
+
+/// A small still of a structure, for the preview panes: row-major pixels, `None` where
+/// nothing was drawn (the terminal's background shows there).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preview {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<Option<(u8, u8, u8)>>,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -618,18 +632,23 @@ impl App {
         (self.tab == Tab::Jobs && self.jobs.filtering) || (self.tab == Tab::Run && self.run.editing)
     }
 
-    /// The structure file the Structures tab needs measurements for, if not already known.
+    /// The structure file the current tab needs measurements (and a preview) for, if not
+    /// already known: the selected file in Structures, the selected job's model in Jobs.
     pub fn wanted_analysis(&self) -> Option<PathBuf> {
-        if self.tab != Tab::Structures {
-            return None;
-        }
-        let e = self.files.current()?;
-        if e.is_dir {
-            return None;
-        }
-        let fresh = self.analyses.contains_key(&e.path)
-            && self.stamps.get(&e.path) == Some(&file_stamp(&e.path));
-        (!fresh).then(|| e.path.clone())
+        let path = match self.tab {
+            Tab::Structures => {
+                let e = self.files.current()?;
+                if e.is_dir {
+                    return None;
+                }
+                e.path.clone()
+            }
+            Tab::Jobs => PathBuf::from(self.jobs.current()?.pdb_path.as_ref()?),
+            _ => return None,
+        };
+        let fresh =
+            self.analyses.contains_key(&path) && self.stamps.get(&path) == Some(&file_stamp(&path));
+        (!fresh).then_some(path)
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> Action {

@@ -201,7 +201,8 @@ async fn refresh_jobs(app: &mut App, db_path: &Path, repo: &mut Option<ProteusRe
     }
 }
 
-/// The same analysis as `proteus analyze`, summarised as the browser page summarises it.
+/// The same analysis as `proteus analyze`, summarised as the browser page summarises it, plus
+/// what the viewers would open on: a preview still and, for a complex, its interface.
 fn analyse(path: &Path) -> Analysis {
     let run = || -> Result<Analysis> {
         let loaded = proteus_core::io::load_structure(path)?;
@@ -211,11 +212,82 @@ fn analyse(path: &Path) -> Analysis {
             Some(&loaded.header_preview),
         )?;
         let residues = a.plddts.len();
+        let (mut interface, mut verdict, mut preview) = (Vec::new(), None, None);
+        // The viewers' own structure bundle: interfaces, the PAE beside the file, the still.
+        if let Ok(text) = proteus_core::io::read_structure_text(path) {
+            if let Ok(mut s) = proteus_render::parse_pdb_structure(&text) {
+                if let Ok(c) = proteus_core::pae::read_confidence(path, None) {
+                    s.attach_confidence(c);
+                }
+                if let Some(v) = s.default_interface() {
+                    let m = &v.metrics;
+                    let n =
+                        |x: Option<f64>, d: usize| x.map_or("–".into(), |v| format!("{v:.d$}"));
+                    verdict = m.ipsae_min.map(|x| {
+                        let ok = x > 0.61;
+                        (
+                            ok,
+                            format!(
+                                "{} · ipSAE_min {x:.3} {} 0.61",
+                                if ok {
+                                    "● confident interface"
+                                } else {
+                                    "○ not a confident interface"
+                                },
+                                if ok { ">" } else { "≤" }
+                            ),
+                        )
+                    });
+                    interface.push([
+                        "Interface".into(),
+                        format!("{} → {}", m.binder_chains, m.target_chains),
+                    ]);
+                    if m.ipsae_min.is_some() {
+                        interface.push([
+                            "ipSAE · ipAE · LIS".into(),
+                            format!(
+                                "{} / {} · {} Å · {}",
+                                n(m.ipsae_min, 3),
+                                n(m.ipsae_max, 3),
+                                n(m.ipae, 1),
+                                n(m.lis, 3)
+                            ),
+                        ]);
+                    }
+                    interface.push([
+                        "Sc · dSASA · contacts".into(),
+                        format!(
+                            "{} · {:.0} Å² · {}/{}",
+                            n(m.shape_complementarity, 2),
+                            m.dsasa,
+                            m.binder_interface_residues,
+                            m.target_interface_residues
+                        ),
+                    ]);
+                }
+                let fb = proteus_render::preview_framebuffer(&s, 96, 72, s.default_color_scheme());
+                preview = Some(app::Preview {
+                    width: fb.width,
+                    height: fb.height,
+                    pixels: fb
+                        .colors
+                        .iter()
+                        .map(|c| {
+                            (*c != proteus_render::rasterizer::buffer::ColorRGB::BLACK)
+                                .then_some((c.r, c.g, c.b))
+                        })
+                        .collect(),
+                });
+            }
+        }
         Ok(Analysis::Done {
             residues,
             predicted: a.metrics.confidence_source
                 == proteus_core::confidence::ConfidenceSource::Predicted,
             rows: proteus_core::qc::summary_rows(&a.metrics, residues),
+            interface,
+            verdict,
+            preview,
         })
     };
     run().unwrap_or_else(|e| Analysis::Failed(format!("{e:#}")))

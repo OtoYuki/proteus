@@ -41,6 +41,17 @@ impl Look {
         }
     }
 
+    /// A picture's pixel colour, or `None` where the terminal cannot show pictures (16
+    /// colours or none), which then shows no preview at all rather than a wrong one.
+    pub fn pixel(&self, rgb: (u8, u8, u8)) -> Option<Color> {
+        match self.depth {
+            ColorDepth::TrueColor | ColorDepth::Ansi256 => {
+                Some(self.rgb(ColorRGB::new(rgb.0, rgb.1, rgb.2)))
+            }
+            ColorDepth::Ansi16 | ColorDepth::None => None,
+        }
+    }
+
     /// The foreground of a role.
     pub fn fg(&self, role: Role) -> Style {
         match self.depth {

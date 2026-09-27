@@ -233,6 +233,14 @@ and its encoder is round-tripped through libsixel's own decoder in CI rather tha
 Keys: arrows or `hjkl` orbit, `+`/`-` zoom, `Space` spin, `Tab` dashboard, `c` colour scheme,
 `o` SSAO and outlines, `d` disulfides, `r` reset camera, `q` quit.
 
+In a kitty-protocol terminal (kitty, WezTerm, Ghostty), run locally rather than over SSH or
+inside tmux, the interactive viewer draws real pixels instead of half-block cells; `p`
+switches between the two, and `--backend halfblock` keeps the cells. The resolution follows
+the terminal's cell size and drops while frames are slow. Half-block output is drawn 3 × 3
+supersampled, so ribbons thinner than a cell stop breaking up. A complex opens coloured by
+interface, and a model that is confident everywhere opens on its secondary structure, because
+in pLDDT colours it would be one flat blue; `c` cycles through the rest.
+
 When there is a browser at hand, `--web` opens the same structure in one: the ribbon mesh the
 terminal draws, shaded by WebGL2 with SSAO and outlines, hover labels per residue, and the
 measurements beside it. The page is a single HTML file with its fonts and geometry inside, so
@@ -474,9 +482,11 @@ leaderboard prints the first eight characters; `proteus view 0916a5e6` resolves 
 Run with no command in a terminal, `proteus` opens a full-screen home:
 
 - **Jobs:** your jobs, newest first, refreshed every 2 s. Enter opens the 3-D viewer, `w` the
-  browser page, `i` the full report, and `/` filters the list.
+  browser page, `i` the full report, and `/` filters the list. On a wide terminal the selected
+  job sits beside the list with a still of its model, its measurements and, for a complex, the
+  interface verdict. A failed job shows why it failed.
 - **Structures:** a file browser over the current folder. Each structure file you stop on is
-  measured in the background, with the same numbers as `analyze`.
+  measured in the background, with the same numbers as `analyze`, and previewed.
 - **Run:** forms to fold a sequence (`submit`) or scan a protein (`mutate … | screen -`).
 
 Every action runs a `proteus` command, and the Run forms show the exact command line before you

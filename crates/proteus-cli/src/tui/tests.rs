@@ -466,6 +466,9 @@ fn the_structures_tab_shows_the_measurements() {
             residues: 46,
             predicted: false,
             rows: vec![["Radius of gyration".into(), "9.6 Å".into()]],
+            interface: vec![],
+            verdict: None,
+            preview: None,
         },
     );
     let screen = rendered(&app, 100, 24);
@@ -503,7 +506,10 @@ fn analysing_crambin_gives_its_residue_count_and_rows() {
             residues,
             predicted,
             rows,
+            preview,
+            ..
         } => {
+            assert!(preview.is_some_and(|p| p.pixels.iter().any(|x| x.is_some())));
             assert_eq!(residues, 46);
             assert!(!predicted);
             assert!(rows.iter().any(|[k, _]| k == "Radius of gyration"));
@@ -562,4 +568,53 @@ fn only_regular_files_are_listed_and_a_changed_file_is_measured_again() {
         Some(pdb),
         "the file changed: measure it again"
     );
+}
+
+/// The jobs tab shows the selected job's findings: a complex's interface verdict and its
+/// measurements, beside the list on a wide terminal.
+#[test]
+fn the_jobs_tab_shows_the_selected_jobs_findings() {
+    use proteus_core::models::{JobStatus, PipelineJob, PipelineTier};
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = app_in(dir.path());
+    let model = dir.path().join("model_0.pdb");
+    let job = PipelineJob {
+        id: uuid::Uuid::new_v4(),
+        sequence_id: uuid::Uuid::new_v4(),
+        tier: PipelineTier::HighFidelity,
+        status: JobStatus::Completed,
+        priority: 0,
+        created_at: chrono::Utc::now(),
+        started_at: None,
+        completed_at: None,
+        error_log: None,
+    };
+    app.jobs
+        .replace(vec![proteus_storage::repository::JobSummary {
+            job,
+            header: "binder_7".into(),
+            length: 150,
+            pdb_path: Some(model.to_string_lossy().into_owned()),
+            plddt: Some(91.0),
+            metadata: None,
+        }]);
+    assert_eq!(app.wanted_analysis(), Some(model.clone()));
+    app.analyses.insert(
+        model,
+        Analysis::Done {
+            residues: 150,
+            predicted: true,
+            rows: vec![["Radius of gyration".into(), "14.2 Å".into()]],
+            interface: vec![["Interface".into(), "A → B".into()]],
+            verdict: Some((
+                true,
+                "● confident interface · ipSAE_min 0.750 > 0.61".into(),
+            )),
+            preview: None,
+        },
+    );
+    let screen = rendered(&app, 160, 40);
+    assert!(screen.contains("● confident interface"), "{screen}");
+    assert!(screen.contains("A → B"), "{screen}");
+    assert!(screen.contains("14.2 Å"), "{screen}");
 }

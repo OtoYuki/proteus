@@ -44,10 +44,10 @@ pub mod structure {
     /// Interfaces (`analyze --interface`, the viewers' interface colouring): the binder in the
     /// Clay family and the target in the Tide family, each with its interface residues bright and
     /// the rest dark, so the eye goes to where they touch. Other chains recede into Moss.
-    pub const IFACE_BINDER: ColorRGB = hex(0x7A5F3C);
-    pub const IFACE_BINDER_CONTACT: ColorRGB = hex(0xF0C07A);
-    pub const IFACE_TARGET: ColorRGB = hex(0x2F5B57);
-    pub const IFACE_TARGET_CONTACT: ColorRGB = hex(0x7FD3CA);
+    pub const IFACE_BINDER: ColorRGB = hex(0x9A7A50);
+    pub const IFACE_BINDER_CONTACT: ColorRGB = hex(0xFFD99E);
+    pub const IFACE_TARGET: ColorRGB = hex(0x3F7872);
+    pub const IFACE_TARGET_CONTACT: ColorRGB = hex(0xA6F0E6);
     pub const IFACE_OTHER: ColorRGB = palette::MOSS;
 }
 
@@ -437,6 +437,12 @@ mod tests {
                 contrast(contact, body) >= 2.5,
                 "{}",
                 contrast(contact, body)
+            );
+            // The bodies stay readable on the ground (fog and occlusion darken them further).
+            assert!(
+                contrast(body, DARK.ground) >= 3.0,
+                "{}",
+                contrast(body, DARK.ground)
             );
         }
     }

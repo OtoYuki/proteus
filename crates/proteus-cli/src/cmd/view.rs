@@ -36,9 +36,10 @@ pub struct Args {
     #[arg(long)]
     dashboard: bool,
 
-    /// Terminal rendering backend
-    #[arg(short, long, value_enum, default_value_t = CliBackend::HalfBlock)]
-    backend: CliBackend,
+    /// Terminal rendering backend [default: halfblock; the interactive viewer draws real pixels
+    /// with the kitty protocol where the terminal supports it, outside SSH and tmux]
+    #[arg(short, long, value_enum)]
+    backend: Option<CliBackend>,
 
     /// Color scheme. Default: pLDDT for predicted models, secondary structure for
     /// experimental ones (their B-factors are not confidences).
@@ -434,7 +435,18 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         return Ok(());
     }
 
-    let render_backend: proteus_render::terminal::TerminalBackend = backend.into();
+    let render_backend: proteus_render::terminal::TerminalBackend =
+        backend.map(Into::into).unwrap_or_default();
+    // Interactive: real pixels when asked for, or by default in a kitty-protocol terminal that
+    // is local (over SSH every frame crosses the network; tmux does not pass the protocol on).
+    let pixels = match backend {
+        Some(b) => b == CliBackend::Kitty,
+        None => {
+            proteus_render::terminal::KittyRenderer::is_supported()
+                && std::env::var_os("SSH_CONNECTION").is_none()
+                && std::env::var_os("TMUX").is_none()
+        }
+    };
     // The kitty protocol writes raw pixel escapes; a terminal that does not speak it prints
     // the payload as garbage. Say so once rather than letting the user think it is corrupt.
     {
@@ -471,10 +483,17 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         (None, Some(sd)) => {
             let scheme = sd.default_color_scheme();
             if scheme == proteus_render::rasterizer::ColorScheme::SecondaryStructure {
-                eprintln!(
-                    "note: colouring by secondary structure (B-factor column is not a \
-                     pLDDT confidence); pass --color plddt to force"
-                );
+                if sd.uniformly_confident() {
+                    eprintln!(
+                        "note: colouring by secondary structure (pLDDT ≥ 90 almost everywhere, \
+                         which would be one colour); pass --color plddt to force"
+                    );
+                } else {
+                    eprintln!(
+                        "note: colouring by secondary structure (B-factor column is not a \
+                         pLDDT confidence); pass --color plddt to force"
+                    );
+                }
             }
             scheme
         }
@@ -530,6 +549,8 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
                 dashboard_data: None,
                 stop: None,
                 scores: None,
+                interface: None,
+                pixels,
                 findings: Vec::new(),
             };
             run_viewer(&sup_data.target_mesh, sup_data.camera, config)
@@ -554,6 +575,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let structure_data = structure_data.expect("parsed above when --compare is absent");
 
         let score_colors = proteus_render::tui::ScoreColors::of(&structure_data);
+        let interface_colors = proteus_render::tui::InterfaceColors::of(&structure_data);
         let findings = proteus_render::tui::TerminalFinding::of(&structure_data);
         let dashboard_data = Some(proteus_render::tui::DashboardData {
             title: title.clone(),
@@ -577,6 +599,8 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             dashboard_data,
             stop: None,
             scores: score_colors,
+            interface: interface_colors,
+            pixels,
             findings,
         };
         run_viewer(&structure_data.ribbon_mesh, structure_data.camera, config)
