@@ -357,6 +357,34 @@
       .replace(/ · /g, NB + '· ');
   }
 
+  /**
+   * A measurement row's value as its lines: split on ' · ' outside brackets, so
+   * "bond RMSZ 0.57 (4 > 4σ) · angle RMSZ 0.57 (1 > 4σ)" reads as two aligned lines.
+   */
+  function valueLines(s) {
+    const out = [];
+    let depth = 0, start = 0;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (ch === '(' || ch === '[') depth++;
+      else if ((ch === ')' || ch === ']') && depth > 0) depth--;
+      else if (depth === 0 && s.startsWith(' · ', i)) { out.push(s.slice(start, i)); start = i + 3; i += 2; }
+    }
+    out.push(s.slice(start));
+    return out.map((x) => x.trim()).filter(Boolean);
+  }
+
+  /**
+   * Fractions of residues in AlphaFold's four pLDDT bands, [≥90, 70–90, 50–70, <50], with the
+   * same boundaries as plddtColor.
+   */
+  function plddtBands(values) {
+    const n = [0, 0, 0, 0];
+    for (const v of values) n[v >= 90 ? 0 : v >= 70 ? 1 : v >= 50 ? 2 : 3]++;
+    const total = values.length || 1;
+    return n.map((k) => k / total);
+  }
+
   // ---------------------------------------------------------------- geometry of measurements
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -540,7 +568,7 @@
     }
   }
 
-  const api = { asU8, keepUnits, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
+  const api = { asU8, keepUnits, valueLines, plddtBands, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
     vertexColors, fitScale, mat3Mul, yawPitch, MAGIC, paeColor, ELEMENT_RGB, meshBuilder, stickMesh,
     neighbours, closestAtoms, pymolSelection, scoreColor, measure, gaussianSurface, KYTE_DOOLITTLE,
     formalCharges, coulomb, encodeSession, decodeSession };
