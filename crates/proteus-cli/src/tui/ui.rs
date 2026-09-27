@@ -452,7 +452,9 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         [l, d]
     } else if area.height >= 16 {
         let want = (visible.len() as u16 + 3).max(6);
-        Layout::vertical([Constraint::Max(want), Constraint::Min(8)]).areas(area)
+        Layout::vertical([Constraint::Max(want), Constraint::Min(8)])
+            .spacing(1)
+            .areas(area)
     } else {
         [area, Rect::default()]
     };
@@ -785,10 +787,41 @@ fn headline_card(
     let Some(fx) = facts else {
         return out;
     };
-    // The bars take what the labels (11) and the longest value (~20) leave, 8 to 18 cells.
-    let w_ = (width as usize).saturating_sub(11 + 20).clamp(8, 18);
+    // The text after each bar, long forms first; on a narrow card the short forms, so that no
+    // line wraps (a wrapped value strands under the labels). The bars share one width, what the
+    // labels (11) and the longest text leave, up to 18 cells.
+    let outliers = match fx.rama_outliers {
+        0 => String::new(),
+        1 => " · 1 outlier".to_string(),
+        n => format!(" · {n} outliers"),
+    };
+    let long = [
+        format!(" {:.0} % favoured{outliers}", fx.rama_favored),
+        format!(" α{:.0} β{:.0} coil {:.0} %", fx.helix, fx.strand, fx.coil),
+    ];
+    let short = [
+        format!(" {:.0} %{outliers}", fx.rama_favored),
+        format!(" α{:.0} β{:.0}", fx.helix, fx.strand),
+    ];
+    let room = |texts: &[String; 2]| {
+        let longest = texts
+            .iter()
+            .map(|t| t.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(6);
+        (width as usize).saturating_sub(11 + longest)
+    };
+    let (texts, bar) = if room(&long) >= 8 {
+        let r = room(&long);
+        (long, r)
+    } else {
+        let r = room(&short);
+        (short, r)
+    };
     #[allow(non_snake_case)]
-    let W = w_;
+    let W = bar.clamp(3, 18);
+    let [rama_text, fold_text] = texts;
     let label = |s: &str| Span::styled(format!("{s:<11}"), look.dim());
     // pLDDT gauge in AlphaFold's own band colours, or the B-factor warning.
     match (fx.plddt, predicted) {
@@ -818,15 +851,10 @@ fn headline_card(
         look.warm()
     };
     rama.extend(gauge(look, fx.rama_favored / 100.0, W, rama_style));
-    rama.push(Span::styled(
-        format!(" {:.0} % favoured", fx.rama_favored),
-        look.text(),
-    ));
-    if fx.rama_outliers > 0 {
-        rama.push(Span::styled(
-            format!(" · {} outliers", fx.rama_outliers),
-            look.warm(),
-        ));
+    let (value, flag) = rama_text.split_at(rama_text.find(" · ").unwrap_or(rama_text.len()));
+    rama.push(Span::styled(value.to_string(), look.text()));
+    if !flag.is_empty() {
+        rama.push(Span::styled(flag.to_string(), look.warm()));
     }
     out.push(Line::from(rama));
     // Secondary structure as one stacked bar in the viewers' own colours.
@@ -850,10 +878,7 @@ fn headline_card(
         used += n;
         ss.push(Span::styled("█".repeat(n), look.data(c)));
     }
-    ss.push(Span::styled(
-        format!(" α{:.0} β{:.0} coil {:.0} %", fx.helix, fx.strand, fx.coil),
-        look.text(),
-    ));
+    ss.push(Span::styled(fold_text, look.text()));
     out.push(Line::from(ss));
     let mut tri = vec![label("triage")];
     tri.extend(gauge(look, fx.triage / 100.0, W, look.accent()));
@@ -869,12 +894,25 @@ fn headline_card(
     let rg = format!(" · Rg ×{:.2}", fx.rg_ratio);
     if 11 + size.chars().count() + rg.chars().count() <= width as usize {
         size.push_str(&rg);
+    } else if 11 + size.chars().count() > width as usize {
+        size = format!("{residues} res · {} ch", fx.chains);
     }
     out.push(Line::from(vec![
         label("size"),
         Span::styled(size, look.text()),
     ]));
     out
+}
+
+#[cfg(test)]
+pub fn headline_card_for_test(
+    look: &Look,
+    residues: usize,
+    predicted: bool,
+    facts: Option<&super::app::Facts>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    headline_card(look, residues, predicted, facts, None, width)
 }
 
 /// A bar of `width` cells, filled to `frac` with eighth-block precision.

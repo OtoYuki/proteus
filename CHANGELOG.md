@@ -174,7 +174,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
 ### Fixed
 - The home screen's help box no longer sits under the job's preview picture in kitty (the
   picture is taken down while the help is open), and its last line is no longer cut off.
-- The job card's size line drops the Rg ratio rather than wrapping it under the labels.
+- The job card's lines no longer wrap under their labels: on a narrow card the bars shrink and
+  the values take short forms (`97 % · 1 outlier`, `α9 β50`), down to a 31-column card; "1
+  outliers" reads "1 outlier". A stacked job detail keeps a row between itself and the list.
 - In the home screen's Run tab, the digit keys typed into the focused field instead of
   switching tabs; they now switch tabs (except on the residue-number fields), and Alt+1–3
   switches even while typing.
