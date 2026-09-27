@@ -273,7 +273,10 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
             format!("{who} ({engine}; tier '{}' not honoured)", d.requested)
         } else {
-            format!("{who} ({engine})")
+            format!(
+                "{who} ({})",
+                proteus_engine::model_name(pred.metadata.as_ref())
+            )
         };
         (content, title, PathBuf::from(&pred.pdb_path))
     };
