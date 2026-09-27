@@ -162,12 +162,14 @@
     gl_Position = vec4(view.xy * uScale + uOffset, clamp(vDepth / uZ, -1.0, 1.0), 1.0);
   }`;
 
-  // shade_blinn_phong, per fragment: key + fill + ambient 0.30 + specular, clamped at 1.3, then
-  // pipeline.rs depth cueing (foreground 100 %, background 55 %). A normal that points away
-  // from the viewer is flipped toward it, which the CPU pipeline does not do (it leaves such a
-  // surface at the 0.30 ambient). The rule uses the normal, not gl_FrontFacing, because the
-  // ribbon's triangle winding is not consistent enough to say which side is the front.
-  // Outside an active selection the colour is pulled 62 % of the way to the background.
+  // shader.rs shade, per fragment. Wrap-lit key light (a soft terminator), a sky-to-ground
+  // hemispheric ambient (tops read lighter than undersides), a cool fill, a cream specular and
+  // a rim that lifts silhouettes off the dark ground are added rather than multiplied, so lit
+  // faces keep their true colour. Then depth cueing (foreground 100 %, background 70 %). A normal
+  // that points away from the viewer is flipped toward it. The rule uses the normal, not
+  // gl_FrontFacing, because the ribbon's triangle winding is not consistent enough to say
+  // which side is the front. Outside an active selection the colour is pulled 62 % of the way
+  // to the background.
   const GEOM_FS = `#version 300 es
   precision highp float;
   in vec3 vNormal;
@@ -185,11 +187,13 @@
     vec3 key = normalize(vec3(0.5, 0.8, 1.0));
     vec3 fill = normalize(vec3(-0.6, -0.4, 0.5));
     vec3 h = normalize(key + vec3(0.0, 0.0, 1.0));
-    float i = 0.30 + max(dot(n, key), 0.0) * 0.65 + max(dot(n, fill), 0.0) * 0.25
-            + pow(max(dot(n, h), 0.0), 16.0) * 0.25;
-    i = clamp(i, 0.0, 1.3);
+    float wrap = max((dot(n, key) + 0.3) / 1.3, 0.0);
+    float i = 0.34 + 0.12 * (n.y * 0.5 + 0.5) + wrap * 0.62 + max(dot(n, fill), 0.0) * 0.16;
+    float spec = pow(max(dot(n, h), 0.0), 28.0) * 0.22;
+    float rim = pow(1.0 - n.z, 3.0) * 0.30;
+    vec3 c = min(vColor * i, vec3(1.0)) + vec3(1.0, 0.98, 0.88) * spec + vColor * rim;
     float frac = clamp((vDepth - uFogLo) / max(uFogHi - uFogLo, 1e-3), 0.0, 1.0);
-    vec3 c = min(vColor * i, vec3(1.0)) * (1.0 - 0.45 * frac);
+    c = min(c, vec3(1.0)) * (1.0 - 0.30 * frac);
     if (uSelActive && vSel < 0.5) c = mix(c, uBg, 0.62);
     outColor = vec4(c, 1.0);
   }`;
@@ -220,7 +224,7 @@
 
   // pipeline.rs apply_post_processing: an outline where a 4-neighbour is background or more
   // than 4 Å away in depth (colour × 0.35); otherwise SSAO from 8 samples on two rings,
-  // occlusion min(diff/4, 1) for 0.05 < diff < 8 Å, × 0.45, floor 0.5. Offsets are in pixels and
+  // occlusion min(diff/4, 1) for 0.05 < diff < 8 Å, × 0.35, floor 0.62. Offsets are in pixels and
   // scaled with the canvas, since a browser pixel is much smaller than a terminal one.
   const POST_FS = `#version 300 es
   precision highp float;
@@ -244,7 +248,7 @@
     vec2 edge[4] = vec2[4](vec2(-1,0), vec2(1,0), vec2(0,-1), vec2(0,1));
     for (int k = 0; k < 4; k++) {
       float n = depthAt(vUv + edge[k] * e);
-      if (n > 1e8 || abs(n - d) > 4.0) { outColor = vec4(c * 0.35, 1.0); return; }
+      if (n > 1e8 || abs(n - d) > 4.0) { outColor = vec4(c * 0.4, 1.0); return; }
     }
     vec2 ring[8] = vec2[8](vec2(-2,0), vec2(2,0), vec2(0,-2), vec2(0,2),
                            vec2(-3,-3), vec2(3,3), vec2(-3,3), vec2(3,-3));
@@ -257,7 +261,7 @@
         if (diff > 0.05 && diff < 8.0) occ += min(diff / 4.0, 1.0);
       }
     }
-    float ao = valid > 0.0 ? clamp(1.0 - occ / valid * 0.45, 0.5, 1.0) : 1.0;
+    float ao = valid > 0.0 ? clamp(1.0 - occ / valid * 0.35, 0.62, 1.0) : 1.0;
     outColor = vec4(c * ao, 1.0);
   }`;
 

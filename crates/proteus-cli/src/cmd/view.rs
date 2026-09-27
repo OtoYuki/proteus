@@ -252,15 +252,28 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             .with_context(|| format!("Failed to read PDB at {:?}", pred.pdb_path))?;
         // The title is the only provenance the viewers show, so say what the file is.
         let engine = proteus_engine::engine_name(pred.metadata.as_ref());
+        // Named as the jobs list names it: the sequence's header and the short id.
+        let name = match repo.get_job(job_id).await {
+            Ok(Some(j)) => repo
+                .get_sequence(j.sequence_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|s| s.header)
+                .filter(|h| !h.trim().is_empty()),
+            _ => None,
+        };
+        let short = job_ref::short(job_id);
+        let who = match name {
+            Some(n) => format!("{n} · {short}"),
+            None => format!("job {short}"),
+        };
         let title = if engine == proteus_engine::ENGINE_SIMULATED {
-            format!("Job {job_id} — SIMULATED: synthetic helix, not a prediction")
+            format!("{who} — SIMULATED: synthetic helix, not a prediction")
         } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
-            format!(
-                "Job {job_id} ({engine}; tier '{}' not honoured)",
-                d.requested
-            )
+            format!("{who} ({engine}; tier '{}' not honoured)", d.requested)
         } else {
-            format!("Job {job_id} ({engine})")
+            format!("{who} ({engine})")
         };
         (content, title, PathBuf::from(&pred.pdb_path))
     };

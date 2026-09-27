@@ -92,7 +92,7 @@ impl Rasterizer {
             let sz = self.projected[i].z;
             let depth_fraction = ((sz - min_z) / z_range).clamp(0.0, 1.0);
             // Linear depth cueing: foreground is 100% brightness, background dims gracefully to 55%
-            let fog_factor = 1.0 - 0.45 * depth_fraction;
+            let fog_factor = 1.0 - 0.30 * depth_fraction;
 
             let view_normal = rot_mat * v.normal;
             let base_color = match scheme {
@@ -268,7 +268,7 @@ impl Rasterizer {
                 }
 
                 if is_edge {
-                    fb.colors[idx] = orig_colors[idx].scale(0.35);
+                    fb.colors[idx] = orig_colors[idx].scale(0.4);
                 } else if self.enable_ssao {
                     let mut occlusion = 0.0f32;
                     let mut valid_samples = 0usize;
@@ -290,8 +290,8 @@ impl Rasterizer {
                     }
 
                     if valid_samples > 0 {
-                        let occ_factor = (occlusion / valid_samples as f32) * 0.45;
-                        let ao = (1.0 - occ_factor).clamp(0.50, 1.0);
+                        let occ_factor = (occlusion / valid_samples as f32) * 0.35;
+                        let ao = (1.0 - occ_factor).clamp(0.62, 1.0);
                         fb.colors[idx] = orig_colors[idx].scale(ao);
                     }
                 }

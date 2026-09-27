@@ -102,10 +102,42 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let mut spans = vec![Span::raw(" ")];
     spans.extend(tab_spans(app));
     f.render_widget(Paragraph::new(Line::from(spans)), tabs);
+    // The jobs at a glance, right-aligned under the signature: each state as glyph and word.
+    let summary = job_summary(app);
+    if !summary.is_empty() {
+        f.render_widget(
+            Paragraph::new(Line::from(summary)).alignment(Alignment::Right),
+            tabs,
+        );
+    }
     f.render_widget(
         Block::new().borders(Borders::TOP).border_style(look.line()),
         rule,
     );
+}
+
+/// "● 1 running  ✓ 7 done  ✗ 4 failed", states with no jobs left out, in the order a
+/// reader cares about: what is moving, what finished, what went wrong.
+fn job_summary(app: &App) -> Vec<Span<'static>> {
+    let jobs = &app.jobs.all;
+    let count = |s: JobStatus| jobs.iter().filter(|j| j.job.status == s).count();
+    let mut out = Vec::new();
+    for s in [
+        JobStatus::Running,
+        JobStatus::Queued,
+        JobStatus::Completed,
+        JobStatus::Failed,
+    ] {
+        let n = count(s.clone());
+        if n == 0 {
+            continue;
+        }
+        let st = state(&app.look, &s, app.tick);
+        let text = st.content.to_string();
+        let (glyph, word) = text.split_once(' ').unwrap_or(("", &text));
+        out.push(Span::styled(format!("{glyph} {n} {word}  "), st.style));
+    }
+    out
 }
 
 /// Key hints: the keys in the accent, their meaning dim.
