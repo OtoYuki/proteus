@@ -16,6 +16,8 @@ pub struct DashboardData {
     pub ramachandran_points: Vec<(Option<f64>, Option<f64>, RamachandranRegion)>,
     /// PAE and pTM, when the predictor's files were found.
     pub confidence: Option<proteus_core::pae::PredictionConfidence>,
+    /// A complex's interfaces (each chain against the rest); the smallest binder is shown.
+    pub interfaces: Vec<crate::InterfaceView>,
 }
 
 /// Split `s` into ANSI escape sequences (`true`) and runs of visible text (`false`).
@@ -236,6 +238,9 @@ impl DashboardRenderer {
             (5, false)
         };
 
+        if !data.interfaces.is_empty() {
+            self.render_interface_section(data, width, &mut lines);
+        }
         self.render_ramachandran_section(data, width, plot_h, &mut lines);
 
         let remaining = height.saturating_sub(lines.len());
@@ -503,6 +508,68 @@ impl DashboardRenderer {
                 pad = bar_w.saturating_sub(format!("{n_res}").len() + 1)
             ));
         }
+    }
+
+    /// The interface of a complex, three lines: the verdict (glyph and word), the predictor's
+    /// confidence in it, and what the model's interface looks like. The binder is the smallest
+    /// chain, as in the browser page.
+    fn render_interface_section(
+        &self,
+        data: &DashboardData,
+        width: usize,
+        lines: &mut Vec<String>,
+    ) {
+        let a = &self.ansi;
+        let Some(v) = data.interfaces.iter().min_by_key(|v| v.binder_size) else {
+            return;
+        };
+        let m = &v.metrics;
+        lines.push(section_rule(
+            a,
+            &a.fg(Role::Muted),
+            '├',
+            &format!(" (interface · {} → {}) ", m.binder_chains, m.target_chains),
+            '┤',
+            width,
+        ));
+        let dim = |s: &str| a.paint(Role::Dim, s);
+        let n = |x: Option<f64>, d: usize| x.map_or("–".to_string(), |v| format!("{v:.d$}"));
+        match m.ipsae_min {
+            Some(x) if x > 0.61 => lines.push(format!(
+                " {} {}",
+                a.paint(Role::Accent, "● confident interface"),
+                dim(&format!("ipSAE_min {x:.3} > 0.61"))
+            )),
+            Some(x) => lines.push(format!(
+                " {} {}",
+                a.paint(Role::Warm, "○ not a confident interface"),
+                dim(&format!("ipSAE_min {x:.3} ≤ 0.61"))
+            )),
+            None => lines.push(format!(" {}", dim("– no PAE beside this model"))),
+        }
+        if m.ipsae_min.is_some() {
+            lines.push(format!(
+                " {} {}  {} {}  {} {}",
+                dim("ipSAE max"),
+                a.bold(&n(m.ipsae_max, 3)),
+                dim("ipAE"),
+                a.bold(&format!("{} Å", n(m.ipae, 1))),
+                dim("LIS"),
+                a.bold(&n(m.lis, 3))
+            ));
+        }
+        lines.push(format!(
+            " {} {}  {} {}  {} {}",
+            dim("Sc"),
+            a.bold(&n(m.shape_complementarity, 2)),
+            dim("dSASA"),
+            a.bold(&format!("{:.0} Å²", m.dsasa)),
+            dim("contacts"),
+            a.bold(&format!(
+                "{}/{}",
+                m.binder_interface_residues, m.target_interface_residues
+            ))
+        ));
     }
 
     /// pTM and a `2·rows` × `2·rows` PAE map in half-blocks (each cell two pixels high),
@@ -827,6 +894,7 @@ mod tests {
     fn sample_data(title: &str) -> DashboardData {
         DashboardData {
             title: title.to_string(),
+            interfaces: Vec::new(),
             num_residues: 46,
             num_disulfides: 3,
             metrics: Some(BiophysicalMetrics {
@@ -912,6 +980,7 @@ mod tests {
     fn test_dashboard_renderer_generation() {
         let data = DashboardData {
             title: "1CRN".to_string(),
+            interfaces: Vec::new(),
             num_residues: 46,
             num_disulfides: 3,
             metrics: Some(BiophysicalMetrics {
@@ -999,6 +1068,7 @@ mod tests {
         use crate::brand::{ansi::Ansi, ColorDepth};
         let data = DashboardData {
             title: "t".into(),
+            interfaces: Vec::new(),
             num_residues: 3,
             num_disulfides: 0,
             metrics: None,
@@ -1024,5 +1094,40 @@ mod tests {
         let axis = plain.iter().find(|l| l.contains('└')).unwrap();
         let tick = axis[..axis.find('┴').unwrap()].chars().count();
         assert_eq!(tick, cross, "{axis}");
+    }
+
+    /// A complex shows its interface: the verdict as glyph and word, then the numbers.
+    #[test]
+    fn a_complex_shows_its_interface() {
+        let s = crate::parse_pdb_structure(include_str!(
+            "../../../proteus-core/tests/data/2ptc_EI.pdb"
+        ))
+        .unwrap();
+        let data = DashboardData {
+            title: "2ptc".into(),
+            interfaces: s.interfaces.clone(),
+            num_residues: s.num_residues,
+            num_disulfides: 0,
+            metrics: None,
+            plddts: vec![],
+            confidence: None,
+            ramachandran_points: vec![],
+        };
+        let lines = DashboardRenderer::with_ansi(Ansi::with_depth(crate::brand::ColorDepth::None))
+            .generate_lines(&data, 60, 40);
+        let text: String = lines
+            .iter()
+            .map(|l| {
+                ansi_segments(l)
+                    .filter(|(e, _)| !e)
+                    .map(|(_, t)| t)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        // BPTI (58 residues) is the smaller chain, so it is the binder.
+        assert!(text.contains("(interface · I → E)"), "{text}");
+        assert!(text.contains("– no PAE beside this model"), "{text}");
+        assert!(text.contains("Sc 0.7"), "{text}");
     }
 }

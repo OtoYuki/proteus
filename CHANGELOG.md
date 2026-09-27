@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format follows
 Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
 
 ### Added
+- Interfaces in the viewers. The browser page opens a complex (2–6 protein chains) coloured by
+  interface: binder and target in two families, bright at the contact residues, other chains
+  receding. An interface panel gives a verdict against the 0.61 ipSAE_min threshold (as a glyph
+  and a word, with the caveat that it is a prediction), then ipSAE, ipAE, LIS, ipTM, Sc, dSASA,
+  contacts and cross-interface bonds. `i` selects and frames the contact residues, and `b` or the
+  binder chips switch the binder; the choice is kept in the page's URL. The binder opens as the
+  smallest chain. The terminal dashboard gains the same interface section. `--color` still
+  chooses the scheme when given.
 - `proteus analyze --interface [BINDER[:TARGET]]`: binder–target interface metrics for triaging
   designed binders. The structure gives interface residues, buried surface (dSASA), shape
   complementarity, and cross-interface H-bonds and salt bridges. The predictor's PAE and scores
@@ -82,6 +90,11 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- Buried surface is computed from the atoms that can touch the other side only, measured against
+  their own side and against both. This is the same number as the three-run subtraction (a test
+  holds it to 1e-6), about 3× faster on a large complex. Shape complementarity drops a sort and
+  an allocation per surface dot and uses a cheaper hash for its cell grid. A 6VXX interface went
+  from 3.4 s to 1.0 s, with the sc-rs parity test unchanged at 1e-12.
 - Boltz runs samples one at a time and caps the MSA at 1 024 sequences by default, so a
   250-token complex fits a 6 GB GPU (overridable).
 - The page's geometry blob is `PRMESH2`: it adds every heavy atom, the bonds and an optional

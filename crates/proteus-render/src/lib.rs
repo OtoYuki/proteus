@@ -66,6 +66,99 @@ pub struct StructureRenderData {
     pub comparison: Option<Comparison>,
     /// The other models of the same prediction (Boltz samples), when the caller found them.
     pub models: Vec<ModelSummary>,
+    /// For a complex: each protein chain as binder against the rest (see [`InterfaceView`]).
+    pub interfaces: Vec<InterfaceView>,
+}
+
+/// One binder–target interface of a complex, located on the ribbon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InterfaceView {
+    pub metrics: proteus_core::interface::InterfaceMetrics,
+    /// Ribbon residue indices (as in `residue_labels`) of the binder's interface residues.
+    pub binder_residues: Vec<usize>,
+    pub target_residues: Vec<usize>,
+    /// Residues of the binder chains on the ribbon (viewers open on the smallest binder).
+    pub binder_size: usize,
+}
+
+/// Interfaces are measured when a model has between 2 and this many protein chains; beyond it
+/// (a GroEL cage, a capsid) chain-against-the-rest stops being the question and the cost adds up.
+pub const MAX_INTERFACE_CHAINS: usize = 6;
+
+/// Each protein chain of `protein` against every other chain, located on the ribbon.
+fn interfaces_of(protein: &pdbtbx::PDB, labels: &[ResidueLabel]) -> Vec<InterfaceView> {
+    use proteus_core::interface::{interface_metrics, InterfaceSpec};
+    let chains: Vec<String> = proteus_core::io::protein_heavy_atoms(protein)
+        .chains()
+        .map(|c| c.id().to_string())
+        .collect();
+    if chains.len() < 2 || chains.len() > MAX_INTERFACE_CHAINS {
+        return Vec::new();
+    }
+    let index: std::collections::HashMap<(String, isize, String), usize> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            (
+                (
+                    l.chain.clone(),
+                    l.number,
+                    l.insertion_code.clone().unwrap_or_default(),
+                ),
+                i,
+            )
+        })
+        .collect();
+    let locate = |keys: &[proteus_core::interface::ResidueKey]| -> Vec<usize> {
+        keys.iter()
+            .filter_map(|k| {
+                index
+                    .get(&(k.chain.clone(), k.number, k.insertion_code.clone()))
+                    .copied()
+            })
+            .collect()
+    };
+    // Two chains have one interface: measure it once and swap the roles for the second view.
+    // More chains: each chain against the rest, one thread each (at most MAX_INTERFACE_CHAINS).
+    let measure = |c: &String| -> Option<InterfaceView> {
+        let spec = InterfaceSpec {
+            binder: vec![c.clone()],
+            target: Vec::new(),
+        };
+        let m = interface_metrics(protein, &spec, None).ok()?;
+        Some(InterfaceView {
+            binder_residues: locate(&m.binder_contacts),
+            target_residues: locate(&m.target_contacts),
+            binder_size: labels.iter().filter(|l| &l.chain == c).count(),
+            metrics: m,
+        })
+    };
+    if chains.len() == 2 {
+        let Some(first) = measure(&chains[0]) else {
+            return Vec::new();
+        };
+        let mut m = first.metrics.clone();
+        std::mem::swap(&mut m.binder_chains, &mut m.target_chains);
+        std::mem::swap(
+            &mut m.binder_interface_residues,
+            &mut m.target_interface_residues,
+        );
+        std::mem::swap(&mut m.binder_contacts, &mut m.target_contacts);
+        let second = InterfaceView {
+            metrics: m,
+            binder_residues: first.target_residues.clone(),
+            target_residues: first.binder_residues.clone(),
+            binder_size: labels.iter().filter(|l| l.chain == chains[1]).count(),
+        };
+        return vec![first, second];
+    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> = chains.iter().map(|c| s.spawn(|| measure(c))).collect();
+        handles
+            .into_iter()
+            .filter_map(|h| h.join().ok().flatten())
+            .collect()
+    })
 }
 
 /// One sampled model of a prediction, as the model table lists it.
@@ -403,7 +496,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         None => atoms::Annotations::default(),
     };
 
-    let residue_labels = trace
+    let residue_labels: Vec<ResidueLabel> = trace
         .ids
         .iter()
         .zip(&trace.names)
@@ -414,7 +507,9 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
             name: name.clone(),
         })
         .collect();
+    let interfaces = interfaces_of(&trace.protein, &residue_labels);
     Ok(StructureRenderData {
+        interfaces,
         residue_labels,
         dssp: ss_summary.dssp.clone(),
         ribbon_mesh,
@@ -516,10 +611,49 @@ impl StructureRenderData {
                 confidence.pae = None;
             }
         }
+        if let Some(p) = &confidence.pae {
+            self.fill_interface_pae(p);
+        }
         if !confidence.is_empty() {
             self.confidence = Some(confidence);
         }
         note
+    }
+
+    /// ipAE, ipSAE and LIS for every interface, from the PAE rows of the ribbon's residues
+    /// (ligand rows, when there are any, come after them and are left out).
+    fn fill_interface_pae(&mut self, pae: &proteus_core::pae::PredictedAlignedError) {
+        let n = self.num_residues;
+        if self.interfaces.is_empty() || pae.n < n {
+            return;
+        }
+        let mut values = Vec::with_capacity(n * n);
+        for i in 0..n {
+            values.extend_from_slice(&pae.values[i * pae.n..i * pae.n + n]);
+        }
+        let sub = proteus_core::pae::PredictedAlignedError {
+            n,
+            values,
+            max: pae.max,
+        };
+        let chains: Vec<String> = self
+            .residue_labels
+            .iter()
+            .map(|l| l.chain.clone())
+            .collect();
+        let split = |s: &str| -> Vec<String> { s.split(',').map(str::to_string).collect() };
+        for v in &mut self.interfaces {
+            let p = proteus_core::interface::pae_interface_metrics(
+                &sub,
+                &chains,
+                &split(&v.metrics.binder_chains),
+                &split(&v.metrics.target_chains),
+            );
+            v.metrics.ipae = p.ipae;
+            v.metrics.ipsae_min = p.ipsae_min;
+            v.metrics.ipsae_max = p.ipsae_max;
+            v.metrics.lis = p.lis;
+        }
     }
 
     /// Superpose `reference_pdb` onto this structure (parsed from `self_pdb`) and keep its ribbon

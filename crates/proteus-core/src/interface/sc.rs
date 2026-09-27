@@ -271,7 +271,36 @@ struct Surface {
 #[derive(Default)]
 struct Grid {
     cell: f64,
-    cells: std::collections::HashMap<(i64, i64, i64), Vec<usize>>,
+    cells: std::collections::HashMap<(i64, i64, i64), Vec<usize>, CellHash>,
+}
+
+/// Cell keys are three small integers looked up millions of times per interface; SipHash's
+/// DoS resistance buys nothing here and costs a third of the run time.
+#[derive(Default, Clone, Copy)]
+struct CellHash;
+impl std::hash::BuildHasher for CellHash {
+    type Hasher = CellHasher;
+    fn build_hasher(&self) -> CellHasher {
+        CellHasher(0)
+    }
+}
+struct CellHasher(u64);
+impl std::hash::Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_i64(&mut self, v: i64) {
+        self.write_u64(v as u64);
+    }
+    fn write_u64(&mut self, v: u64) {
+        // FxHash's step: rotate, xor, multiply by a large odd constant.
+        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
 }
 
 impl Grid {
@@ -293,6 +322,38 @@ impl Grid {
             (p.z / self.cell).floor() as i64,
         )
     }
+    /// Whether `f` holds for any index in the 27 cells around `p` (order does not matter).
+    fn any_near(&self, p: Vec3, mut f: impl FnMut(usize) -> bool) -> bool {
+        let (x, y, z) = self.key(p);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(v) = self.cells.get(&(x + dx, y + dy, z + dz)) {
+                        if v.iter().any(|&i| f(i)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Calls `f` for every index in the cube of cells `ring` cells around `p`'s cell, in no
+    /// particular order. Every point within `ring × cell` of `p` is among them.
+    fn each_around(&self, p: Vec3, ring: i64, mut f: impl FnMut(usize)) {
+        let (x, y, z) = self.key(p);
+        for dx in -ring..=ring {
+            for dy in -ring..=ring {
+                for dz in -ring..=ring {
+                    if let Some(v) = self.cells.get(&(x + dx, y + dy, z + dz)) {
+                        v.iter().for_each(|&i| f(i));
+                    }
+                }
+            }
+        }
+    }
+
     /// Indices in the cube of cells `ring` cells around `p`'s cell, ascending. Every point
     /// within `ring × cell` of `p` is among them.
     fn around(&self, p: Vec3, ring: i64, out: &mut Vec<usize>) {
@@ -825,10 +886,9 @@ impl Surface {
 
     fn add_dot(&mut self, molecule: usize, coor: Vec3, area: f64, pcen: Vec3, _atom: usize) {
         let outnml = (pcen - coor) / PROBE_RADIUS;
-        let mut near = Vec::new();
-        self.by_molecule[1 - molecule].around(pcen, 1, &mut near);
-        let buried = near.iter().any(|&j| {
-            let b = &self.atoms[j];
+        let atoms = &self.atoms;
+        let buried = self.by_molecule[1 - molecule].any_near(pcen, |j| {
+            let b = &atoms[j];
             pcen.dist2(b.coor) <= (b.radius + PROBE_RADIUS).powi(2)
         });
         self.dots[molecule].push(Dot {
@@ -850,14 +910,10 @@ impl Surface {
                 .filter(|(_, d)| !d.buried)
                 .map(|(i, d)| (i, d.coor)),
         );
-        let mut near = Vec::new();
         (0..dots.len())
             .filter(|&i| {
-                if !dots[i].buried {
-                    return false;
-                }
-                exposed.around(dots[i].coor, 1, &mut near);
-                !near.iter().any(|&k| dots[i].coor.dist2(dots[k].coor) <= r2)
+                dots[i].buried
+                    && !exposed.any_near(dots[i].coor, |k| dots[i].coor.dist2(dots[k].coor) <= r2)
             })
             .collect()
     }
@@ -884,28 +940,27 @@ impl Surface {
                 .enumerate()
                 .map(|(pos, &d)| (pos, self.dots[their][d].coor)),
         );
-        let mut near = Vec::new();
         for &pd in &trimmed[my] {
             let d1 = &self.dots[my][pd];
             let mut ring = 1;
             let (best2, nearest) = loop {
-                grid.around(d1.coor, ring, &mut near);
-                let mut best2 = 9.0e20_f64;
-                let mut nearest: Option<&Dot> = None;
-                // Ascending positions with `<=`: the last of equidistant dots wins, as in a scan.
-                for &pos in &near {
-                    let d2 = &self.dots[their][trimmed[their][pos]];
-                    let x = d2.coor.dist2(d1.coor);
-                    if x <= best2 {
-                        best2 = x;
-                        nearest = Some(d2);
+                // The scan this replaces kept the last of equidistant dots (`<=` in ascending
+                // order): so among equal distances, the highest position wins.
+                let mut best: Option<(f64, usize)> = None;
+                let mut seen = 0usize;
+                grid.each_around(d1.coor, ring, |pos| {
+                    seen += 1;
+                    let x = self.dots[their][trimmed[their][pos]].coor.dist2(d1.coor);
+                    if best.is_none_or(|(b, bp)| x < b || (x == b && pos > bp)) {
+                        best = Some((x, pos));
                     }
-                }
+                });
                 let reach = ring as f64 * CELL;
-                if (nearest.is_some() && best2 < reach * reach)
-                    || near.len() == trimmed[their].len()
-                {
-                    break (best2, nearest);
+                if best.is_some_and(|(b, _)| b < reach * reach) || seen == trimmed[their].len() {
+                    break match best {
+                        Some((b, pos)) => (b, Some(&self.dots[their][trimmed[their][pos]])),
+                        None => (9.0e20_f64, None),
+                    };
                 }
                 ring += 1;
             };

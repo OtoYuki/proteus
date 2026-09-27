@@ -72,6 +72,13 @@ chain A against every other chain. For every model it adds two groups of columns
 The terminal table sorts by `ipsae_min`, the export has every column, and the rest of the
 per-model QC (section 2) comes with it.
 
+To look at one model, open it with `proteus view model.cif --web`. A complex opens coloured by
+interface: the binder in clay and the target in tide, bright where they touch and dark
+elsewhere. An interface panel gives the verdict against the 0.61 ipSAE_min threshold, then the
+numbers above. `i` selects both sides' contact residues and draws them as sticks, and `b` (or
+the chips in the panel) hands the binder role to another chain. The terminal viewer's dashboard
+shows the same three lines.
+
 **What these numbers are worth**, measured on the 3 669 designs in the Overath et al. 2025
 meta-analysis whose binding was tested in the lab (394 bound). Scores are average precision
 over the AlphaFold 3 models (`make validate-binders`); a random ranking scores 0.107.
