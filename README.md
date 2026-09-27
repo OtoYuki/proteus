@@ -1,22 +1,23 @@
-<p align="center">
+<div align="center">
+
+<h1>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/proteus-lockup-dark.svg">
-    <img alt="proteus, a s1re.sh project" src="docs/brand/proteus-lockup-light.svg" width="560">
+    <img alt="proteus, a s1re.sh project" src="docs/brand/proteus-lockup-light.svg" width="520">
   </picture>
-</p>
+</h1>
 
-# proteus
+**Triage for protein design campaigns: which of your models deserve a GPU-hour, a wet-lab slot
+or a closer look. One binary, no Python, no Rosetta licence.**
 
 [![ci](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml)
 [![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
 [![tes-conformance](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/tes-conformance.yml)
-[![release](https://img.shields.io/github/v/release/OtoYuki/proteus?include_prereleases)](https://github.com/OtoYuki/proteus/releases)
-[![MSRV 1.94](https://img.shields.io/badge/MSRV-1.94-blue)](Cargo.toml)
-[![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
+[![release](https://img.shields.io/github/v/release/OtoYuki/proteus?color=99920B)](https://github.com/OtoYuki/proteus/releases/latest)
+[![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-5A6042)](#license)
+[![rust 1.94+](https://img.shields.io/badge/rust-1.94%2B-99920B)](Cargo.toml)
 
-**Triage for protein design campaigns: which of your models deserve a GPU-hour, a wet-lab slot
-or a closer look. One binary, no Python, no Rosetta licence, and every number that has a reference
-implementation is checked against it.**
+</div>
 
 A binder or design campaign ends with thousands of predicted models. Choosing among them usually
 means a local script over Biopython, mdtraj, FreeSASA and PyRosetta: a licence to buy for
@@ -24,18 +25,34 @@ commercial use, an environment to keep alive, and numbers that are rarely compar
 
 `proteus analyze` measures every model in a folder in parallel and writes one row per model to
 Parquet, CSV or JSON. It covers confidence, secondary structure, MolProbity's geometry checks,
-contacts and, for complexes, the binder–target interface. Every measurement that has a
-reference implementation is checked against it on every push: mdtraj, cctbx (MolProbity),
-FreeSASA, PLIP and sc-rs. The interface metrics are also checked against a published dataset of 3 669 designs whose
-binding was measured in the lab. Numbers that have no reference are labelled as unchecked.
+contacts and, for complexes, the binder–target interface, read together with the PAE and scores
+your predictor wrote beside each model. Every measurement that has a reference implementation is
+checked against it on every push: mdtraj, cctbx (MolProbity), FreeSASA, PLIP and sc-rs. The
+interface ranking is also measured against a published dataset of 3 669 designs whose binding
+was tested in the lab. Numbers that have no reference are labelled as unchecked.
 
-<p align="center">
-  <img src="docs/media/web-1pgb.jpg" width="880"
-       alt="protein G (1PGB) in the Proteus browser page: a clay helix packed on a tide-coloured four-stranded sheet, a residue label under the pointer, and the measurements and Ramachandran plot beside it">
-</p>
-<p align="center"><sub>Protein G (1PGB) on the page <code>proteus view 1pgb.pdb --web</code> writes: the
-same ribbon, DSSP and measurements as the terminal viewer, drawn with WebGL2 in one offline
-HTML file.</sub></p>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/per-target-dark.svg">
+  <img alt="Average precision of ranking each target's designs by ipSAE_min, for 15 targets, against a random order: ipSAE_min is above random on 14 of them and ties on IL10Ra, from 1.00 on LTK down to 0.09 on pMHC_SILSY1." src="docs/img/per-target-light.svg">
+</picture>
+
+<sub>Proteus's <code>ipsae_min</code> on the AlphaFold 3 models of the 3 669 designs in Overath et al.
+2025, ranked within each target. A filled dot is the ranking's average precision, the ring is what
+a random order scores (the target's binder rate). Drawn from
+<a href="validate/binders/last_run.md"><code>validate/binders/last_run.md</code></a> by
+<code>proteus_render::brand::figures</code>; a test fails if the picture and the report disagree.</sub>
+
+## Contents
+
+- [In a minute](#in-a-minute) · [How it works](#how-it-works)
+- [1. Triage a binder campaign](#1-triage-a-binder-campaign)
+- [2. Triage any folder of predicted models](#2-triage-any-folder-of-predicted-models)
+- [3. Check every number against someone else's implementation](#3-check-every-number-against-someone-elses-implementation)
+- [4. Look at it, over SSH](#4-look-at-it-over-ssh)
+- [5. Make the models: mutate, fold, rank](#5-make-the-models-mutate-fold-rank)
+- [6. Drive it from a workflow engine](#6-drive-it-from-a-workflow-engine)
+- [Where this sits next to other tools](#where-this-sits-next-to-other-tools) · [Speed](#speed) · [Install](#install)
+- [Command reference](#command-reference) · [How the numbers are defined](#how-the-numbers-are-defined) · [Provenance](#provenance)
 
 ## In a minute
 
@@ -48,6 +65,26 @@ curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_
 ```
 
 Other platforms, `cargo install` and the container image are under [Install](#install).
+
+## How it works
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Geist Mono, ui-monospace, monospace", "primaryColor": "#D1CF8B", "primaryTextColor": "#141C10", "primaryBorderColor": "#5A6042", "lineColor": "#99920B", "secondaryColor": "#FBFFE1", "tertiaryColor": "#FBFFE1"}}}%%
+flowchart LR
+    M["models/<br/>.pdb .cif (.gz)"] --> S["structure QC<br/>DSSP, Ramachandran,<br/>SASA, geometry,<br/>rotamers, pLDDT"]
+    M --> I["interface geometry<br/>contacts, dSASA, Sc,<br/>H-bonds, salt bridges"]
+    C["predictor files<br/>Boltz, AF3, Protenix,<br/>OpenFold3, ColabFold,<br/>Chai-1, AFDB"] --> Q["confidence<br/>ipTM, ipAE,<br/>ipSAE, LIS"]
+    S --> R["one row<br/>per model"]
+    I --> R
+    Q --> R
+    R --> T["terminal table<br/>by ipsae_min"]
+    R --> E["Parquet<br/>CSV, JSON"]
+```
+
+Models are measured in parallel (`-j` sets the thread count). A file that cannot be read is named
+on stderr and makes the exit status non-zero without stopping the rest. The structure
+measurements are compared with mdtraj, cctbx, FreeSASA, PLIP and sc-rs on every push (section 3);
+the interface ranking is compared with lab results by `make validate-binders` (section 1).
 
 ---
 
@@ -65,13 +102,35 @@ chain A against every other chain. For every model it adds two groups of columns
   hydrogen bonds and salt bridges across the interface.
 - **From the predictor's own files beside the model:** ipTM, ipAE, ipSAE and LIS. Proteus reads
   Boltz, AlphaFold 3 (local runs and the AlphaFold Server), Protenix, OpenFold3, ColabFold and
-  AlphaFold DB files, and Chai-1's scores (below). ipSAE
-  (Dunbrack 2025) is the pTM-style score over only the residue pairs the predictor is confident
-  about. It is reported both ways round, binder→target and target→binder, and `ipsae_min` is the
-  smaller of the two.
+  AlphaFold DB files, and Chai-1's scores (see [`analyze`](#proteus-analyze--one-structure-in-full-or-a-table-over-many)).
+  ipSAE (Dunbrack 2025) is the pTM-style score over only the residue pairs the predictor is
+  confident about. It is reported both ways round, binder→target and target→binder, and
+  `ipsae_min` is the smaller of the two.
 
 The terminal table sorts by `ipsae_min`, the export has every column, and the rest of the
-per-model QC (section 2) comes with it.
+per-model QC (section 2) comes with it. Here is the result on twelve designs against IL-7Rα,
+drawn at random from the dataset below, with some columns left out (the terminal also shows
+pLDDT, contact counts, H-bonds, salt bridges and bond RMSZ). The last column is the lab result,
+which Proteus never sees:
+
+| model | ipsae_min | iptm | ipae | lis | interface_sc | interface_dsasa | bound in the lab |
+|---|---:|---:|---:|---:|---:|---:|:-:|
+| `il7ra_binder_af2_48` | 0.698 | 0.87 | 5.1 | 0.613 | 0.57 | 1983 | **yes** |
+| `il7ra_binder_af2_34` | 0.646 | 0.89 | 5.0 | 0.633 | 0.70 | 1758 | no |
+| `il7ra_binder_af2_93` | 0.622 | 0.86 | 5.6 | 0.605 | 0.60 | 1610 | no |
+| `il7ra_binder_af2_94` | 0.587 | 0.88 | 4.8 | 0.650 | 0.70 | 1519 | no |
+| `longxing_grafting2_ems_3hc_242_…` | 0.548 | 0.85 | 6.2 | 0.549 | 0.61 | 1653 | no |
+| `il7ra_binder_af2_65` | 0.505 | 0.81 | 6.0 | 0.549 | 0.57 | 1887 | no |
+| `il7ra_binder_af2_51` | 0.159 | 0.68 | 9.7 | 0.322 | 0.58 | 1194 | no |
+| `longxing_hhh_eva_0366_…` | 0.015 | 0.45 | 14.8 | 0.156 | 0.58 | 1659 | no |
+| `longxing_grafting2_ems_3hc_306_…` | 0.014 | 0.42 | 15.2 | 0.159 | 0.62 | 1594 | no |
+| `il7ra_binder_af2_72` | 0.011 | 0.27 | 19.4 | 0.066 | 0.47 | 1389 | no |
+| `bcov_r3_ems_ferrm_5651_…` | 0.000 | 0.28 | 20.9 | 0.004 | 0.50 | 1181 | no |
+| `longxing_ems_3hm_2137_…` | 0.000 | 0.26 | 20.5 | 0.018 | 0.57 | 1220 | no |
+
+The one design that bound comes first, but this is one draw of twelve and proves little on its
+own. Five that did not bind sit close behind it, and Sc would have put it eighth. What the score
+is worth over thousands of designs is below.
 
 To look at one model, open it with `proteus view model.cif --web`. A complex opens coloured by
 interface: the binder in clay and the target in tide, bright where they touch and dark
@@ -80,11 +139,17 @@ numbers above. `i` selects both sides' contact residues and draws them as sticks
 the chips in the panel) hands the binder role to another chain. The terminal viewer's dashboard
 shows the same three lines.
 
-**What these numbers are worth**, measured on the 3 669 designs in the Overath et al. 2025
-meta-analysis whose binding was tested in the lab (394 bound, 15 targets), using the AlphaFold 3
-models (`make validate-binders`). A campaign ranks its own designs against one target, so the
-score is average precision (AP) per target, averaged over the 15. A random ranking scores the
-binder rate, 0.131 on average.
+### What these numbers are worth
+
+Measured on the 3 669 designs in the Overath et al. 2025 meta-analysis whose binding was tested
+in the lab (394 bound, 15 targets), using the AlphaFold 3 models (`make validate-binders`). A
+campaign ranks its own designs against one target, so the score is average precision (AP) per
+target, averaged over the 15. A random ranking scores the binder rate, 0.131 on average.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/scores-dark.svg">
+  <img alt="Mean per-target average precision by score: ipSAE_min 0.51, LIS 0.48, minus ipAE 0.44, pDockQ2 0.44, ipTM 0.42, pLDDT 0.41, Sc 0.38, actifpTM 0.35, Rosetta ΔG 0.33, dSASA 0.25; a random order scores 0.13." src="docs/img/scores-light.svg">
+</picture>
 
 | ranked by | AP per target | AUROC | |
 |---|---|---|---|
@@ -112,6 +177,11 @@ better on AUROC (0.707), and Sc is close (0.179).
 The margin is smaller because ipSAE had already chosen which designs were tested. The binder
 rate still climbs steadily with the score, from 2.7 % below 0.2 to 38 % above 0.8
 ([`last_run.md`](validate/nipah/last_run.md)).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/nipah-bins-dark.svg">
+  <img alt="Nipah: share of designs that bound, by ipsae_min bin: 3 % (7 of 264) below 0.20, 5 % (6 of 128) from 0.20 to 0.40, 9 % (28 of 313) from 0.40 to 0.61, 13 % (43 of 324) from 0.61 to 0.70, 14 % (21 of 151) from 0.70 to 0.80 and 38 % (6 of 16) above 0.80, against 9.3 % over all designs." src="docs/img/nipah-bins-light.svg">
+</picture>
 
 ```sql
 -- duckdb: the confident interfaces, chemically sound, best first
@@ -258,6 +328,14 @@ the terminal's cell size and drops while frames are slow. Half-block output is d
 supersampled, so ribbons thinner than a cell stop breaking up. A complex opens coloured by
 interface, and a model that is confident everywhere opens on its secondary structure, because
 in pLDDT colours it would be one flat blue; `c` cycles through the rest.
+
+<p align="center">
+  <img src="docs/media/web-1pgb.jpg" width="880"
+       alt="protein G (1PGB) in the Proteus browser page: a clay helix packed on a tide-coloured four-stranded sheet, a residue label under the pointer, and the measurements and Ramachandran plot beside it">
+</p>
+<p align="center"><sub>Protein G (1PGB) on the page <code>proteus view 1pgb.pdb --web</code> writes: the
+same ribbon, DSSP and measurements as the terminal viewer, drawn with WebGL2 in one offline
+HTML file.</sub></p>
 
 When there is a browser at hand, `--web` opens the same structure in one: the ribbon mesh the
 terminal draws, shaded by WebGL2 with SSAO and outlines, hover labels per residue, and the
