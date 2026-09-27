@@ -10,6 +10,8 @@ pub enum ColorScheme {
     Solid(ColorRGB),
     /// Per-residue colours from an attached score table (`Rasterizer::residue_colors`).
     Scores,
+    /// A complex's binder and target, bright at their contacts (`Rasterizer::interface_colors`).
+    Interface,
 }
 
 /// ColorBrewer RdBu, from the damaging end (red) to the tolerated end (blue).
