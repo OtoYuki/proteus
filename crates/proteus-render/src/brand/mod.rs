@@ -41,6 +41,14 @@ pub mod structure {
     /// deuteranopia).
     pub const TARGET: ColorRGB = palette::TIDE;
     pub const REFERENCE: ColorRGB = palette::CLAY;
+    /// Interfaces (`analyze --interface`, the viewers' interface colouring): the binder in the
+    /// Clay family and the target in the Tide family, each with its interface residues bright and
+    /// the rest dark, so the eye goes to where they touch. Other chains recede into Moss.
+    pub const IFACE_BINDER: ColorRGB = hex(0x7A5F3C);
+    pub const IFACE_BINDER_CONTACT: ColorRGB = hex(0xF0C07A);
+    pub const IFACE_TARGET: ColorRGB = hex(0x2F5B57);
+    pub const IFACE_TARGET_CONTACT: ColorRGB = hex(0x7FD3CA);
+    pub const IFACE_OTHER: ColorRGB = palette::MOSS;
 }
 
 /// Colours by role, for a dark or a light ground.
@@ -394,6 +402,43 @@ mod tests {
             .map(|(i, j)| delta_e(palette_only[i], palette_only[j], Some(&DEUTAN)))
             .fold(f64::MAX, f64::min);
         assert!(worst < 15.0, "{worst}");
+    }
+
+    /// The four interface colours stay apart for every kind of colour vision, and the two
+    /// interface (contact) colours stand out from the dark bodies they sit in.
+    #[test]
+    fn interface_colours_stay_apart_for_colour_blind_readers() {
+        use structure::*;
+        let set = [
+            IFACE_BINDER,
+            IFACE_BINDER_CONTACT,
+            IFACE_TARGET,
+            IFACE_TARGET_CONTACT,
+        ];
+        for (vision, m) in [
+            ("normal", None),
+            ("deutan", Some(&DEUTAN)),
+            ("protan", Some(&PROTAN)),
+            ("tritan", Some(&TRITAN)),
+        ] {
+            let mut worst = f64::MAX;
+            for i in 0..4 {
+                for j in i + 1..4 {
+                    worst = worst.min(delta_e(set[i], set[j], m));
+                }
+            }
+            assert!(worst >= 20.0, "{vision}: smallest ΔE {worst:.1}");
+        }
+        for (contact, body) in [
+            (IFACE_BINDER_CONTACT, IFACE_BINDER),
+            (IFACE_TARGET_CONTACT, IFACE_TARGET),
+        ] {
+            assert!(
+                contrast(contact, body) >= 2.5,
+                "{}",
+                contrast(contact, body)
+            );
+        }
     }
 
     #[test]

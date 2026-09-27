@@ -50,8 +50,28 @@
   const scores = meta.scores;
   const fmt = (v) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2);
   const compare = meta.compare;
-  const SCHEMES = ['ss', 'plddt', 'rainbow'].concat(scores ? ['score'] : [], compare ? ['deviation'] : []);
+  // Complexes: each protein chain as binder against the rest (web.rs), and which one is shown.
+  const interfaces = meta.interfaces || [];
+  // Open on the smallest chain as the binder: a designed binder is almost always the smaller side.
+  const chainSize = (ids) => meta.labels.chain.filter((c) => ids.split(',').includes(c)).length;
+  let ifaceIdx = interfaces.reduce((best, f, i) => (chainSize(f.binder) < chainSize(interfaces[best].binder) ? i : best), 0);
+  const SCHEMES = (interfaces.length ? ['interface'] : []).concat(['ss', 'plddt', 'rainbow'], scores ? ['score'] : [], compare ? ['deviation'] : []);
+  /** Per-residue colours of the interface scheme: binder and target dark, where they touch bright. */
+  function interfaceColours() {
+    const f = interfaces[ifaceIdx], k = meta.interfaceColours;
+    const binder = new Set(f.binder.split(',')), target = new Set(f.target.split(','));
+    const bi = new Set(f.binderResidues), ti = new Set(f.targetResidues);
+    return meta.labels.chain.map((c, i) => binder.has(c) ? (bi.has(i) ? k.binderInterface : k.binder)
+      : target.has(c) ? (ti.has(i) ? k.targetInterface : k.target) : k.other);
+  }
+  /** `vertexColors` arguments for the current scheme: the per-residue ones go through 'score'. */
+  function schemeColours(m) {
+    if (scheme === 'deviation') return C.vertexColors(m, 'score', compare.colors);
+    if (scheme === 'interface') return C.vertexColors(m, 'score', interfaceColours());
+    return C.vertexColors(m, scheme, scores && scores.colors);
+  }
   let scheme = SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss';
+  if (!interfaces.length) document.querySelectorAll('.iface-key').forEach((e) => { e.hidden = true; });
   let noticeText = '';
   let surfaceKey = ''; // what the surface colours mean, while one is shown
   let noticeTimer = 0;
@@ -283,7 +303,7 @@
       buf(1, m.nrm, 3, gl.BYTE, true);
       let colorBuf = null, selBuf = null;
       if (withAttrs) {
-        colorBuf = buf(2, C.vertexColors(m, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors), 3, gl.UNSIGNED_BYTE, true);
+        colorBuf = buf(2, schemeColours(m), 3, gl.UNSIGNED_BYTE, true);
         buf(3, Float32Array.from(m.res), 1, gl.FLOAT, false);
         selBuf = buf(4, new Float32Array(m.n).fill(1), 1, gl.FLOAT, false);
       }
@@ -579,10 +599,10 @@
         resColour[r] = [colours[3 * i], colours[3 * i + 1], colours[3 * i + 2]];
       }
     }
-    residueColours(C.vertexColors(mesh.ribbon, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors));
+    residueColours(schemeColours(mesh.ribbon));
 
     function recolor() {
-      const colours = C.vertexColors(mesh.ribbon, scheme === 'deviation' ? 'score' : scheme, scheme === 'deviation' ? compare.colors : scores && scores.colors);
+      const colours = schemeColours(mesh.ribbon);
       gl.bindBuffer(gl.ARRAY_BUFFER, ribbon.colorBuf);
       gl.bufferData(gl.ARRAY_BUFFER, colours, gl.STATIC_DRAW);
       residueColours(colours);
@@ -766,7 +786,7 @@
       const v = { y: +state.yaw.toFixed(3), p: +state.pitch.toFixed(3), z: +state.zoom.toFixed(3),
         pan: state.pan.map((x) => +x.toFixed(2)), c: scheme, fx: state.fx ? 1 : 0, ds: state.ds ? 1 : 0,
         ref: state.ref ? 1 : 0, u: state.surface, s: [...sel.set], n: sel.neigh ? 1 : 0, k: [...showKinds],
-        l: [...pinned], m: measures };
+        l: [...pinned], m: measures, b: ifaceIdx };
       try { history.replaceState(null, '', '#v=' + C.encodeSession(v)); } catch (_) { /* file:// in some browsers */ }
     }
     function saveSession() {
@@ -782,6 +802,7 @@
       state.yaw = num(v.y, 0); state.pitch = num(v.p, 0); state.zoom = Math.min(50, Math.max(0.1, num(v.z, 1)));
       if (Array.isArray(v.pan) && v.pan.length === 2) state.pan = v.pan.map((x) => num(x, 0));
       if (SCHEMES.includes(v.c)) scheme = v.c;
+      if (Number.isInteger(v.b) && v.b >= 0 && v.b < interfaces.length) ifaceIdx = v.b;
       state.fx = v.fx !== 0; state.ds = v.ds !== 0; state.ref = v.ref !== 0;
       state.surface = Math.max(0, Math.min(SURFACES.length - 1, num(v.u, 0) | 0));
       sel.neigh = v.n !== 0;
@@ -810,6 +831,8 @@
         request();
       },
       link() { saveSession(); return location.href; },
+      recolor() { recolor(); saveSession(); },
+      saveSession,
       previewChanged() { applyDimming(); request(); },
       atoms: mesh.atoms,
       caOf,
@@ -872,6 +895,14 @@
       if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
       switch (e.key) {
         case 'c': scheme = SCHEMES[(SCHEMES.indexOf(scheme) + 1) % SCHEMES.length]; recolor(); break;
+        case 'i':
+          if (!interfaces.length) { notice('one chain: no interface to show'); break; }
+          focusInterface();
+          break;
+        case 'b':
+          if (interfaces.length < 2) { notice(interfaces.length ? 'one interface only' : 'one chain: no interface to show'); break; }
+          setBinder((ifaceIdx + 1) % interfaces.length);
+          break;
         case 'o': state.fx = !state.fx; request(); break;
         case 'd':
           if (!meta.disulfides) { notice('no disulfides in this structure'); break; }
@@ -1166,6 +1197,12 @@
       el.append(name, swatch(col(0), '0 Å'), swatch(col(compare.max / 2), fmt(compare.max / 2) + ' Å'),
         swatch(col(compare.max), '≥ ' + fmt(compare.max) + ' Å'), swatch(compare.none, 'unpaired'),
         swatch(compare.colour, 'reference'));
+    } else if (scheme === 'interface') {
+      const f = interfaces[ifaceIdx], k = meta.interfaceColours;
+      name.textContent = '(interface · binder ' + f.binder + ' → ' + f.target + ')';
+      el.append(name, swatch(k.binderInterface, 'binder contact'), swatch(k.binder, 'binder'),
+        swatch(k.targetInterface, 'target contact'), swatch(k.target, 'target'));
+      if (new Set(meta.labels.chain).size > f.binder.split(',').length + f.target.split(',').length) el.append(swatch(k.other, 'other chains'));
     } else if (scheme === 'rainbow') {
       name.textContent = '(sequence position)';
       el.append(name, swatch(C.rainbowColor(0, 4), 'N-terminus'), swatch(C.rainbowColor(2, 4), 'middle'),
@@ -1204,6 +1241,7 @@
       rows.unshift(['superposed on ' + compare.name, 'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å over ' + compare.paired +
         ' pairs (' + compare.pairing + ')' + (compare.mismatched ? ' · ' + compare.mismatched + ' differ in residue' : '')]);
     }
+    if (interfaces.length) buildInterfacePanel(panel);
     if (rows.length) {
       h('measurements');
       const dl = document.createElement('dl');
@@ -1564,6 +1602,106 @@
   // two residues; a drag selects two ranges and reports the mean error between them.
   // Chain IDs in the order a predictor numbers chains: protein chains as they appear, then
   // ligand chains not already named.
+  // ---------------------------------------------------------------- interface
+  /** The interface section: which chain is the binder, what the interface measures, and a verdict. */
+  function buildInterfacePanel(panel) {
+    const box = document.createElement('section');
+    box.id = 'interface';
+    panel.append(box);
+    renderInterface(box);
+  }
+  function renderInterface(box) {
+    box.textContent = '';
+    const f = interfaces[ifaceIdx];
+    const head = document.createElement('h2');
+    head.textContent = '(interface)';
+    box.append(head);
+    if (interfaces.length > 1) {
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      chips.setAttribute('role', 'radiogroup');
+      chips.setAttribute('aria-label', 'binder chain');
+      const lab = document.createElement('span');
+      lab.textContent = 'binder';
+      chips.append(lab);
+      interfaces.forEach((x, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = x.binder;
+        b.setAttribute('role', 'radio');
+        b.setAttribute('aria-checked', String(i === ifaceIdx));
+        b.title = 'chain ' + x.binder + ' against ' + x.target + ' (b cycles)';
+        b.addEventListener('click', () => setBinder(i));
+        chips.append(b);
+      });
+      box.append(chips);
+    }
+    // The verdict leads: the one number that best separated binders from non-binders in the lab.
+    const v = document.createElement('p');
+    v.className = 'verdict';
+    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined) {
+      const ok = f.ipsaeMin > 0.61;
+      v.classList.add(ok ? 'good' : 'bad');
+      v.textContent = (ok ? '● confident interface' : '○ not a confident interface') + ' · ipSAE_min ' + f.ipsaeMin.toFixed(3) +
+        (ok ? ' > 0.61' : ' ≤ 0.61');
+      v.title = 'Among 3 669 lab-tested designs (Overath et al. 2025), 40 % of those above 0.61 bound, against 11 % overall.';
+    } else {
+      v.textContent = '– no PAE beside this model: confidence metrics unavailable';
+    }
+    box.append(v);
+    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined && f.ipsaeMin > 0.61) {
+      const c = document.createElement('p');
+      c.className = 'note tight';
+      c.textContent = 'A prediction, not a result: of lab-tested designs above this line, 40 % bound (Overath et al. 2025).';
+      box.append(c);
+    }
+    const dl = document.createElement('dl');
+    dl.className = 'iface';
+    const row = (k, val, tip) => {
+      const dt = document.createElement('dt'); dt.textContent = k;
+      const dd = document.createElement('dd'); dd.textContent = val;
+      if (tip) { dt.title = tip; dd.title = tip; }
+      dl.append(dt, dd);
+    };
+    const n = (x, d) => (x === null || x === undefined ? '–' : x.toFixed(d));
+    row('chains', f.binder + ' → ' + f.target);
+    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined) {
+      row('ipSAE', 'min ' + n(f.ipsaeMin, 3) + ' · max ' + n(f.ipsaeMax, 3), 'pTM-style score over the residue pairs the predictor is confident about (PAE < 10 Å), each direction');
+      const iptm = meta.confidence && meta.confidence.iptm;
+      row('ipAE · LIS', n(f.ipae, 1) + ' Å · ' + n(f.lis, 3) + (iptm !== null && iptm !== undefined ? ' · ipTM ' + iptm.toFixed(3) : ''));
+    }
+    row('shape complementarity', n(f.sc, 2), 'Lawrence & Colman Sc: 1 is a perfect fit; protein–protein interfaces sit around 0.6–0.75');
+    row('buried surface', f.dsasa.toFixed(0) + ' Å²', 'dSASA: the two sides\' SASA minus the complex\'s');
+    row('contacts', f.binderResidues.length + ' binder · ' + f.targetResidues.length + ' target residues', 'heavy atoms within 4 Å of the other side');
+    const plural = (k, one, many) => k + ' ' + (k === 1 ? one : many);
+    row('across it', plural(f.hbonds, 'H-bond', 'H-bonds') + ' · ' + plural(f.saltBridges, 'salt bridge', 'salt bridges'));
+    box.append(dl);
+    const act = document.createElement('div');
+    act.className = 'actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'show the interface (i)';
+    btn.addEventListener('click', focusInterface);
+    act.append(btn);
+    box.append(act);
+  }
+  function setBinder(i) {
+    ifaceIdx = i;
+    const box = $('interface');
+    if (box) renderInterface(box);
+    if (V && scheme === 'interface') V.recolor(); else showLegend();
+    notice('binder ' + interfaces[i].binder + ' against ' + interfaces[i].target);
+    if (V) V.saveSession();
+  }
+  /** Colour by interface and select both sides' contact residues, centred. */
+  function focusInterface() {
+    const f = interfaces[ifaceIdx];
+    if (scheme !== 'interface') { scheme = 'interface'; if (V) V.recolor(); }
+    sel.neigh = false;
+    select(new Set(f.binderResidues.concat(f.targetResidues)), { focus: true });
+    notice(f.binderResidues.length + ' + ' + f.targetResidues.length + ' interface residues selected');
+  }
+
   function chainNames() {
     const out = [];
     for (const c of meta.labels.chain) if (!out.includes(c)) out.push(c);

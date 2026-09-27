@@ -145,3 +145,18 @@ kbd { font: inherit; color: var(--accent); margin-right: 4px; }
   #fallback { right: 16px; }
 }
 @media (prefers-reduced-motion: reduce) { #view { transition: none; } }
+
+/* Interface (complexes): binder chips, the verdict, the measurements, one action. */
+#panel #interface .chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 2px 0 10px;
+  font: 400 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+#panel #interface .chips span { margin-right: 4px; }
+#panel #interface button { font: 500 11.5px/1 var(--mono); color: var(--muted); background: transparent;
+  border: 1px solid var(--line); padding: 5px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
+#panel #interface button:hover, #panel #interface button:focus-visible { color: var(--text); border-color: var(--muted); outline: none; }
+#panel #interface .chips button[aria-checked="true"] { color: var(--ground); background: var(--accent); border-color: var(--accent); }
+#panel #interface .verdict { margin: 0 0 4px; padding: 8px 10px; font: 500 12px/1.4 var(--mono);
+  border-left: 2px solid var(--line); background: color-mix(in srgb, var(--ground) 55%, transparent); }
+#panel #interface .verdict.good { border-left-color: var(--accent); color: var(--text); }
+#panel #interface .verdict.bad { border-left-color: var(--warm); color: var(--warm); }
+#panel #interface .actions { margin-top: 12px; }
+#panel #interface .actions button { width: 100%; text-align: left; }
