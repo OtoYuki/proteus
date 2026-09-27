@@ -631,9 +631,24 @@ fn draw_overview(f: &mut Frame, area: Rect, app: &App) {
     }
 
     // Complexes: how many interfaces pass the ipSAE_min line, of those measured so far.
+    // The measured chain count once a model is analysed; until then, the job's name.
     let complexes: Vec<_> = jobs
         .iter()
-        .filter(|j| j.chain_names.len() > 1 || j.header.contains(" + "))
+        .filter(|j| {
+            let measured = j
+                .pdb_path
+                .as_ref()
+                .and_then(|p| app.analyses.get(Path::new(p)))
+                .and_then(|a| match a {
+                    Analysis::Done { facts: Some(f), .. } => Some(f.chains),
+                    _ => None,
+                });
+            // Names `submit` gives complexes: "2 chains", "2 chains A:B", "PD-1 ×2", "A + B".
+            let named = [" chains", " ×", " + "]
+                .iter()
+                .any(|t| j.header.contains(t));
+            measured.map_or(j.chain_names.len() > 1 || named, |n| n > 1)
+        })
         .collect();
     if !complexes.is_empty() {
         let (mut measured, mut confident, mut waiting) = (0, 0, 0);
@@ -1288,7 +1303,12 @@ pub fn wrap_value(v: &str, width: usize) -> Vec<String> {
     while !rest.is_empty() {
         let cut = [" · ", " ("]
             .iter()
-            .filter_map(|sep| rest[1.min(rest.len())..].find(sep).map(|i| i + 1))
+            .filter_map(|sep| {
+                // Skip the first character, whatever its width: a value can start with a
+                // chain name in any script.
+                let first = rest.chars().next().map_or(0, char::len_utf8);
+                rest[first..].find(sep).map(|i| i + first)
+            })
             .min();
         match cut {
             Some(i) => {

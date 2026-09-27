@@ -269,8 +269,8 @@ fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
 }
 
 /// The table under `--interface`: the interface columns, best ipSAE_min first when the
-/// predictor's PAE was found (it was the strongest single predictor of binding among 3,766
-/// tested designs; Overath et al. 2025), otherwise by buried surface.
+/// predictor's PAE was found (AlphaFold 3's ipSAE outperformed ipAE and ipTM at predicting
+/// binding among 3,766 tested designs; Overath et al. 2025), otherwise by buried surface.
 fn print_interface_summary(rows: &[StructureQc], top: usize, exported: bool) {
     let by_ipsae = rows.iter().any(|r| r.interface.ipsae_min.is_some());
     let key = |r: &StructureQc| {
@@ -436,16 +436,16 @@ pub async fn run(args: Args) -> Result<()> {
             .map(|p| format!(", written to {}", p.display()))
             .unwrap_or_default()
     );
-    // A PAE that was found but could not be matched leaves ipSAE empty; say why, briefly.
+    // Confidence files that were found but could not be used; say what was lost, briefly.
     let noted: Vec<_> = rows
         .iter()
         .filter_map(|r| r.interface.interface_note.as_ref().map(|n| (&r.file, n)))
         .collect();
     for (file, note) in noted.iter().take(5) {
-        eprintln!("  no PAE metrics: {file}: {note}");
+        eprintln!("  {file}: {note}");
     }
     if noted.len() > 5 {
-        eprintln!("  … and {} more without PAE metrics", noted.len() - 5);
+        eprintln!("  … and {} more with confidence notes", noted.len() - 5);
     }
     for (path, e) in &failures {
         eprintln!("  failed: {}: {e}", path.display());

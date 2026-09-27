@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rank the Adaptyv Nipah binder competition designs with `proteus analyze --interface A` and
+"""Rank the Adaptyv Nipah binder competition designs with `proteus analyze --interface B` and
 score the ranking against the lab outcome.
 
     validate/nipah/compare.py ANALYSIS.jsonl COLLECTION.csv [--report validate/nipah/last_run.md]
