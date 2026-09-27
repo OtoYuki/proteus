@@ -186,6 +186,9 @@ pub async fn run(
         esm2_score: Option<f32>,
         rank_key: f64,
         engine: String,
+        bond_rmsz: Option<f64>,
+        angle_rmsz: Option<f64>,
+        rotamer_outlier_pct: Option<f64>,
     }
 
     let mut candidates: Vec<CandidateRank> = Vec::new();
@@ -279,6 +282,18 @@ pub async fn run(
                         esm2_score,
                         rank_key,
                         engine,
+                        bond_rmsz: metrics
+                            .covalent_geometry
+                            .as_ref()
+                            .and_then(|g| g.bonds.rmsz),
+                        angle_rmsz: metrics
+                            .covalent_geometry
+                            .as_ref()
+                            .and_then(|g| g.angles.rmsz),
+                        rotamer_outlier_pct: metrics
+                            .covalent_geometry
+                            .as_ref()
+                            .and_then(|g| g.rotamer_outlier_pct()),
                     });
                 }
             }
@@ -427,6 +442,9 @@ pub async fn run(
                 fitness: c.fitness,
                 esm2_score: c.esm2_score.map(f64::from),
                 engine: c.engine.clone(),
+                bond_rmsz: c.bond_rmsz,
+                angle_rmsz: c.angle_rmsz,
+                rotamer_outlier_pct: c.rotamer_outlier_pct,
             });
         }
         proteus_storage::save_screening_dataset(&records, &export_path)

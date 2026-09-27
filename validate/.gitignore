@@ -1,3 +1,3 @@
-corpus/
-.venv/
+corpus
+.venv
 last_run.md

@@ -17,7 +17,9 @@ use uuid::Uuid;
 /// 3: nullable `esm2_score` column (ESM-2 zero-shot mutation score, `--scorer esm2|hybrid`).
 /// 4: `engine` column — which runner produced the structure (`esmfold-api`, `oci`,
 ///    `simulated`). Rows from the simulator are synthetic helices, not predictions.
-pub const EXPORT_SCHEMA_VERSION: u32 = 4;
+/// 5: nullable `bond_rmsz`, `angle_rmsz` and `rotamer_outlier_pct` (covalent geometry and
+///    MolProbity rotamers, `proteus_core::geometry`), appended after `engine`.
+pub const EXPORT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ScreeningRecord {
@@ -45,12 +47,20 @@ pub struct ScreeningRecord {
     /// Runner that produced the structure: `esmfold-api`, `oci`, `simulated`, or `unknown`.
     #[serde(default)]
     pub engine: String,
+    /// Bond-length RMSZ against the Phenix restraint library; `None` when not measured.
+    #[serde(default)]
+    pub bond_rmsz: Option<f64>,
+    #[serde(default)]
+    pub angle_rmsz: Option<f64>,
+    /// MolProbity rotamer outliers, percent of evaluated side chains.
+    #[serde(default)]
+    pub rotamer_outlier_pct: Option<f64>,
 }
 
 /// Serializes candidate screening records to standard RFC-4180 CSV format.
 pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
     let mut out = String::new();
-    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,heavy_atom_overlap_score,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness,esm2_score,engine\n");
+    out.push_str("rank,job_id,header,length,plddt,rg,hydrophobic_burial_pct,helix_pct,strand_pct,coil_pct,favored_ramachandran_pct,rama_outliers,heavy_atom_overlap_score,hbond_count,salt_bridge_count,pi_stacking_count,cation_pi_count,fitness,esm2_score,engine,bond_rmsz,angle_rmsz,rotamer_outlier_pct\n");
 
     for r in records {
         // Escape quotes in header if needed
@@ -61,7 +71,7 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
         };
 
         out.push_str(&format!(
-            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{},{},{},{},{:.2},{},{}\n",
+            "{},{},{},{},{:.2},{:.2},{:.2},{:.1},{:.1},{:.1},{:.1},{},{:.2},{},{},{},{},{:.2},{},{},{},{},{}\n",
             r.rank,
             r.job_id,
             safe_header,
@@ -81,7 +91,12 @@ pub fn export_records_to_csv(records: &[ScreeningRecord]) -> String {
             r.cation_pi_count,
             r.fitness,
             r.esm2_score.map(|e| format!("{e:.4}")).unwrap_or_default(),
-            r.engine
+            r.engine,
+            r.bond_rmsz.map(|v| format!("{v:.3}")).unwrap_or_default(),
+            r.angle_rmsz.map(|v| format!("{v:.3}")).unwrap_or_default(),
+            r.rotamer_outlier_pct
+                .map(|v| format!("{v:.2}"))
+                .unwrap_or_default(),
         ));
     }
 
@@ -116,6 +131,9 @@ pub fn screening_record_schema() -> Schema {
         Field::new("fitness", DataType::Float64, false),
         Field::new("esm2_score", DataType::Float64, true),
         Field::new("engine", DataType::Utf8, false),
+        Field::new("bond_rmsz", DataType::Float64, true),
+        Field::new("angle_rmsz", DataType::Float64, true),
+        Field::new("rotamer_outlier_pct", DataType::Float64, true),
     ])
 }
 
@@ -154,6 +172,9 @@ pub fn records_to_record_batch(
     let fitnesses: Float64Array = records.iter().map(|r| Some(r.fitness)).collect();
     let esm2_scores: Float64Array = records.iter().map(|r| r.esm2_score).collect();
     let engines: StringArray = records.iter().map(|r| Some(r.engine.as_str())).collect();
+    let bond_rmsz: Float64Array = records.iter().map(|r| r.bond_rmsz).collect();
+    let angle_rmsz: Float64Array = records.iter().map(|r| r.angle_rmsz).collect();
+    let rotamer_pct: Float64Array = records.iter().map(|r| r.rotamer_outlier_pct).collect();
 
     let columns: Vec<ArrayRef> = vec![
         Arc::new(ranks),
@@ -176,6 +197,9 @@ pub fn records_to_record_batch(
         Arc::new(fitnesses),
         Arc::new(esm2_scores),
         Arc::new(engines),
+        Arc::new(bond_rmsz),
+        Arc::new(angle_rmsz),
+        Arc::new(rotamer_pct),
     ];
 
     RecordBatch::try_new(schema, columns)
@@ -295,6 +319,9 @@ mod tests {
             fitness: 78.4,
             esm2_score: Some(-1.25),
             engine: "esmfold-api".into(),
+            bond_rmsz: Some(1.31),
+            angle_rmsz: None,
+            rotamer_outlier_pct: Some(2.5),
         }
     }
 
@@ -302,9 +329,20 @@ mod tests {
     fn every_format_carries_the_engine_column() {
         let records = vec![sample_record(1, "crambin_WT")];
         let csv = export_records_to_csv(&records);
-        assert!(csv.lines().next().unwrap().ends_with(",engine"), "{csv}");
+        assert!(csv.lines().next().unwrap().contains(",engine,"), "{csv}");
         assert!(
-            csv.lines().nth(1).unwrap().ends_with(",esmfold-api"),
+            csv.lines()
+                .next()
+                .unwrap()
+                .ends_with(",bond_rmsz,angle_rmsz,rotamer_outlier_pct"),
+            "{csv}"
+        );
+        assert!(
+            csv.lines().nth(1).unwrap().ends_with(",1.310,,2.50"),
+            "missing values stay empty: {csv}"
+        );
+        assert!(
+            csv.lines().nth(1).unwrap().contains(",esmfold-api,"),
             "{csv}"
         );
         let json = export_records_to_json(&records).unwrap();
@@ -369,7 +407,7 @@ mod tests {
         // Read Parquet back using ParquetRecordBatchReaderBuilder
         let file = std::fs::File::open(&parquet_path).unwrap();
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        assert_eq!(builder.schema().fields().len(), 20);
+        assert_eq!(builder.schema().fields().len(), 23);
 
         let mut reader = builder.build().unwrap();
         let batch = reader.next().unwrap().unwrap();
@@ -450,7 +488,7 @@ mod tests {
             .iter()
             .find(|k| k.key == "proteus.schema_version")
             .and_then(|k| k.value.clone());
-        assert_eq!(version.as_deref(), Some("4"));
+        assert_eq!(version.as_deref(), Some("5"));
         let names: Vec<String> = reader
             .metadata()
             .file_metadata()

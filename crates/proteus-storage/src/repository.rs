@@ -410,6 +410,7 @@ impl ProteusRepository {
                 steric_overlap: None,
                 sasa_metrics: None,
                 interaction_network: None,
+                covalent_geometry: None,
                 candidate_fitness_score: None,
             }))
         } else {
@@ -917,6 +918,7 @@ mod tests {
             steric_overlap: None,
             sasa_metrics: None,
             interaction_network: None,
+            covalent_geometry: None,
             candidate_fitness_score: Some(88.5),
         };
         repo.insert_metrics(&metrics).await.unwrap();

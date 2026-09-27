@@ -734,6 +734,48 @@ impl DashboardRenderer {
                 lines,
             );
         }
+        if let Some(ref g) = m.covalent_geometry {
+            // Display bands only: any bond beyond 4σ is worth a look, and more than 1 % of
+            // bonds means the model was not refined or relaxed.
+            let (glyph, role) = if g.bonds.outliers == 0 {
+                ("✓", Role::Accent)
+            } else if g.bonds.outliers * 100 <= g.bonds.n {
+                ("!", Role::Warm)
+            } else {
+                ("✗", Role::Bad)
+            };
+            push(
+                row(
+                    "bond lengths",
+                    format!(
+                        "{} {}",
+                        a.paint(
+                            role,
+                            &format!(
+                                "{glyph} RMSZ {}",
+                                g.bonds
+                                    .rmsz
+                                    .map_or_else(|| "–".to_string(), |z| format!("{z:.2}"))
+                            )
+                        ),
+                        a.paint(Role::Dim, &format!("({} > 4σ)", g.bonds.outliers))
+                    ),
+                ),
+                lines,
+            );
+            if let Some(pct) = g.rotamer_outlier_pct() {
+                push(
+                    row(
+                        "rotamer outliers",
+                        a.paint(
+                            if pct < 1.0 { Role::Accent } else { Role::Warm },
+                            &format!("{pct:.1} %"),
+                        ),
+                    ),
+                    lines,
+                );
+            }
+        }
         if let Some(fitness) = m.candidate_fitness_score {
             push(
                 row("triage score", a.bold(&format!("{fitness:.1} / 100"))),
@@ -811,6 +853,7 @@ mod tests {
                 steric_overlap: None,
                 sasa_metrics: None,
                 interaction_network: None,
+                covalent_geometry: None,
                 candidate_fitness_score: Some(87.4),
             }),
             plddts: vec![92.0; 46],
@@ -895,6 +938,7 @@ mod tests {
                 steric_overlap: None,
                 sasa_metrics: None,
                 interaction_network: None,
+                covalent_geometry: None,
                 candidate_fitness_score: Some(87.4),
             }),
             plddts: vec![92.0; 46],
