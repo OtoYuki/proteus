@@ -83,6 +83,10 @@ jobs:
           export RUST_LOG=off PROTEUS_DATA_DIR="$RUNNER_TEMP/proteus-data"
           $P view crates/proteus-core/tests/data/1crn.pdb --html pages/1crn.html
           $P view crates/proteus-core/tests/data/edge/esm100_low.pdb --html pages/esm100_low.html
+          $P view crates/proteus-core/tests/data/2ptc_EI.pdb --html pages/2ptc_EI.html
+          mkdir -p boltz && n=ems_3hC_1044_0001_000000014_0001 && d=crates/proteus-core/tests/data/binders
+          gunzip -c $d/${n}_model_0.cif.gz > boltz/${n}_model_0.cif && cp $d/pae_${n}_model_0.npz $d/confidence_${n}_model_0.json boltz/
+          $P view boltz/${n}_model_0.cif --html pages/boltz_binder.html
           job=$($P submit --fasta $'>ca\nMKTAYIAKQRQISFVKSHFSRQ' --runner simulated | grep -oE 'Job created: [0-9a-f-]+' | cut -d' ' -f3)
           $P view "$job" --html pages/simulated.html
       - uses: actions/setup-node@v4

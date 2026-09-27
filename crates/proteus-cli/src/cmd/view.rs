@@ -389,6 +389,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             caption: &title,
             structure: &structure,
             scheme,
+            scheme_chosen: color.is_some() || scores_scheme,
             source: Some((&source_name, &pdb_content)),
         }
         .render();
@@ -562,6 +563,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             plddts: structure_data.plddts,
             ramachandran_points: structure_data.ramachandran_points,
             confidence: structure_data.confidence.clone(),
+            interfaces: structure_data.interfaces.clone(),
         });
 
         let config = proteus_render::tui::ViewerConfig {

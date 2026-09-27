@@ -272,6 +272,10 @@ fn region_code(r: RamachandranRegion) -> u8 {
     }
 }
 
+fn rgb3(c: crate::rasterizer::buffer::ColorRGB) -> [u8; 3] {
+    [c.r, c.g, c.b]
+}
+
 /// Everything the page needs besides the mesh.
 fn metadata(page: &WebPage<'_>) -> serde_json::Value {
     let s = page.structure;
@@ -336,6 +340,8 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         // A comparison opens on its deviation colours, unless scores were asked for.
         "scheme": if s.comparison.is_some() && page.scheme != ColorScheme::Scores {
             "deviation"
+        } else if !page.scheme_chosen && !s.interfaces.is_empty() && page.scheme != ColorScheme::Scores {
+            "interface"
         } else {
             scheme_name(page.scheme)
         },
@@ -430,6 +436,31 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             })
         }),
         "metrics": s.metrics.as_ref().map_or_else(Vec::new, |m| proteus_core::qc::summary_rows(m, s.num_residues)),
+        "interfaces": s.interfaces.iter().map(|v| {
+            let m = &v.metrics;
+            let r3 = |x: Option<f64>| x.map(|v| (v * 1000.0).round() / 1000.0);
+            serde_json::json!({
+                "binder": m.binder_chains,
+                "target": m.target_chains,
+                "binderResidues": v.binder_residues,
+                "targetResidues": v.target_residues,
+                "dsasa": m.dsasa.round(),
+                "sc": r3(m.shape_complementarity),
+                "hbonds": m.interface_hbonds,
+                "saltBridges": m.interface_salt_bridges,
+                "ipae": r3(m.ipae),
+                "ipsaeMin": r3(m.ipsae_min),
+                "ipsaeMax": r3(m.ipsae_max),
+                "lis": r3(m.lis),
+            })
+        }).collect::<Vec<_>>(),
+        "interfaceColours": {
+            "binder": rgb3(crate::brand::structure::IFACE_BINDER),
+            "binderInterface": rgb3(crate::brand::structure::IFACE_BINDER_CONTACT),
+            "target": rgb3(crate::brand::structure::IFACE_TARGET),
+            "targetInterface": rgb3(crate::brand::structure::IFACE_TARGET_CONTACT),
+            "other": rgb3(crate::brand::structure::IFACE_OTHER),
+        },
     })
 }
 
@@ -440,8 +471,11 @@ pub struct WebPage<'a> {
     /// One line under the heading: the file or the job and its engine.
     pub caption: &'a str,
     pub structure: &'a StructureRenderData,
-    /// Colour scheme the page opens with (`c` cycles through all three).
+    /// Colour scheme the page opens with (`c` cycles through all of them).
     pub scheme: ColorScheme,
+    /// Whether the user chose `scheme`. When they did not, a complex opens on its interface
+    /// colouring instead.
+    pub scheme_chosen: bool,
     /// The structure file itself, `(file name, text)`, embedded so the page can hand it back
     /// (the "model" download); `None` leaves it out.
     pub source: Option<(&'a str, &'a str)>,
@@ -488,7 +522,7 @@ impl WebPage<'_> {
 <div id="tip" role="tooltip" hidden></div>
 <section id="selbox" aria-live="polite" hidden></section>
 <nav id="seq" aria-label="sequence"></nav>
-<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>m</kbd> measure</span><span><kbd>l</kbd> label</span><span><kbd>u</kbd> surface</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>m</kbd> measure</span><span><kbd>l</kbd> label</span><span><kbd>u</kbd> surface</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span class="iface-key"><kbd>i</kbd> interface</span><span class="iface-key"><kbd>b</kbd> binder</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
@@ -688,10 +722,64 @@ mod tests {
         assert_eq!(d.ref_nv, 0);
     }
 
+    /// A complex carries each chain's interface, located on the ribbon, and opens on the
+    /// interface colouring unless the user chose a scheme.
+    #[test]
+    fn a_complex_page_carries_its_interfaces() {
+        let text = include_str!("../../proteus-core/tests/data/2ptc_EI.pdb");
+        let s = crate::parse_pdb_structure(text).unwrap();
+        let page = |chosen| WebPage {
+            title: "2ptc",
+            caption: "x",
+            structure: &s,
+            scheme: ColorScheme::SecondaryStructure,
+            scheme_chosen: chosen,
+            source: None,
+        };
+        let m = metadata(&page(false));
+        let f = m["interfaces"].as_array().unwrap();
+        assert_eq!(f.len(), 2);
+        assert_eq!(
+            (f[0]["binder"].as_str(), f[0]["target"].as_str()),
+            (Some("E"), Some("I"))
+        );
+        assert_eq!(
+            (f[1]["binder"].as_str(), f[1]["target"].as_str()),
+            (Some("I"), Some("E"))
+        );
+        // The second view is the first with the roles swapped.
+        assert_eq!(f[0]["binderResidues"], f[1]["targetResidues"]);
+        assert_eq!(f[0]["dsasa"], f[1]["dsasa"]);
+        // Interface residue indices point at ribbon residues of the right chain.
+        for (k, chain) in [("binderResidues", "I"), ("targetResidues", "E")] {
+            let idx = f[1][k].as_array().unwrap();
+            assert!(!idx.is_empty());
+            for i in idx {
+                assert_eq!(s.residue_labels[i.as_u64().unwrap() as usize].chain, chain);
+            }
+        }
+        assert_eq!(m["scheme"], "interface");
+        assert_eq!(metadata(&page(true))["scheme"], "ss");
+        // One chain: no interfaces, and the chosen or default scheme.
+        let c = crambin();
+        let single = WebPage {
+            title: "1crn",
+            caption: "x",
+            structure: &c,
+            scheme: ColorScheme::SecondaryStructure,
+            scheme_chosen: false,
+            source: None,
+        };
+        let m = metadata(&single);
+        assert!(m["interfaces"].as_array().unwrap().is_empty());
+        assert_eq!(m["scheme"], "ss");
+    }
+
     #[test]
     fn the_page_is_self_contained_and_carries_our_viewer() {
         let s = crambin();
         let html = WebPage {
+            scheme_chosen: true,
             title: "1crn.pdb",
             caption: "X-ray",
             structure: &s,
@@ -718,6 +806,7 @@ mod tests {
         let mut s = crambin();
         s.residue_labels[0].chain = "</script><script>alert(1)</script>".into();
         let html = WebPage {
+            scheme_chosen: true,
             title: "</script><b>x",
             caption: "y",
             structure: &s,

@@ -144,6 +144,30 @@ for (const name of wanted) {
       const back = await page.evaluate(() => ({ zoom: window.ProteusViewer.state.zoom, m: window.ProteusViewer.measures.length }));
       if (back.zoom !== 1.7 || back.m !== 1) fail(where, `the view did not come back from its URL (${JSON.stringify(back)})`);
     }
+    // A complex: the interface panel, i selects both sides' contacts in the interface colours,
+    // b hands the binder role to the next chain.
+    const iface = await page.evaluate(async () => {
+      const box = document.getElementById('interface');
+      if (!box) return null;
+      const meta = JSON.parse(document.getElementById('proteus-meta').textContent);
+      const key = (k) => window.dispatchEvent(new KeyboardEvent('keydown', { key: k }));
+      const checked = () => [...box.querySelectorAll('.chips button')].findIndex((b) => b.getAttribute('aria-checked') === 'true');
+      key('i');
+      await new Promise((r) => setTimeout(r, 60));
+      const i = Math.max(0, checked());
+      const want = meta.interfaces[i].binderResidues.length + meta.interfaces[i].targetResidues.length;
+      const got = window.ProteusViewer.sel.set.size, scheme = window.ProteusViewer.scheme;
+      const before = checked();
+      key('b');
+      await new Promise((r) => setTimeout(r, 60));
+      const after = document.getElementById('interface') && [...document.getElementById('interface').querySelectorAll('.chips button')].findIndex((b) => b.getAttribute('aria-checked') === 'true');
+      return { want, got, scheme, before, after, n: meta.interfaces.length };
+    });
+    if (iface) {
+      if (iface.got !== iface.want) fail(where, `i selected ${iface.got} residues, the interface has ${iface.want}`);
+      if (iface.scheme !== 'interface') fail(where, `i left the colours on ${iface.scheme}`);
+      if (iface.n > 1 && iface.after === iface.before) fail(where, 'b did not change the binder');
+    }
     // A page with PAE draws the map (not left blank) in the AlphaFold greens.
     const pae = await page.evaluate(() => {
       const c = document.getElementById('pae');
@@ -153,7 +177,7 @@ for (const name of wanted) {
     });
     if (pae && !(pae[3] === 255 && pae[1] >= pae[0] && pae[1] >= pae[2])) fail(where, `the PAE map is not drawn (${pae})`);
     console.log(`ok   ${where}: ${r.drawn}/${r.samples} drawn, ${r.distinct} of ${r.residues} residues picked` +
-      (finding ? `, "${finding.name}" shown` : '') + (pae ? ', PAE drawn' : ''));
+      (finding ? `, "${finding.name}" shown` : '') + (pae ? ', PAE drawn' : '') + (iface ? `, interface ${iface.got} residues` : ''));
     await page.close();
   }
   await browser.close();

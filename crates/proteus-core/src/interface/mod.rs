@@ -19,7 +19,7 @@ pub mod sc;
 use crate::error::CoreError;
 use crate::io::{element_symbol, protein_heavy_atoms};
 use crate::pae::PredictedAlignedError;
-use crate::sasa::{compute_sasa, AtomDescriptor};
+use crate::sasa::AtomDescriptor;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 
@@ -92,6 +92,20 @@ pub struct InterfaceMetrics {
     /// Why the PAE metrics are empty, when a PAE was given but could not be matched to residues.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pae_note: Option<String>,
+    /// The residues counted in `binder_interface_residues` and `target_interface_residues`, in
+    /// file order: what a viewer highlights.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub binder_contacts: Vec<ResidueKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_contacts: Vec<ResidueKey>,
+}
+
+/// A residue by chain id, sequence number and insertion code (empty when there is none).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ResidueKey {
+    pub chain: String,
+    pub number: isize,
+    pub insertion_code: String,
 }
 
 struct Side {
@@ -138,6 +152,7 @@ pub fn interface_metrics(
 
     // Residue order over the whole model, as a predictor's PAE rows are laid out.
     let mut residue_chain: Vec<String> = Vec::new();
+    let mut residue_keys: Vec<ResidueKey> = Vec::new();
     let mut sides = [
         Side {
             atoms: Vec::new(),
@@ -160,6 +175,11 @@ pub fn interface_metrics(
         for residue in chain.residues() {
             let ridx = residue_chain.len();
             residue_chain.push(id.clone());
+            residue_keys.push(ResidueKey {
+                chain: id.clone(),
+                number: residue.serial_number(),
+                insertion_code: residue.insertion_code().unwrap_or("").to_string(),
+            });
             let Some(s) = side else { continue };
             sides[s].residues += 1;
             let rname = residue.name().unwrap_or("UNK").to_string();
@@ -176,7 +196,11 @@ pub fn interface_metrics(
         }
     }
 
-    let (binder_contacts, target_contacts) = contact_residues(&sides[0], &sides[1]);
+    let (binder_set, target_set) = contact_residues(&sides[0], &sides[1]);
+    let keys = |set: std::collections::BTreeSet<usize>| -> Vec<ResidueKey> {
+        set.into_iter().map(|i| residue_keys[i].clone()).collect()
+    };
+    let (binder_contacts, target_contacts) = (keys(binder_set), keys(target_set));
 
     let descriptors = |s: &Side| -> Vec<AtomDescriptor> {
         s.atoms
@@ -184,11 +208,7 @@ pub fn interface_metrics(
             .map(|(c, e, ..)| AtomDescriptor::new(*c, e.clone()))
             .collect()
     };
-    let (da, db) = (descriptors(&sides[0]), descriptors(&sides[1]));
-    let sasa_a = compute_sasa(&da).total_sasa;
-    let sasa_b = compute_sasa(&db).total_sasa;
-    let complex: Vec<AtomDescriptor> = da.into_iter().chain(db).collect();
-    let dsasa = sasa_a + sasa_b - compute_sasa(&complex).total_sasa;
+    let dsasa = crate::sasa::buried_surface(&descriptors(&sides[0]), &descriptors(&sides[1]));
 
     let sc_atoms = |s: &Side| -> Vec<sc::ScAtom> {
         s.atoms
@@ -224,8 +244,8 @@ pub fn interface_metrics(
     let mut out = InterfaceMetrics {
         binder_chains: binder.join(","),
         target_chains: target.join(","),
-        binder_interface_residues: binder_contacts,
-        target_interface_residues: target_contacts,
+        binder_interface_residues: binder_contacts.len(),
+        target_interface_residues: target_contacts.len(),
         dsasa,
         shape_complementarity,
         interface_hbonds,
@@ -235,6 +255,8 @@ pub fn interface_metrics(
         ipsae_max: None,
         lis: None,
         pae_note: None,
+        binder_contacts,
+        target_contacts,
     };
     if let Some(pae) = pae {
         if pae.n != residue_chain.len() {
@@ -256,8 +278,14 @@ pub fn interface_metrics(
 }
 
 /// Residues on each side with a heavy atom within [`INTERFACE_CONTACT_CUTOFF`] of the other side.
-fn contact_residues(a: &Side, b: &Side) -> (usize, usize) {
-    use std::collections::{HashMap, HashSet};
+fn contact_residues(
+    a: &Side,
+    b: &Side,
+) -> (
+    std::collections::BTreeSet<usize>,
+    std::collections::BTreeSet<usize>,
+) {
+    use std::collections::HashMap;
     let cell = INTERFACE_CONTACT_CUTOFF;
     let key = |c: &Vector3<f64>| {
         (
@@ -271,7 +299,10 @@ fn contact_residues(a: &Side, b: &Side) -> (usize, usize) {
         grid.entry(key(&atom.0)).or_default().push(i);
     }
     let cut2 = cell * cell;
-    let (mut ra, mut rb) = (HashSet::new(), HashSet::new());
+    let (mut ra, mut rb) = (
+        std::collections::BTreeSet::new(),
+        std::collections::BTreeSet::new(),
+    );
     for atom in &a.atoms {
         let (x, y, z) = key(&atom.0);
         for dx in -1..=1 {
@@ -290,7 +321,7 @@ fn contact_residues(a: &Side, b: &Side) -> (usize, usize) {
             }
         }
     }
-    (ra.len(), rb.len())
+    (ra, rb)
 }
 
 /// PAE-derived interface confidence.
