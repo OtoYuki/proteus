@@ -481,15 +481,18 @@ leaderboard prints the first eight characters; `proteus view 0916a5e6` resolves 
 
 Run with no command in a terminal, `proteus` opens a full-screen home:
 
-- **Jobs:** your jobs, newest first, refreshed every 2 s. Enter opens the 3-D viewer, `w` the
-  browser page, `i` the full report, and `/` filters the list. On a wide terminal the selected
+- **Jobs:** your jobs, refreshed every 2 s. Enter opens the 3-D viewer, `w` the browser
+  page, `i` the full report, `/` filters the list, `s` sorts it (newest, name, state, pLDDT),
+  `n` renames a job and `x` deletes one after asking. On a wide terminal the selected
   job sits beside the list with a still of its model, its measurements and, for a complex, the
   interface verdict. A failed job shows why it failed.
 - **Structures:** a file browser over the current folder. Each structure file you stop on is
   measured in the background, with the same numbers as `analyze`, and previewed.
 - **Run:** forms to fold a sequence (`submit`) or scan a protein (`mutate … | screen -`).
 
-Every action runs a `proteus` command, and the Run forms show the exact command line before you
+`1` `2` `3` switch tabs, also from a Run form's text field (Alt+digit while typing; on a
+residue-number field digits are the number). Every action runs a `proteus` command, and the
+Run forms show the exact command line before you
 run it, so what you did can be pasted into a script. In a pipe or a script, bare `proteus` still
 prints the usage and exits 2.
 
@@ -716,13 +719,18 @@ the table (`--json` carries up to 100):
 2 more outliers not shown.
 ```
 
-### `proteus submit`, `status`, `inspect` — jobs
+### `proteus submit`, `status`, `inspect`, `rename`, `delete` — jobs
 
 ```bash
 proteus submit --file wt.fasta --runner esm-api    # prints the job id
 proteus status 0916a5e6                            # state, tier, timings
 proteus inspect 0916a5e6                           # the full biophysical report
+proteus rename 0916a5e6 'PD-L1 binder 7'           # the name the lists show
+proteus delete 0916a5e6                            # records and files (alias: rm)
 ```
+
+A job id can be any unique prefix of it. `delete --keep-files` removes the records and leaves
+the job's folder under the data directory.
 
 ### `proteus serve` — the daemon
 

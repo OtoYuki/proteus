@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format follows
 Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
 
 ### Added
+- `proteus rename JOB NAME` and `proteus delete JOB` (alias `rm`; `--keep-files` keeps the
+  job's folder). In the home screen's jobs tab, `n` renames the selected job, `x` deletes it
+  after a `y`, and `s` sorts the list: newest first, by name, by state, or most confident first.
+- Tab icons in the home screen's header, with each tab's number key beside its name.
 - The terminal viewer draws real pixels with the kitty graphics protocol, in kitty, WezTerm and
   Ghostty, when run locally (not over SSH, not in tmux). Frames go as zlib-compressed RGBA with a
   transparent background, at the terminal's cell resolution scaled down while frames are slow.
@@ -102,6 +106,14 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- The home screen's bottom line says what happened ("✓ opened ubq in your browser") instead of
+  the child's last line of output, with the command dim at the right when there is room, and
+  cuts a long message with an ellipsis. Commands use the job's short id.
+- The key strip drops middle hints on a narrow terminal rather than losing help and quit.
+- A complex's default name joins its records' names (`PD-L1 + binder_07`, `hemo ×2`) or, when
+  they are only chain letters, gives the chain count and ids (`3 chains A:B:C`), instead of
+  `A +2 chain(s)`. A bare sequence from the fold form is named by its first eight residues.
+- `view --web` pages are named `proteus-<name>-<id>-<random>.html`.
 - The home screen, redesigned:
   - One header row: the brand, the tabs as a segmented control (the showing tab filled), and
     the job counts.
@@ -151,6 +163,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   metrics saved before this read back without it).
 
 ### Fixed
+- In the home screen's Run tab, the digit keys typed into the focused field instead of
+  switching tabs; they now switch tabs (except on the residue-number fields), and Alt+1–3
+  switches even while typing.
 - `proteus_tasks_total{status="queued"}` counted TES tasks the server rejected with 400; it
   now counts only accepted tasks.
 - `screen --scorer hybrid` ranked by a score it did not show; the leaderboard has a `Hybrid`

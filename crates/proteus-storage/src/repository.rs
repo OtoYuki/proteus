@@ -205,6 +205,56 @@ impl ProteusRepository {
         row.as_ref().map(job_from_row).transpose()
     }
 
+    /// Rename a job: its sequence's header, which is the name every list shows. `false` when
+    /// there is no such job.
+    pub async fn rename_job(&self, id: Uuid, name: &str) -> Result<bool, StorageError> {
+        let r = sqlx::query(
+            "UPDATE sequences SET header = ? WHERE id = (SELECT sequence_id FROM jobs WHERE id = ?)",
+        )
+        .bind(name)
+        .bind(id.to_string())
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
+    /// Delete a job and everything recorded about it (predictions, their metrics, its log
+    /// lines), and its sequence when no other job uses it, in one transaction. `false` when
+    /// there is no such job. Files on disk are the caller's to remove.
+    pub async fn delete_job(&self, id: Uuid) -> Result<bool, StorageError> {
+        let id = id.to_string();
+        let mut tx = self.pool.begin().await?;
+        let seq: Option<String> = sqlx::query_scalar("SELECT sequence_id FROM jobs WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let Some(seq) = seq else {
+            return Ok(false);
+        };
+        sqlx::query(
+            "DELETE FROM metrics WHERE prediction_id IN (SELECT id FROM predictions WHERE job_id = ?)",
+        )
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?;
+        for q in [
+            "DELETE FROM predictions WHERE job_id = ?",
+            "DELETE FROM audit_logs WHERE job_id = ?",
+            "DELETE FROM jobs WHERE id = ?",
+        ] {
+            sqlx::query(q).bind(&id).execute(&mut *tx).await?;
+        }
+        sqlx::query(
+            "DELETE FROM sequences WHERE id = ? AND NOT EXISTS (SELECT 1 FROM jobs WHERE sequence_id = ?)",
+        )
+        .bind(&seq)
+        .bind(&seq)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// The newest `limit` jobs, each with its sequence and the newest prediction if there is
     /// one: what a list of one's own work needs, in one query.
     pub async fn list_jobs(&self, limit: i64) -> Result<Vec<JobSummary>, StorageError> {
@@ -836,6 +886,74 @@ mod tests {
     use super::*;
     use crate::pool::create_in_memory_pool;
     use proteus_core::models::{PlddtDistribution, Sequence};
+
+    /// Rename changes what the jobs list shows; delete removes the job, its prediction and
+    /// its now-unused sequence, and leaves other jobs alone.
+    #[tokio::test]
+    async fn rename_and_delete_a_job() {
+        let repo = ProteusRepository::new(create_in_memory_pool().await.unwrap());
+        let mut ids = Vec::new();
+        for name in ["A +2 chain(s)", "keep"] {
+            let seq = Sequence {
+                id: Uuid::new_v4(),
+                header: name.into(),
+                fasta: "ACDEFG".into(),
+                length: 6,
+                created_at: Utc::now(),
+            };
+            repo.insert_sequence(&seq).await.unwrap();
+            let job = PipelineJob {
+                id: Uuid::new_v4(),
+                sequence_id: seq.id,
+                tier: PipelineTier::FastScreening,
+                status: JobStatus::Completed,
+                priority: 0,
+                created_at: Utc::now(),
+                started_at: None,
+                completed_at: None,
+                error_log: None,
+            };
+            repo.insert_job(&job).await.unwrap();
+            repo.insert_prediction(&Prediction {
+                id: Uuid::new_v4(),
+                job_id: job.id,
+                pdb_path: "/tmp/x.pdb".into(),
+                plddt: None,
+                confidence_category: None,
+                metadata: None,
+            })
+            .await
+            .unwrap();
+            ids.push((job.id, seq.id));
+        }
+        assert!(repo
+            .rename_job(ids[0].0, "hivpr + indinavir")
+            .await
+            .unwrap());
+        let names: Vec<String> = repo
+            .list_jobs(10)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|j| j.header)
+            .collect();
+        assert!(
+            names.contains(&"hivpr + indinavir".to_string()),
+            "{names:?}"
+        );
+        assert!(!repo.rename_job(Uuid::new_v4(), "x").await.unwrap());
+
+        assert!(repo.delete_job(ids[0].0).await.unwrap());
+        assert!(repo.get_job(ids[0].0).await.unwrap().is_none());
+        assert!(repo
+            .get_prediction_by_job(ids[0].0)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo.get_sequence(ids[0].1).await.unwrap().is_none());
+        assert!(repo.get_job(ids[1].0).await.unwrap().is_some());
+        assert!(!repo.delete_job(ids[0].0).await.unwrap());
+    }
 
     #[tokio::test]
     async fn test_storage_lifecycle() {

@@ -177,6 +177,30 @@ pub async fn run(
 /// A single-record FASTA stays the monomer it always was; several records, Boltz-style headers
 /// (`>A|protein|…`, `>L|ccd`), `--msa` or `--samples` make it a
 /// [`proteus_core::complex::ComplexSpec`], stored in its canonical form.
+/// A complex's name from its records' names: the names joined with ` + ` when they say
+/// something (`PD-L1 + binder`), or the chain count and ids when they are only chain letters
+/// (`3 chains A:B:C`).
+fn complex_name(names: &[String], chains: usize) -> String {
+    let mut distinct: Vec<&str> = Vec::new();
+    for n in names.iter().map(String::as_str).filter(|n| !n.is_empty()) {
+        if !distinct.contains(&n) {
+            distinct.push(n);
+        }
+    }
+    if distinct.is_empty() || distinct.iter().all(|n| n.chars().count() <= 2) {
+        return if distinct.is_empty() {
+            format!("{chains} chains")
+        } else {
+            format!("{chains} chains {}", distinct.join(":"))
+        };
+    }
+    match distinct.len() {
+        1 => format!("{} ×{chains}", distinct[0]),
+        2 | 3 => distinct.join(" + "),
+        n => format!("{} + {} + {} more", distinct[0], distinct[1], n - 2),
+    }
+}
+
 fn parse_input(
     text: &str,
     msa: Option<&str>,
@@ -217,16 +241,18 @@ fn parse_input(
     if let Some(n) = samples {
         spec.samples = n as usize;
     }
-    let header = normalized
+    let names: Vec<String> = normalized
         .lines()
-        .find_map(|l| l.trim().strip_prefix('>'))
+        .filter_map(|l| l.trim().strip_prefix('>'))
         .map(|h| h.split('|').next().unwrap_or(h).trim().to_string())
-        .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "complex".into());
+        .collect();
     let header = if spec.is_monomer() {
-        header
+        names
+            .into_iter()
+            .find(|h| !h.is_empty())
+            .unwrap_or_else(|| "complex".into())
     } else {
-        format!("{header} +{} chain(s)", spec.chains.len() - 1)
+        complex_name(&names, spec.chains.len())
     };
     Ok(proteus_core::models::Sequence {
         id: Uuid::new_v4(),
@@ -239,6 +265,23 @@ fn parse_input(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn complexes_get_readable_names() {
+        use super::complex_name;
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(complex_name(&v(&["A", "B"]), 2), "2 chains A:B");
+        assert_eq!(
+            complex_name(&v(&["PD-L1", "binder_07"]), 2),
+            "PD-L1 + binder_07"
+        );
+        assert_eq!(complex_name(&v(&["hemo", "hemo"]), 2), "hemo ×2");
+        assert_eq!(
+            complex_name(&v(&["a1", "b22", "c333", "d4444"]), 4),
+            "a1 + b22 + 2 more"
+        );
+        assert_eq!(complex_name(&v(&["", ""]), 2), "2 chains");
+    }
+
     use super::Args;
 
     #[test]

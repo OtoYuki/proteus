@@ -2,9 +2,11 @@
 //! parser surface and the work sit together and `main` stays a dispatch table.
 
 pub mod analyze;
+pub mod delete;
 pub mod esm;
 pub mod inspect;
 pub mod mutate;
+pub mod rename;
 pub mod screen;
 pub mod serve;
 pub mod status;
@@ -52,6 +54,8 @@ pub async fn dispatch(
     match command {
         Commands::Submit(args) => submit::run(args, db_path, artifacts_dir).await,
         Commands::Status(args) => status::run(args, db_path).await,
+        Commands::Rename(args) => rename::run(args, db_path).await,
+        Commands::Delete(args) => delete::run(args, db_path, artifacts_dir).await,
         Commands::Inspect(args) => inspect::run(args, db_path).await,
         Commands::Analyze(args) => analyze::run(args).await,
         Commands::View(args) => view::run(args, db_path).await,

@@ -5,7 +5,9 @@
 //! brand roles through [`Look`]; hairlines, not boxes; panel names in `(parentheses)`; a
 //! state is always a glyph and a word, never a colour alone.
 
-use super::app::{engine, short_id, Analysis, App, FieldKind, FormKind, Preview, Tab};
+use super::app::{
+    display_name, engine, short_id, Analysis, App, FieldKind, FormKind, Preview, Tab,
+};
 use super::style::Look;
 use chrono::Utc;
 use proteus_core::models::JobStatus;
@@ -46,8 +48,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Tab::Structures => draw_structures(f, body, app),
         Tab::Run => draw_run(f, body, app),
     }
-    f.render_widget(Paragraph::new(key_hints(app)), keys);
-    f.render_widget(Paragraph::new(status_line(app)), status);
+    f.render_widget(Paragraph::new(key_hints(app, keys.width as usize)), keys);
+    draw_status(f, status, app);
     if app.help {
         draw_help(f, f.area(), look);
     }
@@ -63,11 +65,16 @@ fn tab_spans(app: &App) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for (i, t) in Tab::ALL.iter().enumerate() {
         let name = t.title().to_lowercase();
+        let icon = t.icon();
         if *t == app.tab {
-            spans.push(Span::styled(format!(" {} {name} ", i + 1), look.tab_on()));
+            spans.push(Span::styled(
+                format!(" {icon} {name} {} ", i + 1),
+                look.tab_on(),
+            ));
         } else {
-            spans.push(Span::styled(format!(" {} ", i + 1), look.dim()));
+            spans.push(Span::styled(format!(" {icon} "), look.muted()));
             spans.push(Span::styled(format!("{name} "), look.muted()));
+            spans.push(Span::styled(format!("{} ", i + 1), look.dim()));
         }
         spans.push(Span::raw(" "));
     }
@@ -126,12 +133,20 @@ fn job_summary(app: &App) -> Vec<Span<'static>> {
 }
 
 /// Key hints: the keys in the accent, their meaning dim.
-fn key_hints(app: &App) -> Line<'static> {
+fn key_hints(app: &App, width: usize) -> Line<'static> {
     let look = &app.look;
     let pairs: &[(&str, &str)] = if app.typing() {
         match app.tab {
+            Tab::Jobs if app.jobs.renaming.is_some() => {
+                &[("type", "a name"), ("⏎", "rename"), ("esc", "cancel")]
+            }
             Tab::Jobs => &[("type", "to filter"), ("⏎", "keep"), ("esc", "clear")],
-            _ => &[("type", ""), ("⏎ ↓", "next field"), ("esc", "done")],
+            _ => &[
+                ("type", "into the field"),
+                ("⏎ ↓", "next field"),
+                ("esc", "stop typing"),
+                ("alt 1-3", "tabs"),
+            ],
         }
     } else {
         match app.tab {
@@ -141,7 +156,9 @@ fn key_hints(app: &App) -> Line<'static> {
                 ("w", "in browser"),
                 ("i", "report"),
                 ("/", "filter"),
-                ("tab", "next"),
+                ("s", "sort"),
+                ("n", "rename"),
+                ("x", "delete"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -160,46 +177,120 @@ fn key_hints(app: &App) -> Line<'static> {
                 ("⏎", "edit · run"),
                 ("←→", "choose"),
                 ("f", "other form"),
-                ("tab", "next"),
+                ("1-3", "tabs"),
                 ("F1", "keys"),
                 ("q", "quit"),
             ],
         }
     };
+    // Too many for the width: drop pairs from the middle, keeping the first ones (the tab's
+    // own actions) and the last two (help, quit), which every screen needs.
+    let cost = |p: &(&str, &str)| p.0.chars().count() + p.1.chars().count() + 1 + GAP.len();
+    let mut shown: Vec<&(&str, &str)> = pairs.iter().collect();
+    while shown.len() > 3 && 2 + shown.iter().map(|p| cost(p)).sum::<usize>() > width {
+        shown.remove(shown.len() - 3);
+    }
     let mut spans = vec![Span::raw("  ")];
-    for (k, v) in pairs {
+    for (k, v) in shown {
         spans.push(Span::styled(k.to_string(), look.accent()));
         if !v.is_empty() {
             spans.push(Span::styled(format!(" {v}"), look.muted()));
         }
-        spans.push(Span::raw("    "));
+        spans.push(Span::raw(GAP));
     }
     Line::from(spans)
 }
 
+/// Space between two key hints.
+const GAP: &str = "   ";
+
 /// The s1re.sh prompt: the last command run, what came of it, and the Clay cursor.
-fn status_line(app: &App) -> Line<'static> {
+/// The bottom line: a question waiting on a key (rename, delete) or the result of the last
+/// action on the left, and the command that produced it, dim, on the right when there is room.
+fn draw_status(f: &mut Frame, area: Rect, app: &App) {
     let look = &app.look;
-    let mut spans = vec![Span::styled(" ~ $ ", look.dim())];
-    if let Some(cmd) = &app.last_command {
-        spans.push(Span::styled(cmd.clone(), look.muted()));
-        spans.push(Span::raw("  "));
-    }
-    if let Some(s) = &app.status {
-        let failed = s.contains("failed") || s.starts_with("could not");
-        let style = if failed { look.bad() } else { look.text() };
-        let glyph = if failed {
-            "✗ "
-        } else if app.last_command.is_some() {
-            "✓ "
-        } else {
-            ""
+    let width = area.width as usize;
+    if let Some(name) = &app.jobs.renaming {
+        let id = app.jobs.current().map_or(String::new(), |j| {
+            short_id(&j.job.id.to_string()).to_string()
+        });
+        let label = format!("  rename {id}  ");
+        let room = width.saturating_sub(label.chars().count() + 2);
+        let shown: String = {
+            let n = name.chars().count();
+            name.chars().skip(n.saturating_sub(room)).collect()
         };
-        spans.push(Span::styled(format!("{glyph}{s}"), style));
-        spans.push(Span::raw(" "));
+        let line = Line::from(vec![
+            Span::styled(label, look.accent()),
+            Span::styled(shown, look.text()),
+            Span::styled("▌", look.cursor()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
     }
-    spans.push(Span::styled("▌", look.cursor()));
-    Line::from(spans)
+    if let Some(id) = app.jobs.deleting {
+        let name = app
+            .jobs
+            .all
+            .iter()
+            .find(|j| j.job.id == id)
+            .map_or_else(String::new, |j| display_name(&j.header));
+        let short = id.to_string()[..8].to_string();
+        let ask = format!("  delete {name} ({short}) and its files?  ");
+        let line = Line::from(vec![
+            Span::styled(elide_end(&ask, width.saturating_sub(34)), look.bad()),
+            Span::styled("y", look.accent()),
+            Span::styled(" delete   ", look.muted()),
+            Span::styled("any other key", look.accent()),
+            Span::styled(" keep", look.muted()),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+    let (text, style) = match app.status.as_deref() {
+        Some(s) if s.starts_with('✗') => (s.to_string(), look.bad()),
+        Some(s) if s.starts_with('✓') => (s.to_string(), look.text()),
+        Some(s) if s.ends_with('…') => (s.to_string(), look.muted()),
+        Some(s) => (s.to_string(), look.muted()),
+        None => (String::new(), look.muted()),
+    };
+    // The message comes first; the command gets what is left, and only a useful amount.
+    let left = elide_end(&text, width.saturating_sub(4));
+    let used = left.chars().count() + 2;
+    let spare = width.saturating_sub(used + 6);
+    let mut spans = vec![Span::raw("  ")];
+    if let Some(glyph @ ('✓' | '✗')) = left.chars().next() {
+        let glyph_style = if glyph == '✓' {
+            look.accent()
+        } else {
+            look.bad()
+        };
+        spans.push(Span::styled(glyph.to_string(), glyph_style));
+        spans.push(Span::styled(
+            left.chars().skip(1).collect::<String>(),
+            style,
+        ));
+    } else {
+        spans.push(Span::styled(left, style));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    if let Some(cmd) = &app.last_command {
+        if spare >= 24 {
+            let cmd = elide_middle(&format!("$ {cmd}"), spare.min(64));
+            let right = Line::from(vec![Span::styled(cmd, look.dim()), Span::raw("  ")]);
+            f.render_widget(Paragraph::new(right).alignment(Alignment::Right), area);
+        }
+    }
+}
+
+/// `s` cut to `max` characters, ending in `…` when it was cut.
+fn elide_end(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// A section title: `(name)` on a hairline.
@@ -281,12 +372,13 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
     let jobs = &app.jobs;
     let visible = jobs.visible();
     let extra = if jobs.filter.is_empty() && !jobs.filtering {
-        Some(format!("{}", jobs.all.len()))
+        Some(format!("{} · {}", jobs.all.len(), jobs.sort.label()))
     } else {
         Some(format!(
-            "{} of {} · filter {}{}",
+            "{} of {} · {} · filter {}{}",
             visible.len(),
             jobs.all.len(),
+            jobs.sort.label(),
             jobs.filter,
             if jobs.filtering { "▏" } else { "" }
         ))
@@ -373,7 +465,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         Row::new(vec![
             Cell::from(state(look, &j.job.status, app.tick)),
             Cell::from(Span::styled(
-                j.header.clone(),
+                display_name(&j.header),
                 if failed { look.muted() } else { look.text() },
             )),
             Cell::from(
@@ -1359,7 +1451,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
     };
     let text = vec![
         head("everywhere"),
-        row("1 2 3 · tab", "switch tab"),
+        row("1 2 3 · tab", "switch tab (alt 1 2 3 while typing)"),
         row("? · F1", "this help (F1 also in a text field)"),
         row("q · ctrl-c", "quit"),
         Line::from(""),
@@ -1369,6 +1461,8 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         row("w", "page in the browser"),
         row("i", "full report (proteus inspect)"),
         row("/ · r", "filter · refresh (also every 2 s)"),
+        row("s", "sort: newest, name, state, pLDDT"),
+        row("n · x", "rename · delete (asks first)"),
         Line::from(""),
         head("(structures)"),
         row("⏎ → l", "open a folder, or the 3-D viewer"),
@@ -1378,6 +1472,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         head("(run)"),
         row("↑↓ · ⏎", "field · edit it, or run"),
         row("←→ · f", "change a choice · the other form"),
+        row("esc", "stop typing; digits switch tabs again"),
         Line::from(""),
         Line::from(Span::styled(
             "  Every action runs a proteus command and shows it first; the same line works in a script.",
