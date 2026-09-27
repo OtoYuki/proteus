@@ -468,7 +468,7 @@ fn the_structures_tab_shows_the_measurements() {
             rows: vec![["Radius of gyration".into(), "9.6 Å".into()]],
             interface: vec![],
             verdict: None,
-            preview: None,
+            facts: None,
         },
     );
     let screen = rendered(&app, 100, 24);
@@ -483,10 +483,7 @@ fn the_run_tab_shows_the_command_it_will_run() {
     app.tab = Tab::Run;
     let screen = rendered(&app, 100, 24);
     assert!(screen.contains("enter a sequence"), "{screen}");
-    assert!(
-        screen.contains("[ run ▸ ]"),
-        "the Run button fits: {screen}"
-    );
+    assert!(screen.contains("run ▸"), "the Run button fits: {screen}");
     app.handle_key(key(KeyCode::Enter));
     press(&mut app, "MKT");
     let screen = rendered(&app, 100, 24);
@@ -501,23 +498,37 @@ fn analysing_crambin_gives_its_residue_count_and_rows() {
         eprintln!("skipped: {} not present", path.display());
         return;
     }
-    match super::analyse(&path) {
+    let (analysis, scene) = super::analyse(&path);
+    match analysis {
         Analysis::Done {
             residues,
             predicted,
             rows,
-            preview,
+            facts,
             ..
         } => {
-            assert!(preview.is_some_and(|p| p.pixels.iter().any(|x| x.is_some())));
             assert_eq!(residues, 46);
             assert!(!predicted);
             assert!(rows.iter().any(|[k, _]| k == "Radius of gyration"));
+            let f = facts.expect("facts");
+            assert_eq!(f.chains, 1);
+            assert!(f.rama_favored > 90.0 && f.helix > 0.0);
         }
         other => panic!("{other:?}"),
     }
+    // The parsed scene comes back for previews, and renders at any pane size.
+    let scene = scene.expect("scene");
+    let key = super::app::PreviewKey {
+        path: path.clone(),
+        cols: 40,
+        rows: 20,
+        pixels: false,
+    };
+    let p = super::render_preview(&scene, &key, None);
+    assert_eq!((p.width, p.height), (40, 40));
+    assert!(p.pixels.iter().any(|x| x.is_some()));
     assert!(matches!(
-        super::analyse(Path::new("/definitely/not/here.pdb")),
+        super::analyse(Path::new("/definitely/not/here.pdb")).0,
         Analysis::Failed(_)
     ));
 }
@@ -610,11 +621,57 @@ fn the_jobs_tab_shows_the_selected_jobs_findings() {
                 true,
                 "● confident interface · ipSAE_min 0.750 > 0.61".into(),
             )),
-            preview: None,
+            facts: None,
         },
     );
     let screen = rendered(&app, 160, 40);
     assert!(screen.contains("● confident interface"), "{screen}");
     assert!(screen.contains("A → B"), "{screen}");
     assert!(screen.contains("14.2 Å"), "{screen}");
+}
+
+/// The redesigned home: the tab control, the inspector's gauges, and the run tab's guidance.
+#[test]
+fn the_home_screen_shows_tabs_gauges_and_guidance() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("a.pdb"), "x").unwrap();
+    let mut app = app_in(dir.path());
+    press(&mut app, "2j");
+    let path = dir.path().join("a.pdb");
+    app.analyses.insert(
+        path,
+        Analysis::Done {
+            residues: 76,
+            predicted: true,
+            rows: vec![
+                ["pLDDT".into(), "mean 91.0".into()],
+                ["Radius of gyration".into(), "11.8 Å".into()],
+            ],
+            interface: vec![],
+            verdict: None,
+            facts: Some(Box::new(super::app::Facts {
+                chains: 1,
+                plddt: Some(91.0),
+                rama_favored: 98.0,
+                helix: 30.0,
+                strand: 40.0,
+                coil: 30.0,
+                rg_ratio: 1.02,
+                triage: 90.0,
+                ..Default::default()
+            })),
+        },
+    );
+    let screen = rendered(&app, 160, 40);
+    assert!(screen.contains("2 structures"), "{screen}");
+    assert!(screen.contains("98 % favoured"), "{screen}");
+    assert!(screen.contains("α30 β40 coil 30 %"), "{screen}");
+    assert!(screen.contains("11.8 Å"), "{screen}");
+    // The card shows pLDDT; the details do not repeat it.
+    assert!(!screen.contains("mean 91.0"), "{screen}");
+    press(&mut app, "3");
+    let screen = rendered(&app, 160, 40);
+    assert!(screen.contains("ESMFold: one chain"), "{screen}");
+    assert!(screen.contains("what happens"), "{screen}");
+    assert!(screen.contains("human ubiquitin"), "{screen}");
 }

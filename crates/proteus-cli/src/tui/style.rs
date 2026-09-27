@@ -52,6 +52,26 @@ impl Look {
         }
     }
 
+    /// A data colour (a structure or confidence colour) as a foreground, where the depth can
+    /// show it; plain text otherwise, since the glyphs beside it carry the meaning.
+    pub fn data(&self, c: ColorRGB) -> Style {
+        match self.depth {
+            ColorDepth::TrueColor | ColorDepth::Ansi256 => Style::new().fg(self.rgb(c)),
+            _ => Style::new(),
+        }
+    }
+
+    /// The tab that is showing: ground on accent, bold.
+    pub fn tab_on(&self) -> Style {
+        match self.depth {
+            ColorDepth::TrueColor | ColorDepth::Ansi256 => Style::new()
+                .fg(self.rgb(self.theme.ground))
+                .bg(self.rgb(self.theme.accent))
+                .add_modifier(Modifier::BOLD),
+            _ => Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+        }
+    }
+
     /// The foreground of a role.
     pub fn fg(&self, role: Role) -> Style {
         match self.depth {

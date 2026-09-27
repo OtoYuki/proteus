@@ -102,6 +102,21 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- The home screen, redesigned:
+  - One header row: the brand, the tabs as a segmented control (the showing tab filled), and
+    the job counts.
+  - Jobs: lowercase column heads, numbers right-aligned, pLDDT in its confidence colour.
+  - One inspector for a job's model and for a file:
+    - the name with its state badge, then an identity line;
+    - a preview beside a headline card (the interface verdict, then gauges for pLDDT, backbone,
+      the fold as one stacked bar in the viewers' colours, and triage);
+    - every other measurement grouped, without repeating what the gauges show.
+  - Previews are rendered at the pane's own size, as real pixels in kitty-protocol terminals.
+  - On a short terminal the numbers win over the picture.
+  - Run: each choice shows all its options and says in a sentence what the chosen one does. A
+    "what happens" card leads with the command (or what is missing) and gives an example
+    sequence.
+  - Key hints are per tab, and `tab` is listed everywhere.
 - New lighting in both renderers (the browser shader and the terminal's CPU pipeline, kept
   identical):
   - a wrap-lit key light with a soft terminator;
