@@ -305,3 +305,17 @@ fn openfold3_output_in_both_confidence_formats() {
     near(i.ipsae_min, 0.011067);
     near(i.iptm, 0.269767);
 }
+
+/// Boltz-2 output as written (tests/data/predictors/NOTICE): the SEP is one token, the ATP one per
+/// atom. `ipsae.py` reads this model 9 rows out of step and reports 0.619 / 0.265.
+#[test]
+fn boltz2_output_with_a_modified_residue_and_a_ligand() {
+    let dir = unpack(&data("predictors/boltz2"));
+    let i = interface_of(dir.path(), "input_model_0.cif");
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.253391);
+    near(i.ipsae_min, 0.063016);
+    assert!((i.lis.unwrap() - 0.3937).abs() < 5e-5);
+    near(i.ipae, 7.295911);
+    near(i.iptm, 0.745699);
+}
