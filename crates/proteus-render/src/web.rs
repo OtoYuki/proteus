@@ -72,6 +72,7 @@ pub fn scheme_name(scheme: ColorScheme) -> &'static str {
         ColorScheme::Plddt => "plddt",
         ColorScheme::Rainbow => "rainbow",
         ColorScheme::Scores => "score",
+        ColorScheme::Interface => "interface",
         _ => "ss",
     }
 }

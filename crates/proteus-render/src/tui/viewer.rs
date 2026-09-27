@@ -160,6 +160,11 @@ pub struct ViewerConfig {
     /// process outright, leaving the terminal raw and on the alternate screen.
     pub stop: Option<Arc<AtomicBool>>,
     /// Colours from an attached score table: `c` cycles to them and the legend names them.
+    /// A complex's interface colouring, offered in the `c` cycle (and the default for one).
+    pub interface: Option<InterfaceColors>,
+    /// Draw real pixels with the kitty graphics protocol instead of half-block cells, when the
+    /// terminal reports its cell size in pixels. `p` switches at run time.
+    pub pixels: bool,
     pub scores: Option<ScoreColors>,
     /// What `[` and `]` step through: outliers, overlaps and contacts, each highlighted and
     /// centred in turn.
@@ -229,6 +234,7 @@ fn residue_base_colors(
     mesh: &TriangleMesh,
     scheme: ColorScheme,
     scores: Option<&ScoreColors>,
+    interface: Option<&InterfaceColors>,
 ) -> Vec<ColorRGB> {
     use crate::rasterizer::shader::{plddt_to_color, rainbow_color, secondary_structure_to_color};
     let total = mesh
@@ -253,9 +259,33 @@ fn residue_base_colors(
             ColorScheme::Scores => scores
                 .and_then(|s| s.residue_colors.get(r).copied())
                 .unwrap_or(crate::rasterizer::shader::NO_SCORE),
+            ColorScheme::Interface => interface
+                .and_then(|s| s.residue_colors.get(r).copied())
+                .unwrap_or(crate::brand::structure::IFACE_OTHER),
         };
     }
     out
+}
+
+/// A complex's interface colouring, for the terminal viewer: which binder and target, and one
+/// colour per ribbon residue.
+#[derive(Debug, Clone)]
+pub struct InterfaceColors {
+    pub binder: String,
+    pub target: String,
+    pub residue_colors: Vec<ColorRGB>,
+}
+
+impl InterfaceColors {
+    /// The interface the viewers open on (the smallest binder), if the structure is a complex.
+    pub fn of(s: &crate::StructureRenderData) -> Option<Self> {
+        let v = s.default_interface()?;
+        Some(Self {
+            binder: v.metrics.binder_chains.clone(),
+            target: v.metrics.target_chains.clone(),
+            residue_colors: v.residue_colors(&s.residue_labels),
+        })
+    }
 }
 
 /// Per-residue colours of a score column, for the terminal viewer.
@@ -292,6 +322,8 @@ impl Default for ViewerConfig {
             dashboard_data: None,
             stop: None,
             scores: None,
+            interface: None,
+            pixels: false,
             findings: Vec::new(),
         }
     }
@@ -322,10 +354,32 @@ pub fn run_interactive_viewer(
     let mut layout = ViewerLayout::compute(term_cols, term_rows, dashboard_mode);
     // Halfblock resolution: 1 character row = 2 pixel rows
     let mut fb = Framebuffer::new(layout.view_cols as usize, layout.view_rows as usize * 2);
+    // Drawn at `ss` × `ss` that and box-filtered down: a ribbon thinner than a terminal pixel
+    // still shows, and shading is smoothed. `ss` steps down when frames get slow.
+    let mut ss: usize = 3;
+    let mut hi = Framebuffer::new(fb.width * ss, fb.height * ss);
+    // Kitty graphics: the view as one picture at the terminal's own pixel resolution (times
+    // `res`, which steps down when frames get slow; kitty stretches it over the view's cells).
+    let cell_pixels = || -> Option<(f32, f32)> {
+        let w = crossterm::terminal::window_size().ok()?;
+        (w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0).then(|| {
+            (
+                w.width as f32 / w.columns as f32,
+                w.height as f32 / w.rows as f32,
+            )
+        })
+    };
+    let mut cell_px = if config.pixels { cell_pixels() } else { None };
+    let mut pixels = cell_px.is_some();
+    let mut res: f32 = 1.0;
+    const IMAGE_ID: u32 = 0x5072; // "Pr"
 
     let mut rasterizer = Rasterizer::new(config.initial_color_scheme);
     if let Some(sc) = &config.scores {
         rasterizer.residue_colors = sc.residue_colors.clone();
+    }
+    if let Some(f) = &config.interface {
+        rasterizer.interface_colors = f.residue_colors.clone();
     }
     let ansi = crate::brand::ansi::Ansi::detect();
     let mut compositor = HalfBlockRenderer::new();
@@ -359,6 +413,15 @@ pub fn run_interactive_viewer(
                     KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
                     KeyCode::Char(' ') => auto_rotate = !auto_rotate,
+                    KeyCode::Char('p') if cell_px.is_some() => {
+                        pixels = !pixels;
+                        if !pixels {
+                            let mut del = String::new();
+                            crate::terminal::kitty::KittyRenderer::delete(IMAGE_ID, &mut del);
+                            let _ = stdout.write_all(del.as_bytes());
+                        }
+                        relayout = Some((layout.cols, layout.rows));
+                    }
                     KeyCode::Tab | KeyCode::Char('b') => {
                         if config.dashboard_data.is_some() {
                             dashboard_mode = !dashboard_mode;
@@ -367,13 +430,20 @@ pub fn run_interactive_viewer(
                     }
                     KeyCode::Char('c') => {
                         let has_scores = config.scores.is_some();
+                        let has_interface = config.interface.is_some();
+                        let first = if has_interface {
+                            ColorScheme::Interface
+                        } else {
+                            ColorScheme::Plddt
+                        };
                         color_scheme = match color_scheme {
+                            ColorScheme::Interface => ColorScheme::Plddt,
                             ColorScheme::Plddt => ColorScheme::SecondaryStructure,
                             ColorScheme::SecondaryStructure => ColorScheme::Rainbow,
                             ColorScheme::Rainbow if has_scores => ColorScheme::Scores,
-                            ColorScheme::Rainbow => ColorScheme::Plddt,
-                            ColorScheme::Scores => ColorScheme::Plddt,
-                            ColorScheme::Solid(_) => ColorScheme::Plddt,
+                            ColorScheme::Rainbow | ColorScheme::Scores | ColorScheme::Solid(_) => {
+                                first
+                            }
                         };
                         rasterizer.color_scheme = color_scheme;
                     }
@@ -423,6 +493,10 @@ pub fn run_interactive_viewer(
         if let Some((cols, rows)) = relayout {
             layout = ViewerLayout::compute(cols, rows, dashboard_mode);
             fb.resize(layout.view_cols as usize, layout.view_rows as usize * 2);
+            if config.pixels {
+                cell_px = cell_pixels();
+                pixels &= cell_px.is_some();
+            }
             compositor.invalidate();
             let _ = execute!(
                 stdout,
@@ -448,50 +522,89 @@ pub fn run_interactive_viewer(
         out_buf.clear();
         if layout.view_cols > 0 && layout.view_rows > 0 {
             // Render frame
-            fb.clear(ColorRGB::BLACK); // black = empty: the terminal's own background shows
+            let frame_start = Instant::now();
+            match (pixels, cell_px) {
+                (true, Some((cw, ch))) => hi.resize(
+                    ((layout.view_cols as f32 * cw * res) as usize).max(1),
+                    ((layout.view_rows as f32 * ch * res) as usize).max(1),
+                ),
+                _ => hi.resize(fb.width * ss, fb.height * ss),
+            }
+            hi.clear(ColorRGB::BLACK); // black = empty: the terminal's own background shows
+            let fb_view = &mut fb;
+            let fb = &mut hi;
             match finding.and_then(|i| config.findings.get(i)) {
                 Some(f) => {
                     // Centre on the finding whatever the rotation, and dim everything else.
                     let rot = camera.rotation_matrix();
                     camera.pan = -(rot * (f.focus - camera.center));
                     let scores_before = std::mem::take(&mut rasterizer.residue_colors);
-                    let mut colors =
-                        residue_base_colors(mesh, color_scheme, config.scores.as_ref());
+                    let mut colors = residue_base_colors(
+                        mesh,
+                        color_scheme,
+                        config.scores.as_ref(),
+                        config.interface.as_ref(),
+                    );
                     for (r, c) in colors.iter_mut().enumerate() {
                         if !f.residues.contains(&r) {
                             *c = c.scale(0.3);
                         }
                     }
                     rasterizer.residue_colors = colors;
-                    rasterizer.rasterize_mesh(mesh, &camera, &mut fb, ColorScheme::Scores);
+                    rasterizer.rasterize_mesh(mesh, &camera, fb, ColorScheme::Scores);
                     rasterizer.residue_colors = scores_before;
                 }
-                None => rasterizer.rasterize_mesh(mesh, &camera, &mut fb, color_scheme),
+                None => rasterizer.rasterize_mesh(mesh, &camera, fb, color_scheme),
             }
 
             // Render superimposed secondary mesh if present
             if let Some((ref sec_mesh, sec_color)) = config.secondary_mesh {
-                rasterizer.rasterize_mesh(
-                    sec_mesh,
-                    &camera,
-                    &mut fb,
-                    ColorScheme::Solid(sec_color),
-                );
+                rasterizer.rasterize_mesh(sec_mesh, &camera, fb, ColorScheme::Solid(sec_color));
             }
 
             // Render disulfide bridges if present and enabled
             if show_disulfides {
                 if let Some(ref ds_mesh) = config.disulfide_mesh {
                     let gold = crate::brand::structure::DISULFIDE;
-                    rasterizer.rasterize_mesh(ds_mesh, &camera, &mut fb, ColorScheme::Solid(gold));
+                    rasterizer.rasterize_mesh(ds_mesh, &camera, fb, ColorScheme::Solid(gold));
                 }
             }
 
-            // Post-processing: Screen-space ambient occlusion + cartoon silhouette outlines
-            rasterizer.apply_post_processing(&mut fb);
+            if pixels {
+                // Real pixels: shade at full resolution and hand kitty the picture.
+                rasterizer.apply_post_processing(fb);
+                out_buf.push_str("\x1b[1;1H");
+                crate::terminal::kitty::KittyRenderer::frame(
+                    fb,
+                    layout.view_cols,
+                    layout.view_rows,
+                    IMAGE_ID,
+                    &mut out_buf,
+                );
+                let took = frame_start.elapsed();
+                if took > Duration::from_millis(33) {
+                    res = (res * 0.8).max(0.35);
+                } else if took < Duration::from_millis(12) {
+                    res = (res * 1.1).min(1.0);
+                }
+            } else {
+                fb.downsample_into(fb_view, ss);
+                let fb = fb_view;
+                // Post-processing at the terminal's pixel scale: Screen-space ambient occlusion +
+                // cartoon silhouette outlines (their offsets are in terminal pixels).
+                rasterizer.apply_post_processing(fb);
+                // Keep interaction smooth: drop a supersampling step when a frame takes too
+                // long, and take it back when there is room.
+                let took = frame_start.elapsed();
+                if took > Duration::from_millis(28) && ss > 1 {
+                    ss -= 1;
+                } else if took < Duration::from_millis(8) && ss < 3 {
+                    ss += 1;
+                }
 
-            // Compose to terminal
-            compositor.render_differential(&fb, &mut out_buf, 0, 0);
+                // Compose to terminal
+                compositor.render_differential(fb, &mut out_buf, 0, 0);
+            }
         }
 
         // Render the side-by-side biophysical dashboard where the layout has room for it
@@ -573,6 +686,20 @@ pub fn run_interactive_viewer(
                 }
                 ColorScheme::Rainbow => ansi.paint(Role::Text, "rainbow, N → C"),
                 ColorScheme::Solid(c) => sw(c, "solid"),
+                ColorScheme::Interface => match &config.interface {
+                    Some(f) => {
+                        use crate::brand::structure::*;
+                        format!(
+                            "{} {} {} {}  {}",
+                            sw(IFACE_BINDER_CONTACT, "binder contact"),
+                            sw(IFACE_BINDER, "binder"),
+                            sw(IFACE_TARGET_CONTACT, "target contact"),
+                            sw(IFACE_TARGET, "target"),
+                            ansi.paint(Role::Dim, &format!("{} → {}", f.binder, f.target))
+                        )
+                    }
+                    None => ansi.paint(Role::Dim, "no interface"),
+                },
                 ColorScheme::Scores => match &config.scores {
                     Some(sc) => {
                         let (bad, good) = if sc.scale.higher_is_worse {
@@ -632,6 +759,7 @@ pub fn run_interactive_viewer(
             format!("{}{dash_note}", toggle("dashboard", dash_state)),
             toggle("effects", Some(fx_on)),
             toggle("spin", Some(auto_rotate)),
+            toggle("pixels", cell_px.map(|_| pixels)),
             match finding.and_then(|i| config.findings.get(i).map(|f| (i, f))) {
                 Some((i, f)) => ansi.paint(
                     Role::Accent,
@@ -661,11 +789,19 @@ pub fn run_interactive_viewer(
                 key("tab", "dashboard"),
                 key("c", "colour"),
                 key("o", "effects"),
+                if cell_px.is_some() {
+                    key("p", "pixels")
+                } else {
+                    String::new()
+                },
                 key("d", "disulfides"),
                 key("[ ]", "findings"),
                 key("r", "reset"),
                 key("q", "back"),
             ]
+            .into_iter()
+            .filter(|k| !k.is_empty())
+            .collect::<Vec<_>>()
             .join(&sep)
         );
         let status_row2 = status_row2.as_str();
@@ -680,6 +816,13 @@ pub fn run_interactive_viewer(
         }
     }
 
+    if cell_px.is_some() {
+        // A kitty picture outlives the alternate screen unless it is deleted.
+        let mut del = String::new();
+        crate::terminal::kitty::KittyRenderer::delete(IMAGE_ID, &mut del);
+        let _ = stdout.write_all(del.as_bytes());
+        let _ = stdout.flush();
+    }
     Ok(())
 }
 

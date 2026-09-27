@@ -8,6 +8,18 @@ All notable changes to this project are documented here. The format follows
 Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
 
 ### Added
+- The terminal viewer draws real pixels with the kitty graphics protocol, in kitty, WezTerm and
+  Ghostty, when run locally (not over SSH, not in tmux). Frames go as zlib-compressed RGBA with a
+  transparent background, at the terminal's cell resolution scaled down while frames are slow.
+  `p` switches to half-block cells and back; `--backend halfblock` keeps the cells.
+- Half-block frames are drawn 3 × 3 supersampled and box-filtered: thin ribbons no longer
+  break into dots. The supersampling steps down when a frame is slow.
+- Interface colouring in the terminal: a complex opens on it, `c` cycles through it, and the
+  legend names binder and target.
+- The home screen's jobs tab puts the selected job beside the list on a wide terminal, with a
+  still of the model (the same renderer, supersampled), the `analyze` measurements and, for a
+  complex, the interface verdict and numbers; the structures tab previews each file too. The
+  job's run line gives tier, length and how long it took, and a long file path keeps its name.
 - Interfaces in the viewers. The browser page opens a complex (2–6 protein chains) coloured by
   interface: binder and target in two families, bright at the contact residues, other chains
   receding. An interface panel gives a verdict against the 0.61 ipSAE_min threshold (as a glyph
@@ -90,6 +102,10 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- A model that is confident everywhere (≥ 95 % of residues at pLDDT ≥ 90) opens coloured by
+  secondary structure in both viewers, with a note; in pLDDT colours it is one flat blue.
+- Interface colours are brighter: every body colour is at least 3:1 against the ground, as a
+  test now requires.
 - Buried surface is computed from the atoms that can touch the other side only, measured against
   their own side and against both. This is the same number as the three-run subtraction (a test
   holds it to 1e-6), about 3× faster on a large complex. Shape complementarity drops a sort and

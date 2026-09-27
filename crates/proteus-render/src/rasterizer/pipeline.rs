@@ -10,6 +10,8 @@ pub struct Rasterizer {
     pub color_scheme: ColorScheme,
     /// Colour per residue index for [`ColorScheme::Scores`].
     pub residue_colors: Vec<ColorRGB>,
+    /// Colour per residue index for [`ColorScheme::Interface`].
+    pub interface_colors: Vec<ColorRGB>,
     pub enable_ssao: bool,
     pub enable_outlines: bool,
     projected: Vec<Vector3<f32>>,
@@ -21,6 +23,7 @@ impl Rasterizer {
         Self {
             color_scheme,
             residue_colors: Vec::new(),
+            interface_colors: Vec::new(),
             enable_ssao: true,
             enable_outlines: true,
             projected: Vec::new(),
@@ -104,6 +107,11 @@ impl Rasterizer {
                     .get(v.residue_index)
                     .copied()
                     .unwrap_or(super::shader::NO_SCORE),
+                ColorScheme::Interface => self
+                    .interface_colors
+                    .get(v.residue_index)
+                    .copied()
+                    .unwrap_or(crate::brand::structure::IFACE_OTHER),
             };
 
             let lit = shade_blinn_phong(base_color, view_normal);

@@ -81,6 +81,51 @@ pub struct InterfaceView {
     pub binder_size: usize,
 }
 
+impl InterfaceView {
+    /// The binder-and-target colouring of this interface, one colour per ribbon residue:
+    /// binder and target dark, bright where they touch, other chains in Moss.
+    pub fn residue_colors(&self, labels: &[ResidueLabel]) -> Vec<rasterizer::buffer::ColorRGB> {
+        use brand::structure::*;
+        let binder: Vec<&str> = self.metrics.binder_chains.split(',').collect();
+        let target: Vec<&str> = self.metrics.target_chains.split(',').collect();
+        let (bi, ti): (
+            std::collections::HashSet<usize>,
+            std::collections::HashSet<usize>,
+        ) = (
+            self.binder_residues.iter().copied().collect(),
+            self.target_residues.iter().copied().collect(),
+        );
+        labels
+            .iter()
+            .enumerate()
+            .map(|(i, l)| {
+                if binder.contains(&l.chain.as_str()) {
+                    if bi.contains(&i) {
+                        IFACE_BINDER_CONTACT
+                    } else {
+                        IFACE_BINDER
+                    }
+                } else if target.contains(&l.chain.as_str()) {
+                    if ti.contains(&i) {
+                        IFACE_TARGET_CONTACT
+                    } else {
+                        IFACE_TARGET
+                    }
+                } else {
+                    IFACE_OTHER
+                }
+            })
+            .collect()
+    }
+}
+
+impl StructureRenderData {
+    /// The interface the viewers open on: the one whose binder is the smallest chain.
+    pub fn default_interface(&self) -> Option<&InterfaceView> {
+        self.interfaces.iter().min_by_key(|v| v.binder_size)
+    }
+}
+
 /// Interfaces are measured when a model has between 2 and this many protein chains; beyond it
 /// (a GroEL cage, a capsid) chain-against-the-rest stops being the question and the cost adds up.
 pub const MAX_INTERFACE_CHAINS: usize = 6;
@@ -546,7 +591,22 @@ pub fn default_color_scheme(
 impl StructureRenderData {
     /// See [`default_color_scheme`]; uses this bundle's analysis.
     pub fn default_color_scheme(&self) -> ColorScheme {
-        default_color_scheme(self.metrics.as_ref().map(|m| m.confidence_source))
+        if !self.interfaces.is_empty() {
+            return ColorScheme::Interface;
+        }
+        let scheme = default_color_scheme(self.metrics.as_ref().map(|m| m.confidence_source));
+        // A model confident everywhere is one flat blue in pLDDT colours: nothing to read.
+        // Its secondary structure says more; `c` still reaches pLDDT.
+        if scheme == ColorScheme::Plddt && self.uniformly_confident() {
+            return ColorScheme::SecondaryStructure;
+        }
+        scheme
+    }
+
+    /// At least 95 % of residues at pLDDT ≥ 90.
+    pub fn uniformly_confident(&self) -> bool {
+        !self.plddts.is_empty()
+            && self.plddts.iter().filter(|&&p| p >= 90.0).count() * 100 >= self.plddts.len() * 95
     }
 
     /// What one rendered pixel covers, in Ångströms, for a terminal viewport of `cols` × `rows`
@@ -858,6 +918,9 @@ pub fn render_structure_snapshot(
     fb.clear(ColorRGB::BLACK);
 
     let mut rasterizer = Rasterizer::new(scheme);
+    if let Some(v) = structure.default_interface() {
+        rasterizer.interface_colors = v.residue_colors(&structure.residue_labels);
+    }
     if let Some(sc) = tui::ScoreColors::of(structure) {
         rasterizer.residue_colors = sc.residue_colors;
     }
@@ -885,6 +948,41 @@ pub fn render_structure_snapshot(
             String::from_utf8(out).map_err(|e| RenderError::Terminal(e.to_string()))
         }
     }
+}
+
+/// A small still of `structure` for a preview pane, `width` × `height` pixels, drawn 3 × 3
+/// supersampled and box-filtered (thin ribbons do not break up at thumbnail size), in `scheme`,
+/// with the same shading and effects as the viewer. Empty pixels are pure black.
+pub fn preview_framebuffer(
+    structure: &StructureRenderData,
+    width: usize,
+    height: usize,
+    scheme: ColorScheme,
+) -> Framebuffer {
+    const SS: usize = 3;
+    let (width, height) = (width.max(1), height.max(1));
+    let mut hi = Framebuffer::new(width * SS, height * SS);
+    hi.clear(ColorRGB::BLACK);
+    let mut rasterizer = Rasterizer::new(scheme);
+    if let Some(v) = structure.default_interface() {
+        rasterizer.interface_colors = v.residue_colors(&structure.residue_labels);
+    }
+    if let Some(sc) = tui::ScoreColors::of(structure) {
+        rasterizer.residue_colors = sc.residue_colors;
+    }
+    rasterizer.rasterize_mesh(&structure.ribbon_mesh, &structure.camera, &mut hi, scheme);
+    if let Some(ref ds) = structure.disulfide_mesh {
+        rasterizer.rasterize_mesh(
+            ds,
+            &structure.camera,
+            &mut hi,
+            ColorScheme::Solid(brand::structure::DISULFIDE),
+        );
+    }
+    let mut fb = Framebuffer::new(width, height);
+    hi.downsample_into(&mut fb, SS);
+    rasterizer.apply_post_processing(&mut fb);
+    fb
 }
 
 /// Data bundle for dual-structure superposition rendering.
@@ -1185,6 +1283,38 @@ pub fn render_superposition_snapshot(
 
 #[cfg(test)]
 mod tests {
+
+    /// The viewers open a complex on its interface, and a model confident everywhere on its
+    /// secondary structure (one flat blue says nothing); otherwise pLDDT or, for an
+    /// experimental file, secondary structure.
+    #[test]
+    fn default_colours_follow_what_the_structure_can_show() {
+        let complex =
+            parse_pdb_structure(include_str!("../../proteus-core/tests/data/2ptc_EI.pdb")).unwrap();
+        assert_eq!(complex.default_color_scheme(), ColorScheme::Interface);
+        assert_eq!(
+            complex.default_interface().unwrap().metrics.binder_chains,
+            "I"
+        );
+        let mut single =
+            parse_pdb_structure(include_str!("../../proteus-core/tests/data/1crn.pdb")).unwrap();
+        assert_eq!(
+            single.default_color_scheme(),
+            ColorScheme::SecondaryStructure
+        );
+        if let Some(m) = single.metrics.as_mut() {
+            m.confidence_source = proteus_core::confidence::ConfidenceSource::Predicted;
+        }
+        single.plddts = vec![95.0; single.plddts.len()];
+        assert!(single.uniformly_confident());
+        assert_eq!(
+            single.default_color_scheme(),
+            ColorScheme::SecondaryStructure
+        );
+        single.plddts[..10].fill(60.0);
+        assert!(!single.uniformly_confident());
+        assert_eq!(single.default_color_scheme(), ColorScheme::Plddt);
+    }
     use super::*;
 
     const CRAMBIN_PDB: &str = include_str!("../../proteus-core/tests/data/1crn.pdb");
