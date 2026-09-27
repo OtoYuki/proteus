@@ -68,6 +68,8 @@ pub struct StructureRenderData {
     pub models: Vec<ModelSummary>,
     /// For a complex: each protein chain as binder against the rest (see [`InterfaceView`]).
     pub interfaces: Vec<InterfaceView>,
+    /// Chain ID → the name the input gave it (`A` → `PD-L1`), when the caller knows them.
+    pub chain_names: Vec<(String, String)>,
 }
 
 /// One binder–target interface of a complex, located on the ribbon.
@@ -554,6 +556,7 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         .collect();
     let interfaces = interfaces_of(&trace.protein, &residue_labels);
     Ok(StructureRenderData {
+        chain_names: Vec::new(),
         interfaces,
         residue_labels,
         dssp: ss_summary.dssp.clone(),
@@ -589,6 +592,21 @@ pub fn default_color_scheme(
 }
 
 impl StructureRenderData {
+    /// Chain IDs (`A` or `A,C`) with the names the input gave them: `PD-L1 (A)`; bare IDs
+    /// where there is no name.
+    pub fn name_chains(&self, ids: &str) -> String {
+        ids.split(',')
+            .map(|id| {
+                let id = id.trim();
+                self.chain_names
+                    .iter()
+                    .find(|(c, _)| c == id)
+                    .map_or(id.to_string(), |(_, n)| format!("{n} ({id})"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// See [`default_color_scheme`]; uses this bundle's analysis.
     pub fn default_color_scheme(&self) -> ColorScheme {
         if !self.interfaces.is_empty() {
