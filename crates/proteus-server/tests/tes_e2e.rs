@@ -296,6 +296,10 @@ async fn image_allowlist_rejects_with_400_and_is_advertised() {
     assert_eq!(r.status(), reqwest::StatusCode::BAD_REQUEST);
     let body: serde_json::Value = r.json().await.unwrap();
     assert!(body["error"].as_str().unwrap().contains("not allowed"));
+    // A rejected task was never queued, so it must not count as one.
+    assert!(metrics(&client, &base)
+        .await
+        .contains("proteus_tasks_total{status=\"queued\"} 0\n"));
 
     let r = client
         .post(format!("{base}/v1/tasks"))
@@ -304,6 +308,20 @@ async fn image_allowlist_rejects_with_400_and_is_advertised() {
         .await
         .unwrap();
     assert_eq!(r.status(), reqwest::StatusCode::OK);
+    assert!(metrics(&client, &base)
+        .await
+        .contains("proteus_tasks_total{status=\"queued\"} 1\n"));
+}
+
+async fn metrics(client: &reqwest::Client, base: &str) -> String {
+    client
+        .get(format!("{base}/metrics"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
 }
 
 #[tokio::test]

@@ -39,6 +39,21 @@ All notable changes to this project are documented here. The format follows
 - Terminal viewer: `[` `]` step through the findings, highlighting and centring each.
 
 ### Fixed
+- `proteus_tasks_total{status="queued"}` counted TES tasks the server rejected with 400; it
+  now counts only accepted tasks.
+- `screen --scorer hybrid` ranked by a score it did not show; the leaderboard has a `Hybrid`
+  column beside the structure-only `Fitness`.
+- `analyze` with one missing path among several aborted the whole run; the path is now reported
+  as a failure and the others are analysed. A lone missing path is still an error.
+- `view --interactive` / `--dashboard` without a terminal failed with `No such device or
+  address (os error 6)`; it now says a terminal is needed and names `--backend` and `--web`.
+- ESMFold API failures were reported as `Container runtime error`; they are `Remote folding API
+  error` now.
+- `view --compare` said "the sequences differ" when every paired residue matched and one file
+  only had extra chains; it now says the structures cover different residues.
+- The offline simulator's "synthetic helix" was a Cα-only trace that DSSP read as 0 % helix
+  and 0 % favoured; it is now an ideal α-helix backbone (N, CA, C, O; φ −57.8°, ψ −47.0°) that
+  measures as a helix. Simulated rows are still excluded from rankings by default.
 - The heavy-atom overlap score counted hydrogen bonds and salt bridges as clashes: with
   heavy-atom radii every N–H···O at 2.5–3.1 Å overlaps by > 0.4 Å. Donor–acceptor pairs at
   ≥ 2.4 Å are now excluded. A Boltz ubiquitin model goes from 3 overlaps to 0, AF-P69905 from 4

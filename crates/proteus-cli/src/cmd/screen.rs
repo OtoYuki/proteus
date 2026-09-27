@@ -346,23 +346,7 @@ pub async fn run(
     fit_table(&mut table);
     // A column of dashes says nothing, so ESM-2 only appears when something scored.
     let show_esm = candidates.iter().take(top).any(|c| c.esm2_score.is_some());
-    let mut header = vec![
-        "Rank",
-        "Candidate",
-        "Len",
-        "pLDDT",
-        "Rg (Å)",
-        "Burial",
-        "Clash/1k",
-        "H-Bonds",
-        "Salt/π",
-        "Fitness",
-    ];
-    if show_esm {
-        header.push("ESM-2");
-    }
-    header.push("Job");
-    table.set_header(header);
+    table.set_header(leaderboard_header(show_esm, scorer));
 
     for (idx, c) in candidates.iter().take(top).enumerate() {
         let mut row = vec![
@@ -387,6 +371,9 @@ pub async fn run(
                     .map(|e| format!("{e:+.2}"))
                     .unwrap_or_else(|| "–".into()),
             ));
+        }
+        if scorer == esm_cmd::Scorer::Hybrid {
+            row.push(Cell::new(hybrid_cell(c.rank_key)));
         }
         row.push(Cell::new(job_ref::short(c.job_id)));
         table.add_row(row);
@@ -452,4 +439,61 @@ pub async fn run(
         );
     }
     Ok(())
+}
+
+/// Leaderboard columns. `Fitness` is always the structure-only score; under `--scorer hybrid`
+/// the score the rows are actually sorted by gets its own column, so the order can be read off
+/// the table instead of looking arbitrary against an unchanged `Fitness`.
+fn leaderboard_header(show_esm: bool, scorer: esm_cmd::Scorer) -> Vec<&'static str> {
+    let mut header = vec![
+        "Rank",
+        "Candidate",
+        "Len",
+        "pLDDT",
+        "Rg (Å)",
+        "Burial",
+        "Clash/1k",
+        "H-Bonds",
+        "Salt/π",
+        "Fitness",
+    ];
+    if show_esm {
+        header.push("ESM-2");
+    }
+    if scorer == esm_cmd::Scorer::Hybrid {
+        header.push("Hybrid");
+    }
+    header.push("Job");
+    header
+}
+
+/// An entry ESM-2 could not score ranks last with a key of −∞; print that as a dash.
+fn hybrid_cell(rank_key: f64) -> String {
+    if rank_key.is_finite() {
+        format!("{rank_key:.1}")
+    } else {
+        "–".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hybrid_ranking_shows_the_score_it_sorts_by() {
+        let h = leaderboard_header(true, esm_cmd::Scorer::Hybrid);
+        let fit = h.iter().position(|c| *c == "Fitness").unwrap();
+        let hyb = h.iter().position(|c| *c == "Hybrid").unwrap();
+        assert!(hyb > fit);
+        assert_eq!(h.last(), Some(&"Job"));
+        assert!(!leaderboard_header(true, esm_cmd::Scorer::Esm2).contains(&"Hybrid"));
+        assert!(!leaderboard_header(false, esm_cmd::Scorer::Structure).contains(&"Hybrid"));
+    }
+
+    #[test]
+    fn unscored_hybrid_entry_prints_a_dash() {
+        assert_eq!(hybrid_cell(f64::NEG_INFINITY), "–");
+        assert_eq!(hybrid_cell(esm_cmd::hybrid(40.0, 0.0)), "43.0");
+    }
 }
