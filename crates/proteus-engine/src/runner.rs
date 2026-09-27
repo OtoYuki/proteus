@@ -29,6 +29,39 @@ pub fn engine_name(metadata: Option<&serde_json::Value>) -> &str {
         .unwrap_or("unknown")
 }
 
+/// The model that folded a prediction, for people: the engine, except that a container run
+/// names its image (`boltz`), with `+msa` when it had an alignment (which explains most of the
+/// difference in confidence between two runs of one protein).
+pub fn model_name(metadata: Option<&serde_json::Value>) -> String {
+    let eng = engine_name(metadata);
+    let Some(m) = metadata else {
+        return eng.to_string();
+    };
+    let base = match eng {
+        ENGINE_OCI => {
+            let image = m.get("image").and_then(|v| v.as_str()).unwrap_or("");
+            let name = image.rsplit('/').next().unwrap_or(image);
+            let name = name.split([':', '@']).next().unwrap_or(name);
+            if name.is_empty() {
+                eng.to_string()
+            } else {
+                name.to_string()
+            }
+        }
+        ENGINE_ESMFOLD_API => "esmfold".to_string(),
+        other => other.to_string(),
+    };
+    let msa = m
+        .get("msa")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| !v.is_empty() && v != "none");
+    if msa {
+        format!("{base}+msa")
+    } else {
+        base
+    }
+}
+
 /// A structure that did not run at the tier the job asked for. Written by the auto runner
 /// when it falls back; carried in `metadata` so `inspect`/`screen` can say so.
 #[derive(Debug, Clone, PartialEq, Eq)]
