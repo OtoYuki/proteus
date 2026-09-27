@@ -8,6 +8,16 @@ All notable changes to this project are documented here. The format follows
 Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
 
 ### Added
+- `scripts/vision.sh`: the terminal UI as a user sees it. A real kitty on an invisible Hyprland
+  output, driven by keys and captured with grim, so layout work is reviewed on real fonts, Nerd
+  Font icons and kitty pictures rather than on text dumps.
+- The terminal viewer's side panel has four pages (`1`–`4`): overview, geometry (a large
+  Ramachandran plot), confidence (a large PAE map with chain bands, pLDDT per residue) and
+  measurements; `?` lists every key; the key strip is one line.
+- Home screen: an overview of all jobs under the list; the Structures tab previews folders,
+  finds structure files further down, and `f` lists all of them to open; the Run tab shows the
+  latest jobs, the tiers side by side, and `ctrl-e` fills in an example. Chains are named in
+  every viewer (`PD-L1 (A) → PD-1 (B)`), and titles name the model (`boltz+msa`).
 - `proteus rename JOB NAME` and `proteus delete JOB` (alias `rm`; `--keep-files` keeps the
   job's folder). In the home screen's jobs tab, `n` renames the selected job, `x` deletes it
   after a `y`, and `s` sorts the list: newest first, by name, by state, or most confident first.
@@ -108,6 +118,10 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- Home screen speed: every job's model is measured ahead in the background (up to four at a
+  time, nearest the selection first), previews are cached and the neighbours rendered ahead,
+  and the launch is shorter. Tab icons are Nerd Font glyphs where the terminal ships them
+  (kitty, WezTerm, Ghostty; `PROTEUS_ICONS=nerd|none` decides elsewhere).
 - The browser page's side panel is wider (380–440 px) and hides with `p`. It opens on a
   headline, the verdict as glyph and word over the number it rests on (ipSAE_min for a complex,
   mean pLDDT with its band split for a predicted monomer, favoured φ, ψ for an experimental
