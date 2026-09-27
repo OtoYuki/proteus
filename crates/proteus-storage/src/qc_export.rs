@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 /// Version of the structure-QC table (CSV/JSON columns, Parquet fields), written to the
 /// Parquet key-value metadata as `proteus.qc_schema_version`.
-pub const QC_SCHEMA_VERSION: u32 = 2;
+pub const QC_SCHEMA_VERSION: u32 = 3;
 
 /// Column names, in order. CSV header, Arrow schema and JSON field names all agree.
 pub const QC_COLUMNS: &[&str] = &[
@@ -60,6 +60,19 @@ pub const QC_COLUMNS: &[&str] = &[
     "cation_pi_count",
     "rmsd_to_reference",
     "fitness",
+    "interface_binder",
+    "interface_target",
+    "interface_binder_residues",
+    "interface_target_residues",
+    "interface_dsasa",
+    "interface_sc",
+    "interface_hbonds",
+    "interface_salt_bridges",
+    "iptm",
+    "ipae",
+    "ipsae_min",
+    "ipsae_max",
+    "lis",
 ];
 
 enum Col {
@@ -68,6 +81,7 @@ enum Col {
     F64(fn(&StructureQc) -> f64),
     OptF64(fn(&StructureQc) -> Option<f64>),
     OptInt(fn(&StructureQc) -> Option<usize>),
+    OptStr(fn(&StructureQc) -> Option<&str>),
 }
 
 fn columns() -> Vec<Col> {
@@ -114,6 +128,19 @@ fn columns() -> Vec<Col> {
         Int(|r| r.cation_pi_count),
         OptF64(|r| r.rmsd_to_reference),
         F64(|r| r.fitness),
+        OptStr(|r| r.interface.interface_binder.as_deref()),
+        OptStr(|r| r.interface.interface_target.as_deref()),
+        OptInt(|r| r.interface.interface_binder_residues),
+        OptInt(|r| r.interface.interface_target_residues),
+        OptF64(|r| r.interface.interface_dsasa),
+        OptF64(|r| r.interface.interface_sc),
+        OptInt(|r| r.interface.interface_hbonds),
+        OptInt(|r| r.interface.interface_salt_bridges),
+        OptF64(|r| r.interface.iptm),
+        OptF64(|r| r.interface.ipae),
+        OptF64(|r| r.interface.ipsae_min),
+        OptF64(|r| r.interface.ipsae_max),
+        OptF64(|r| r.interface.lis),
     ]
 }
 
@@ -128,6 +155,7 @@ pub fn qc_schema() -> Schema {
             Col::F64(_) => Field::new(*name, DataType::Float64, false),
             Col::OptF64(_) => Field::new(*name, DataType::Float64, true),
             Col::OptInt(_) => Field::new(*name, DataType::Int64, true),
+            Col::OptStr(_) => Field::new(*name, DataType::Utf8, true),
         })
         .collect::<Vec<_>>();
     Schema::new(fields)
@@ -148,6 +176,7 @@ pub fn qc_to_record_batch(rows: &[StructureQc]) -> Result<RecordBatch, arrow_sch
                         .map(|r| f(r).map(|v| v as i64))
                         .collect::<Int64Array>(),
                 ),
+                Col::OptStr(f) => Arc::new(rows.iter().map(f).collect::<StringArray>()),
             }
         })
         .collect();
@@ -195,6 +224,7 @@ pub fn export_qc_to_csv(rows: &[StructureQc]) -> String {
                 Col::F64(f) => f(r).to_string(),
                 Col::OptF64(f) => f(r).map(|v| v.to_string()).unwrap_or_default(),
                 Col::OptInt(f) => f(r).map(|v| v.to_string()).unwrap_or_default(),
+                Col::OptStr(f) => f(r).map(csv_field).unwrap_or_default(),
             })
             .collect();
         out.push_str(&fields.join(","));
@@ -283,6 +313,7 @@ mod tests {
             cation_pi_count: 0,
             rmsd_to_reference: None,
             fitness: 55.5,
+            interface: Default::default(),
         }
     }
 

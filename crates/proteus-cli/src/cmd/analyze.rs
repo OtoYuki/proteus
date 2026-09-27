@@ -5,7 +5,8 @@
 //! so a folder of predicted models can be triaged in DuckDB, Polars or pandas.
 
 use super::prelude::*;
-use proteus_core::qc::{is_structure_file_name, structure_qc, StructureQc};
+use proteus_core::interface::InterfaceSpec;
+use proteus_core::qc::{is_structure_file_name, structure_qc_with, QcOptions, StructureQc};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -14,7 +15,8 @@ use std::sync::Mutex;
 #[command(after_help = "Examples:
   proteus analyze model.pdb
   proteus analyze models/ --export qc.parquet
-  proteus analyze designs/*.cif --reference target.pdb --json | jq .rmsd_to_reference")]
+  proteus analyze designs/*.cif --reference target.pdb --json | jq .rmsd_to_reference
+  proteus analyze boltz_results/ --interface A:B --export triage.parquet")]
 pub struct Args {
     /// Structure files (PDB or mmCIF, optionally gzipped) or directories to search recursively
     #[arg(value_name = "PATH")]
@@ -27,6 +29,14 @@ pub struct Args {
     /// Reference structure: adds the Kabsch C-alpha RMSD of every input against it
     #[arg(short, long)]
     reference: Option<PathBuf>,
+
+    /// Measure a binder–target interface: `A` (chain A against every other chain), `A:B`,
+    /// `H,L:A`; with no value, the first chain against the rest. Adds contacts, buried surface
+    /// (dSASA), shape complementarity, cross-interface H-bonds and salt bridges and, when the
+    /// predictor's PAE and scores files sit next to the model (Boltz, ColabFold, AlphaFold 3),
+    /// ipTM, ipAE, ipSAE and LIS
+    #[arg(long, value_name = "BINDER[:TARGET]", num_args = 0..=1, default_missing_value = "")]
+    interface: Option<String>,
 
     /// Treat the B-factor column as pLDDT (predicted) or as experimental B-factors;
     /// `auto` inspects the header and the value distribution.
@@ -155,8 +165,7 @@ fn forced_source(arg: ConfidenceSourceArg) -> Option<ConfidenceSource> {
 /// Analyse `inputs` on `jobs` threads. Results come back in input order.
 fn analyze_many(
     inputs: &[PathBuf],
-    reference: Option<&pdbtbx::PDB>,
-    confidence: Option<ConfidenceSource>,
+    opts: &QcOptions,
     jobs: usize,
 ) -> Vec<std::result::Result<StructureQc, String>> {
     let next = AtomicUsize::new(0);
@@ -179,7 +188,7 @@ fn analyze_many(
             s.spawn(|| loop {
                 let i = next.fetch_add(1, Ordering::Relaxed);
                 let Some(path) = inputs.get(i) else { break };
-                let r = structure_qc(path, reference, confidence).map_err(|e| e.to_string());
+                let r = structure_qc_with(path, opts).map_err(|e| e.to_string());
                 results.lock().unwrap_or_else(|p| p.into_inner())[i] = Some(r);
                 bar.inc(1);
             });
@@ -202,6 +211,9 @@ fn opt(v: Option<f64>, prec: usize) -> String {
 fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
     if top == 0 || rows.is_empty() {
         return;
+    }
+    if rows.iter().any(|r| r.interface.interface_binder.is_some()) {
+        return print_interface_summary(rows, top, exported);
     }
     let mut order: Vec<&StructureQc> = rows.iter().collect();
     order.sort_by(|a, b| b.fitness.total_cmp(&a.fitness));
@@ -256,17 +268,101 @@ fn print_summary(rows: &[StructureQc], top: usize, exported: bool) {
     }
 }
 
+/// The table under `--interface`: the interface columns, best ipSAE_min first when the
+/// predictor's PAE was found (it was the strongest single predictor of binding among 3,766
+/// tested designs; Overath et al. 2025), otherwise by buried surface.
+fn print_interface_summary(rows: &[StructureQc], top: usize, exported: bool) {
+    let by_ipsae = rows.iter().any(|r| r.interface.ipsae_min.is_some());
+    let key = |r: &StructureQc| {
+        if by_ipsae {
+            r.interface.ipsae_min
+        } else {
+            r.interface.interface_dsasa
+        }
+        .unwrap_or(f64::NEG_INFINITY)
+    };
+    let mut order: Vec<&StructureQc> = rows.iter().collect();
+    order.sort_by(|a, b| key(b).total_cmp(&key(a)));
+    let mut table = Table::new();
+    table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
+    crate::cli::fit_table(&mut table);
+    table.set_header(vec![
+        "file",
+        "binder:target",
+        "pLDDT",
+        "ipTM",
+        "ipSAE min",
+        "ipAE",
+        "LIS",
+        "Sc",
+        "dSASA Å²",
+        "contacts",
+        "H-bonds",
+        "salt",
+        "bond Z",
+    ]);
+    let n = |v: Option<usize>| v.map_or_else(|| "–".into(), |v| v.to_string());
+    for r in order.iter().take(top) {
+        let i = &r.interface;
+        let name = Path::new(&r.file)
+            .file_name()
+            .map_or_else(|| r.file.clone(), |n| n.to_string_lossy().into_owned());
+        table.add_row(vec![
+            name,
+            format!(
+                "{}:{}",
+                i.interface_binder.as_deref().unwrap_or("–"),
+                i.interface_target.as_deref().unwrap_or("–")
+            ),
+            opt(r.plddt_mean, 1),
+            opt(i.iptm, 2),
+            opt(i.ipsae_min, 3),
+            opt(i.ipae, 1),
+            opt(i.lis, 3),
+            opt(i.interface_sc, 2),
+            opt(i.interface_dsasa, 0),
+            format!(
+                "{}/{}",
+                n(i.interface_binder_residues),
+                n(i.interface_target_residues)
+            ),
+            n(i.interface_hbonds),
+            n(i.interface_salt_bridges),
+            opt(r.bond_rmsz, 2),
+        ]);
+    }
+    println!("{table}");
+    println!(
+        "sorted by {}",
+        if by_ipsae {
+            "ipSAE_min"
+        } else {
+            "dSASA (no PAE file found next to the models, so no ipSAE)"
+        }
+    );
+    if rows.len() > top {
+        let hint = if exported {
+            "the export has every row"
+        } else {
+            "--export writes every row"
+        };
+        println!("{} more not shown (--top {top}); {hint}.", rows.len() - top);
+    }
+}
+
 pub async fn run(args: Args) -> Result<()> {
     let Args {
         mut paths,
         pdb,
         reference,
+        interface,
         confidence_source,
         export,
         json,
         jobs,
         top,
     } = args;
+    let interface = interface.as_deref().map(InterfaceSpec::parse).transpose()?;
     paths.extend(pdb);
     if paths.is_empty() {
         bail!("give at least one structure file or directory, e.g. `proteus analyze model.pdb`");
@@ -275,8 +371,13 @@ pub async fn run(args: Args) -> Result<()> {
         check_export_target(out)?;
     }
     let (inputs, unreadable) = collect_inputs(&paths)?;
-    let single_report =
-        inputs.len() == 1 && paths.len() == 1 && paths[0].is_file() && export.is_none() && !json;
+    // The interface columns live in the table form, so --interface on one file prints a row.
+    let single_report = inputs.len() == 1
+        && paths.len() == 1
+        && paths[0].is_file()
+        && export.is_none()
+        && !json
+        && interface.is_none();
     if single_report {
         return print_report(&inputs[0], reference.as_deref(), confidence_source);
     }
@@ -294,8 +395,11 @@ pub async fn run(args: Args) -> Result<()> {
     let started = std::time::Instant::now();
     let results = analyze_many(
         &inputs,
-        reference_pdb.as_ref(),
-        forced_source(confidence_source),
+        &QcOptions {
+            reference: reference_pdb.as_ref(),
+            confidence: forced_source(confidence_source),
+            interface: interface.as_ref(),
+        },
         jobs,
     );
     let elapsed = started.elapsed();

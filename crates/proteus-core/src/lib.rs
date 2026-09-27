@@ -7,6 +7,7 @@ pub mod confidence;
 pub mod error;
 pub mod geometry;
 pub mod interactions;
+pub mod interface;
 pub mod io;
 pub mod metrics;
 pub mod models;
