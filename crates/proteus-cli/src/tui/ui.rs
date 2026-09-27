@@ -477,6 +477,12 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         [area, Rect::default()]
     };
 
+    // The model column only where the names keep room (at least 22 characters); names cut
+    // with an ellipsis, never mid-word without a mark.
+    let show_model = list.width >= 22 + 10 + 4 + 5 + 10 + 4 + 5 * 2 + 3;
+    let name_w = (list.width as usize)
+        .saturating_sub(10 + 4 + 5 + 4 + 3 + if show_model { 10 + 2 } else { 0 } + 4 * 2)
+        .max(8);
     let rows = visible.iter().map(|j| {
         let eng = model(j);
         let eng_style = if engine(j) == proteus_engine::ENGINE_SIMULATED {
@@ -488,7 +494,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         Row::new(vec![
             Cell::from(state(look, &j.job.status, app.tick)),
             Cell::from(Span::styled(
-                display_name(&j.header),
+                elide_end(&display_name(&j.header), name_w),
                 if failed { look.muted() } else { look.text() },
             )),
             Cell::from(
@@ -504,7 +510,10 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
                 })
                 .right_aligned(),
             ),
-            Cell::from(Span::styled(eng.to_string(), eng_style)),
+            Cell::from(Span::styled(
+                if show_model { eng } else { String::new() },
+                eng_style,
+            )),
             Cell::from(Line::from(Span::styled(age(j.job.created_at), look.dim())).right_aligned()),
         ])
     });
@@ -515,7 +524,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Fill(1),
             Constraint::Length(4),
             Constraint::Length(5),
-            Constraint::Length(10),
+            Constraint::Length(if show_model { 10 } else { 0 }),
             Constraint::Length(4),
         ],
     )
@@ -525,7 +534,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             Cell::from("name"),
             Cell::from(Line::from("len").right_aligned()),
             Cell::from(Line::from("pLDDT").right_aligned()),
-            Cell::from("model"),
+            Cell::from(if show_model { "model" } else { "" }),
             Cell::from(Line::from("age").right_aligned()),
         ])
         .style(look.dim())
@@ -1215,6 +1224,12 @@ fn heading(look: &Look, name: &str, width: usize) -> Line<'static> {
 /// (at most 22), or stacked when the width cannot hold both.
 fn kv_block(look: &Look, name: &str, items: &[[String; 2]], width: u16) -> Vec<Line<'static>> {
     let width = width as usize;
+    // Short labels: the value gets the width (a wrapped value reads worse than a terse label).
+    let items: Vec<[String; 2]> = items
+        .iter()
+        .map(|[k, v]| [short_label(k).to_string(), v.clone()])
+        .collect();
+    let items = &items;
     let label_w = items
         .iter()
         .map(|[k, _]| k.chars().count())
@@ -1246,6 +1261,18 @@ fn kv_block(look: &Look, name: &str, items: &[[String; 2]], width: u16) -> Vec<L
         }
     }
     out
+}
+
+/// A report row's label as the inspector shows it, where the full one is long.
+fn short_label(k: &str) -> &str {
+    match k {
+        "Radius of gyration" => "Rg",
+        "Heavy-atom overlaps" => "Overlaps",
+        "Covalent geometry" => "Covalent",
+        "Stereochemistry" => "Stereo",
+        "binder → target" => "binder → target",
+        other => other,
+    }
 }
 
 /// `v` in lines of at most `width` characters, broken at ` · ` or before ` (`; a piece longer
@@ -1368,9 +1395,44 @@ fn draw_details(
         }
         lines[i].extend(kv_block(look, name, items, cols[i].width));
     }
-    for (c, l) in cols.into_iter().zip(lines) {
-        f.render_widget(Paragraph::new(l).wrap(Wrap { trim: false }), c);
+    for (c, mut l) in cols.into_iter().zip(lines) {
+        // Cut short, say so rather than let a group vanish off the bottom.
+        if l.len() > c.height as usize && c.height >= 2 {
+            let keep = c.height as usize - 1;
+            let hidden = l[keep..]
+                .iter()
+                .filter(|line| line.spans.iter().any(|s| s.content.starts_with('(')))
+                .count();
+            l.truncate(keep);
+            l.push(Line::from(Span::styled(
+                if hidden > 0 {
+                    format!(
+                        "⋯ {hidden} more group{} · i for the full report",
+                        if hidden == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "⋯ more · i for the full report".to_string()
+                },
+                look.dim(),
+            )));
+        }
+        f.render_widget(Paragraph::new(l), c);
     }
+}
+
+/// `text` in lines of at most `width` characters, broken at spaces.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match out.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => out.push(word.to_string()),
+        }
+    }
+    out
 }
 
 /// The preview pane: under kitty graphics the pane is left empty and the picture is placed over
@@ -1698,6 +1760,34 @@ fn draw_folder_card(f: &mut Frame, area: Rect, app: &App, e: &super::app::Entry,
             "Proteus reads .pdb, .ent, .cif and .mmcif files, gzipped or not.",
             look.dim(),
         )));
+        if !peek.below.is_empty() {
+            out.push(Line::from(""));
+            out.push(heading(look, "further down", w));
+            for rel in &peek.below {
+                let (folder, file) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+                out.push(Line::from(vec![
+                    Span::styled(format!(" {file_icon}"), look.accent()),
+                    Span::styled(format!("{folder}/"), look.dim()),
+                    Span::styled(file.to_string(), look.text()),
+                ]));
+            }
+            if peek.n_below > peek.below.len() {
+                out.push(Line::from(Span::styled(
+                    format!("   and {} more", peek.n_below - peek.below.len()),
+                    look.dim(),
+                )));
+            }
+            out.push(Line::from(vec![
+                Span::styled("~ $ ", look.dim()),
+                Span::styled(
+                    format!(
+                        "proteus analyze {} --export qc.parquet",
+                        shell_path(&e.path.to_string_lossy())
+                    ),
+                    look.accent(),
+                ),
+            ]));
+        }
         out.push(Line::from(""));
         out.push(heading(look, "elsewhere", w));
         let jobs_n = app.jobs.all.iter().filter(|j| j.pdb_path.is_some()).count();
@@ -1935,25 +2025,34 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
             FieldKind::Text(_) if focused => field.hint,
             FieldKind::Text(_) => "",
         };
-        lines.push(Line::from(vec![
-            Span::raw(" ".repeat(label_w + 2)),
-            Span::styled(
-                note.to_string(),
-                if focused { look.muted() } else { look.dim() },
-            ),
-        ]));
+        // The note under its value, wrapped there rather than back under the labels.
+        let room = (form.width as usize).saturating_sub(label_w + 2).max(20);
+        for piece in wrap_words(note, room) {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(label_w + 2)),
+                Span::styled(piece, if focused { look.muted() } else { look.dim() }),
+            ]));
+        }
         lines.push(Line::from(""));
     }
     let run_focused = run.focus == fields.len();
     let ready = run.command().is_ok();
+    // Filled when it would run: the one action on this tab should look like one.
     let button = match (run_focused, ready) {
-        (true, true) => look.tab_on(),
-        (false, true) => look.accent().add_modifier(Modifier::BOLD),
-        (_, false) => look.dim(),
+        (_, true) => look.tab_on(),
+        (true, false) => look.selected(),
+        (false, false) => look.dim(),
     };
     lines.push(Line::from(vec![
         Span::styled(if run_focused { "▌ " } else { "  " }, look.accent()),
-        Span::styled(" run ▸ ", button),
+        Span::styled(
+            if look.icons {
+                "  \u{F040A}  run  "
+            } else {
+                "  run ▸  "
+            },
+            button,
+        ),
         Span::styled(
             if ready {
                 "  ⏎ runs it"
@@ -2087,7 +2186,7 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
                     },
                 ),
                 Span::styled(format!("{good:<27}"), look.muted()),
-                Span::styled(takes, look.dim()),
+                Span::styled(if w >= 75 { takes } else { "" }, look.dim()),
             ]));
         }
     }
@@ -2157,11 +2256,12 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
             look.dim(),
         )),
     ];
-    let w = area.width.min(80);
-    // Rows as wrapped at the box's inner width, so the last line is never cut off.
-    let inner = w.saturating_sub(2).max(1) as usize;
+    let w = area.width.min(84);
+    // Rows as wrapped at the box's inner width (border and padding off), so the last line is
+    // never cut off.
+    let inner = w.saturating_sub(2 + 6).max(1) as usize;
     let rows: usize = text.iter().map(|l| l.width().max(1).div_ceil(inner)).sum();
-    let h = area.height.min(rows as u16 + 2);
+    let h = area.height.min(rows as u16 + 2 + 2);
     let r = Rect {
         x: area.x + (area.width - w) / 2,
         y: area.y + (area.height - h) / 2,
@@ -2174,6 +2274,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
             Block::bordered()
                 .border_style(look.line())
                 .title(Line::from(Span::styled(" (keys) ", look.muted())))
+                .padding(ratatui::widgets::Padding::new(3, 3, 1, 1))
                 .style(look.base().patch(look.surface())),
         ),
         r,

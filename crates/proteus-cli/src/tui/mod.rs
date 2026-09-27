@@ -75,6 +75,10 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
     launch(&mut terminal, &app.look)?;
     let started = Instant::now();
 
+    // Measuring ahead uses up to four threads, leaving one for everything else.
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get().saturating_sub(1))
+        .clamp(1, 4);
     let mut last_refresh: Option<Instant> = None;
     loop {
         if let n @ 1.. = signal.load(Ordering::SeqCst) {
@@ -127,7 +131,7 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
         }
         // What the screen shows is measured at once, a file in the browser once the selection
         // rests (scrolling past a 5 MB file should not wait on it). Jobs' models are measured
-        // ahead, two at a time, nearest the selection first.
+        // ahead, a few at a time, nearest the selection first.
         let wanted = app.wanted_analysis();
         if wanted != resting.0 {
             resting = (wanted.clone(), Instant::now());
@@ -146,8 +150,12 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             .values()
             .filter(|a| matches!(a, Analysis::Pending))
             .count();
-        if busy + starts.len() < 2 {
-            starts.extend(app.prefetch().into_iter().take(2 - busy - starts.len()));
+        if busy + starts.len() < workers {
+            starts.extend(
+                app.prefetch()
+                    .into_iter()
+                    .take(workers - busy - starts.len()),
+            );
         }
         for path in starts {
             if matches!(app.analyses.get(&path), Some(Analysis::Pending)) {
@@ -361,11 +369,17 @@ fn analyse(path: &Path) -> (Analysis, Option<Arc<proteus_render::StructureRender
                     interface.push([
                         "contacts".into(),
                         format!(
-                            "{} + {} residues · {} H-bonds · {} salt bridges",
+                            "{} + {} residues · {} H-bond{} · {} salt bridge{}",
                             m.binder_interface_residues,
                             m.target_interface_residues,
                             m.interface_hbonds,
-                            m.interface_salt_bridges
+                            if m.interface_hbonds == 1 { "" } else { "s" },
+                            m.interface_salt_bridges,
+                            if m.interface_salt_bridges == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
                         ),
                     ]);
                 }

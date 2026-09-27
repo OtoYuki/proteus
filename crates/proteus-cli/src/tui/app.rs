@@ -338,6 +338,51 @@ pub struct DirPeek {
     pub structures: Vec<(String, u64)>,
     pub n_structures: usize,
     pub n_dirs: usize,
+    /// Structure files further down (up to 4 folders deep, at most 3 000 entries looked at),
+    /// by path relative to the folder: the first 10, and how many there are.
+    pub below: Vec<String>,
+    pub n_below: usize,
+}
+
+/// Structure files under `dir`, breadth first, skipping hidden folders and build output.
+fn find_below(dir: &Path) -> (Vec<String>, usize) {
+    const SKIP: [&str; 4] = ["target", "node_modules", "__pycache__", "venv"];
+    let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), 0usize)]);
+    let (mut found, mut n, mut seen) = (Vec::new(), 0usize, 0usize);
+    while let Some((d, depth)) = queue.pop_front() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 3000 {
+                return (found, n);
+            }
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || SKIP.contains(&name.as_ref()) {
+                continue;
+            }
+            let path = e.path();
+            match e.file_type() {
+                Ok(t) if t.is_dir() && depth < 4 => queue.push_back((path, depth + 1)),
+                Ok(t)
+                    if t.is_file()
+                        && depth > 0
+                        && proteus_core::qc::is_structure_file_name(&path) =>
+                {
+                    n += 1;
+                    if found.len() < 10 {
+                        if let Ok(rel) = path.strip_prefix(dir) {
+                            found.push(rel.to_string_lossy().into_owned());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (found, n)
 }
 
 impl FilesView {
@@ -439,6 +484,9 @@ impl FilesView {
         }
         p.structures.sort();
         p.structures.truncate(12);
+        if p.n_structures == 0 {
+            (p.below, p.n_below) = find_below(dir);
+        }
         let p = std::rc::Rc::new(p);
         self.peeks.borrow_mut().insert(dir.to_path_buf(), p.clone());
         p
@@ -870,6 +918,20 @@ impl App {
         }
     }
 
+    /// Show tab `t`. A passing note in the status bar belongs to the tab it was said on; the
+    /// result of a command (✓ or ✗) stays until the next one.
+    fn switch_tab(&mut self, t: Tab) {
+        if t != self.tab
+            && self
+                .status
+                .as_deref()
+                .is_some_and(|s| !s.starts_with('✓') && !s.starts_with('✗'))
+        {
+            self.status = None;
+        }
+        self.tab = t;
+    }
+
     /// The name of job `id` as the list shows it.
     fn job_name(&self, id: uuid::Uuid) -> String {
         self.jobs.all.iter().find(|j| j.job.id == id).map_or_else(
@@ -1004,7 +1066,7 @@ impl App {
                 self.jobs.filtering = false;
                 self.jobs.renaming = None;
                 self.run.editing = false;
-                self.tab = Tab::ALL[(c as u8 - b'1') as usize];
+                self.switch_tab(Tab::ALL[(c as u8 - b'1') as usize]);
                 return Action::None;
             }
         }
@@ -1043,15 +1105,15 @@ impl App {
                 return Action::None;
             }
             KeyCode::Tab => {
-                self.tab = Tab::ALL[(self.tab.index() + 1) % Tab::ALL.len()];
+                self.switch_tab(Tab::ALL[(self.tab.index() + 1) % Tab::ALL.len()]);
                 return Action::None;
             }
             KeyCode::BackTab => {
-                self.tab = Tab::ALL[(self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()];
+                self.switch_tab(Tab::ALL[(self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()]);
                 return Action::None;
             }
             KeyCode::Char(c @ '1'..='3') => {
-                self.tab = Tab::ALL[(c as u8 - b'1') as usize];
+                self.switch_tab(Tab::ALL[(c as u8 - b'1') as usize]);
                 return Action::None;
             }
             _ => {}
