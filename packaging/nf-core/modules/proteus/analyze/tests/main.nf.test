@@ -1,0 +1,47 @@
+nextflow_process {
+
+    name "Test Process PROTEUS_ANALYZE"
+    script "../main.nf"
+    process "PROTEUS_ANALYZE"
+    config "./nextflow.config"
+    tag "modules"
+    tag "proteus"
+    tag "proteus/analyze"
+
+    test("trypsin–BPTI, interface I:E") {
+        when {
+            params {
+                module_args = '--interface I:E'
+            }
+            process {
+                """
+                input[0] = [
+                    [ id:'2ptc' ],
+                    [ file("${moduleTestDir}/../../../../../../crates/proteus-core/tests/data/2ptc_EI.pdb", checkIfExists: true) ]
+                ]
+                """
+            }
+        }
+        then {
+            assertAll(
+                { assert process.success },
+                { assert path(process.out.qc[0][1]).exists() },
+                { assert process.out.versions_proteus[0][1] == 'proteus' }
+            )
+        }
+    }
+
+    test("stub") {
+        options "-stub"
+        when {
+            process {
+                """
+                input[0] = [ [ id:'stub' ], [ file("${moduleTestDir}/../../../../../../crates/proteus-core/tests/data/1crn.pdb", checkIfExists: true) ] ]
+                """
+            }
+        }
+        then {
+            assert process.success
+        }
+    }
+}

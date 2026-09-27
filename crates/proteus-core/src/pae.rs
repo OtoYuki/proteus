@@ -14,7 +14,9 @@
 //!   "max_predicted_aligned_error": 31.75}]`, and the v1/v2 layout with `residue1`/`residue2`/
 //!   `distance` lists.
 //! - ColabFold: `…_scores_rank_…json` (`pae`, `max_pae`, `ptm`, `iptm`).
-//! - AlphaFold 3: `…_full_data_<k>.json` (`pae`) and `…_summary_confidences_<k>.json`.
+//! - AlphaFold 3: `…_full_data_<k>.json` (`pae`) and `…_summary_confidences_<k>.json` (AlphaFold
+//!   Server); `<name>_confidences.json` and `<name>_summary_confidences.json` beside
+//!   `<name>_model.cif`, or `confidences.json` beside a sample's `model.cif` (a local run).
 //! - A bare `.npy` holding the N×N matrix.
 
 use crate::error::CoreError;
@@ -455,6 +457,16 @@ pub fn sidecar_files(structure: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
                 scores.or_else(|| exists(dir.join(format!("{head}_summary_confidences_{k}.json"))));
         }
     }
+    // AlphaFold 3 run locally: name/name_model.cif → name_confidences.json (pae) and
+    // name_summary_confidences.json; each sample's seed-1_sample-0/model.cif → confidences.json.
+    if let Some(head) = stem.strip_suffix("_model") {
+        pae = pae.or_else(|| exists(dir.join(format!("{head}_confidences.json"))));
+        scores = scores.or_else(|| exists(dir.join(format!("{head}_summary_confidences.json"))));
+    }
+    if stem == "model" {
+        pae = pae.or_else(|| exists(dir.join("confidences.json")));
+        scores = scores.or_else(|| exists(dir.join("summary_confidences.json")));
+    }
     (pae, scores)
 }
 
@@ -646,6 +658,32 @@ mod tests {
         assert_eq!(pae.unwrap(), d.join("fold_y_full_data_0.json"));
         assert_eq!(scores.unwrap(), d.join("fold_y_summary_confidences_0.json"));
         assert_eq!(sidecar_files(&d.join("plain.pdb")), (None, None));
+
+        // AlphaFold 3 run locally: the top model and one sample's directory.
+        let run = d.join("design_7");
+        std::fs::create_dir_all(run.join("seed-1_sample-0")).unwrap();
+        for f in [
+            "design_7_model.cif",
+            "design_7_confidences.json",
+            "design_7_summary_confidences.json",
+            "seed-1_sample-0/model.cif",
+            "seed-1_sample-0/confidences.json",
+            "seed-1_sample-0/summary_confidences.json",
+        ] {
+            std::fs::write(run.join(f), "").unwrap();
+        }
+        let (pae, scores) = sidecar_files(&run.join("design_7_model.cif"));
+        assert_eq!(pae.unwrap(), run.join("design_7_confidences.json"));
+        assert_eq!(
+            scores.unwrap(),
+            run.join("design_7_summary_confidences.json")
+        );
+        let (pae, scores) = sidecar_files(&run.join("seed-1_sample-0/model.cif"));
+        assert_eq!(pae.unwrap(), run.join("seed-1_sample-0/confidences.json"));
+        assert_eq!(
+            scores.unwrap(),
+            run.join("seed-1_sample-0/summary_confidences.json")
+        );
     }
 
     #[test]

@@ -84,6 +84,46 @@ pub struct StructureQc {
     pub rmsd_to_reference: Option<f64>,
     /// Composite triage score, 0–100 (see the README for its definition and its limits).
     pub fitness: f64,
+    /// Binder–target interface columns; all empty unless `analyze --interface` was given.
+    #[serde(flatten)]
+    pub interface: InterfaceColumns,
+}
+
+/// Interface columns of a [`StructureQc`] row (see [`crate::interface`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct InterfaceColumns {
+    /// Binder chain ids, comma-joined.
+    pub interface_binder: Option<String>,
+    pub interface_target: Option<String>,
+    /// Binder residues with a heavy atom within 4 Å of the target, and the reverse.
+    pub interface_binder_residues: Option<usize>,
+    pub interface_target_residues: Option<usize>,
+    /// Buried surface, SASA(binder) + SASA(target) − SASA(complex), Å².
+    pub interface_dsasa: Option<f64>,
+    /// Shape complementarity (Lawrence & Colman 1993).
+    pub interface_sc: Option<f64>,
+    pub interface_hbonds: Option<usize>,
+    pub interface_salt_bridges: Option<usize>,
+    /// The predictor's own ipTM, from the scores file next to the model.
+    pub iptm: Option<f64>,
+    /// Mean inter-chain PAE between binder and target, both directions, Å.
+    pub ipae: Option<f64>,
+    /// ipSAE (10 Å PAE cutoff), smallest and largest over binder↔target chain directions.
+    pub ipsae_min: Option<f64>,
+    pub ipsae_max: Option<f64>,
+    /// LIS (12 Å PAE cutoff), mean of the two directions.
+    pub lis: Option<f64>,
+}
+
+/// What [`structure_qc_with`] measures beyond the defaults.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct QcOptions<'a> {
+    pub reference: Option<&'a pdbtbx::PDB>,
+    /// Overrides the automatic pLDDT-vs-B-factor detection when `Some`.
+    pub confidence: Option<ConfidenceSource>,
+    /// Measure this binder–target interface, with the PAE and ipTM a predictor wrote beside
+    /// the model when they are there.
+    pub interface: Option<&'a crate::interface::InterfaceSpec>,
 }
 
 /// Kabsch C-alpha RMSD between two structures, normalised exactly as the full analysis does
@@ -229,6 +269,19 @@ pub fn structure_qc(
     reference: Option<&pdbtbx::PDB>,
     confidence: Option<ConfidenceSource>,
 ) -> Result<StructureQc, CoreError> {
+    structure_qc_with(
+        path,
+        &QcOptions {
+            reference,
+            confidence,
+            interface: None,
+        },
+    )
+}
+
+/// [`structure_qc`] with the options spelled out, including the binder–target interface.
+pub fn structure_qc_with(path: &Path, opts: &QcOptions) -> Result<StructureQc, CoreError> {
+    let (reference, confidence) = (opts.reference, opts.confidence);
     let loaded = crate::io::load_structure(path)?;
     let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,
@@ -321,6 +374,34 @@ pub fn structure_qc(
         cation_pi_count: net.map_or(0, |n| n.total_cation_pi),
         rmsd_to_reference,
         fitness: m.candidate_fitness_score.unwrap_or(0.0),
+        interface: match opts.interface {
+            Some(spec) => interface_columns(path, &loaded.pdb, spec)?,
+            None => InterfaceColumns::default(),
+        },
+    })
+}
+
+fn interface_columns(
+    path: &Path,
+    pdb: &pdbtbx::PDB,
+    spec: &crate::interface::InterfaceSpec,
+) -> Result<InterfaceColumns, CoreError> {
+    let confidence = crate::pae::read_confidence(path, None)?;
+    let i = crate::interface::interface_metrics(pdb, spec, confidence.pae.as_ref())?;
+    Ok(InterfaceColumns {
+        interface_binder: Some(i.binder_chains),
+        interface_target: Some(i.target_chains),
+        interface_binder_residues: Some(i.binder_interface_residues),
+        interface_target_residues: Some(i.target_interface_residues),
+        interface_dsasa: Some(i.dsasa),
+        interface_sc: i.shape_complementarity,
+        interface_hbonds: Some(i.interface_hbonds),
+        interface_salt_bridges: Some(i.interface_salt_bridges),
+        iptm: confidence.iptm,
+        ipae: i.ipae,
+        ipsae_min: i.ipsae_min,
+        ipsae_max: i.ipsae_max,
+        lis: i.lis,
     })
 }
 
