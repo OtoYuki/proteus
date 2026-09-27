@@ -9,6 +9,7 @@ The `proteus` command-line binary of [Proteus](https://github.com/OtoYuki/proteu
 ```
 proteus analyze 1crn.pdb                       # all-atom biophysics of a PDB/mmCIF file
 proteus analyze models/ --export qc.parquet    # one row per structure, over a whole folder
+proteus analyze designs/ --interface A:B       # binder triage: ipSAE, Sc, dSASA, … per model
 proteus mutate wt.fasta --mode alanine         # in-silico variant library (stdout or --output)
 proteus screen lib.fasta --export out.parquet  # fold, score, rank; Parquet/CSV/JSON export
 proteus esm scan wt.fasta --export scan.csv    # ESM-2 deep mutational scan, pure Rust
