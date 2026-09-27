@@ -11,7 +11,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
 - `proteus rename JOB NAME` and `proteus delete JOB` (alias `rm`; `--keep-files` keeps the
   job's folder). In the home screen's jobs tab, `n` renames the selected job, `x` deletes it
   after a `y`, and `s` sorts the list: newest first, by name, by state, or most confident first.
-- Tab icons in the home screen's header, with each tab's number key beside its name.
+- Tab icons in the home screen's header, drawn in the wordmark's dot matrix (4 × 4 dots, two
+  braille cells; `proteus_render::brand::icons`): a list for jobs, the folded-chain **p** for
+  structures, a play mark for run. Each tab's number key sits beside its name.
 - The terminal viewer draws real pixels with the kitty graphics protocol, in kitty, WezTerm and
   Ghostty, when run locally (not over SSH, not in tmux). Frames go as zlib-compressed RGBA with a
   transparent background, at the terminal's cell resolution scaled down while frames are slow.
@@ -163,6 +165,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   metrics saved before this read back without it).
 
 ### Fixed
+- The home screen's help box no longer sits under the job's preview picture in kitty (the
+  picture is taken down while the help is open), and its last line is no longer cut off.
+- The job card's size line drops the Rg ratio rather than wrapping it under the labels.
 - In the home screen's Run tab, the digit keys typed into the focused field instead of
   switching tabs; they now switch tabs (except on the residue-number fields), and Alt+1–3
   switches even while typing.

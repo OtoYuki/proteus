@@ -5,6 +5,7 @@
 
 pub mod ansi;
 pub mod assets;
+pub mod icons;
 pub mod mark;
 pub mod matrix;
 

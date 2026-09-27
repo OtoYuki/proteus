@@ -80,6 +80,12 @@ pub fn half_blocks(word: &str) -> Vec<String> {
 /// Braille rendering: 2 × 4 dots per cell (the compact form, for a header line).
 pub fn braille(word: &str) -> Vec<String> {
     let (w, h, d) = bitmap(word);
+    braille_of(w, h, &d)
+}
+
+/// Any dot bitmap (`w` × `h`, row-major) as braille lines, 2 × 4 dots per cell. An empty cell
+/// is a space, not U+2800, which some fonts draw as faint dots.
+pub fn braille_of(w: usize, h: usize, d: &[bool]) -> Vec<String> {
     const BITS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
     (0..h.div_ceil(4))
         .map(|r| {
