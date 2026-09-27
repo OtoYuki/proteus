@@ -337,13 +337,17 @@ fn find_below(dir: &Path, keep: usize, top: bool) -> (Vec<(String, u64)>, usize)
             if seen > 3000 {
                 return (found, n);
             }
+            // As `rescan` does: names that are not UTF-8 are skipped, symlinks are followed
+            // (the depth and entry caps bound a symlink loop).
             let name = e.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with('.') || SKIP.contains(&name.as_ref()) {
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with('.') || SKIP.contains(&name) {
                 continue;
             }
             let path = e.path();
-            match e.file_type() {
+            match std::fs::metadata(&path) {
                 Ok(t) if t.is_dir() && depth < 4 => queue.push_back((path, depth + 1)),
                 Ok(t)
                     if t.is_file()
@@ -353,8 +357,7 @@ fn find_below(dir: &Path, keep: usize, top: bool) -> (Vec<(String, u64)>, usize)
                     n += 1;
                     if found.len() < keep {
                         if let Ok(rel) = path.strip_prefix(dir) {
-                            let size = e.metadata().map_or(0, |m| m.len());
-                            found.push((rel.to_string_lossy().into_owned(), size));
+                            found.push((rel.to_string_lossy().into_owned(), t.len()));
                         }
                     }
                 }
@@ -962,18 +965,21 @@ impl App {
     /// pixels at kitty resolution).
     pub fn keep_preview(&mut self, key: PreviewKey, p: Preview) {
         if self.previews.len() >= 40 {
-            self.previews.clear();
+            // Make room, but never drop the picture on screen.
+            let shown = self.preview_want.borrow().as_ref().map(|(k, _)| k.clone());
+            self.previews.retain(|k, _| Some(k) == shown.as_ref());
         }
         self.previews.insert(key, p);
     }
 
-    /// Structure files worth measuring before they are asked for: every job's model, the
-    /// selected job's neighbours first, then newest first. Skips what is measured or under way.
+    /// Structure files worth measuring before they are asked for: the models of the jobs
+    /// around the selected one, nearest first, within [`PREFETCH_REACH`] on either side.
+    /// Skips what is measured or under way.
     pub fn prefetch(&self) -> Vec<PathBuf> {
         let jobs = self.jobs.visible();
         let sel = self.jobs.selected;
         let mut order: Vec<usize> = Vec::new();
-        for d in 1..=jobs.len() {
+        for d in 1..=jobs.len().min(PREFETCH_REACH) {
             if let Some(i) = sel.checked_add(d).filter(|i| *i < jobs.len()) {
                 order.push(i);
             }
@@ -1057,7 +1063,8 @@ impl App {
             return Action::None;
         }
         // Ctrl-e in the Run tab puts the next example into the sequence field.
-        if ctrl && key.code == KeyCode::Char('e') && self.tab == Tab::Run {
+        // Not while a field is being typed in, where ctrl-e is "end of line" to many hands.
+        if ctrl && key.code == KeyCode::Char('e') && self.tab == Tab::Run && !self.run.editing {
             let i = self.run.example.map_or(0, |i| (i + 1) % EXAMPLES.len());
             self.run.example = Some(i);
             let (name, seq) = EXAMPLES[i];
@@ -1451,6 +1458,33 @@ pub fn display_name(header: &str) -> String {
     }
 }
 
+/// How many jobs on each side of the selection are measured ahead: enough to scroll through
+/// without waiting, few enough that a store of hundreds of complexes is not all measured and
+/// held in memory at once.
+pub const PREFETCH_REACH: usize = 12;
+
 pub fn short_id(id: &str) -> &str {
     &id[..id.len().min(8)]
+}
+
+#[cfg(test)]
+mod find_below_tests {
+    use super::find_below;
+
+    /// Symlinked structure files and folders are listed, as the folder view lists them.
+    #[test]
+    fn symlinks_are_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::create_dir(d.join("real")).unwrap();
+        std::fs::write(d.join("real/a.pdb"), "ATOM").unwrap();
+        std::os::unix::fs::symlink(d.join("real"), d.join("linked")).unwrap();
+        std::os::unix::fs::symlink(d.join("real/a.pdb"), d.join("b.pdb")).unwrap();
+        let (mut found, n) = find_below(d, 10, true);
+        found.sort();
+        let names: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(names, ["b.pdb", "linked/a.pdb", "real/a.pdb"]);
+        assert_eq!(n, 3);
+        assert!(found.iter().all(|(_, size)| *size == 4));
+    }
 }

@@ -1611,8 +1611,8 @@
         figure = f.ipsaeMin.toFixed(3);
         figLabel = 'ipSAE min, ' + (ok ? 'above' : 'at or below') + ' the 0.61 line';
         visual = [gauge(f.ipsaeMin, ok ? role('accent') : role('warm'), 0.61)];
-        caveat = ok ? 'A prediction, not a result: of lab-tested designs above this line, 40 % bound (Overath et al. 2025).'
-          : 'Among 3 669 lab-tested designs, 40 % of those above 0.61 bound, against 11 % overall (Overath et al. 2025).';
+        caveat = ok ? 'A prediction, not a result: in Proteus\'s benchmarks, 40 % of lab-tested designs above this line bound on Overath et al. 2025\'s data and 14 % on Adaptyv\'s Nipah set.'
+          : 'In Proteus\'s benchmarks, designs above 0.61 bound at 40 % against 11 % overall (Overath et al. 2025 data) and 14 % against 9 % (Adaptyv Nipah).';
       } else {
         [glyph, word, cls] = ['–', 'Interface confidence unavailable', 'none'];
         caveat = 'No PAE beside this model, so ipSAE, ipAE and LIS cannot be computed. The geometry is under interface.';

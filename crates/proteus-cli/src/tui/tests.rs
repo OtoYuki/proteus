@@ -936,4 +936,9 @@ fn long_values_break_at_their_seams() {
         ["18.91 Å", "(×1.08 of a compact fold)"]
     );
     assert_eq!(ui::wrap_value("short", 20), ["short"]);
+    // A chain name can start the value, in any script: no slicing inside its first character.
+    assert_eq!(
+        ui::wrap_value("α-synuclein binder (A) → target (B)", 24),
+        ["α-synuclein binder", "(A) → target (B)"]
+    );
 }

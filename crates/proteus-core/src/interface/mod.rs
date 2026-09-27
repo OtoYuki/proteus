@@ -5,8 +5,9 @@
 //! evidence:
 //!
 //! - **What the predictor is sure of about the interface**, from its PAE matrix: ipAE, ipSAE
-//!   (Dunbrack 2025) and LIS (Kim et al. 2024). The strongest single predictor in the meta-analysis
-//!   was ipSAE_min.
+//!   (Dunbrack 2025) and LIS (Kim et al. 2024). In the meta-analysis, AlphaFold 3's ipSAE
+//!   outperformed ipAE and ipTM; on its data, ipSAE_min ranks each target's designs best among
+//!   the scores Proteus computes (validate/binders).
 //! - **What the model's interface looks like**: buried surface (dSASA), shape complementarity
 //!   (Sc, Lawrence & Colman 1993), residues in contact, and hydrogen bonds and salt bridges across it.
 //!
@@ -263,20 +264,15 @@ pub fn interface_metrics(
         // keep the protein residues' rows and columns.
         // Modified residues are one token per atom in AlphaFold 3 and one token in Boltz-2:
         // take whichever layout accounts for every row.
-        let protein_rows = (pae.n != residue_chain.len())
-            .then(|| {
-                [true, false]
-                    .into_iter()
-                    .map(|per_atom| crate::pae::protein_token_rows(pdb, per_atom))
-                    .find(|(n, rows)| *n == pae.n && rows.len() == residue_chain.len())
-            })
+        let layouts = (pae.n != residue_chain.len()).then(|| crate::pae::protein_token_rows(pdb));
+        let protein_rows = layouts
+            .iter()
             .flatten()
-            .and_then(|(_, rows)| {
-                pae.collapse(&rows.into_iter().map(|r| vec![r]).collect::<Vec<_>>())
-            });
+            .find(|(n, rows)| *n == pae.n && rows.len() == residue_chain.len())
+            .and_then(|(_, rows)| pae.collapse(&rows.iter().map(|&r| vec![r]).collect::<Vec<_>>()));
         let pae = protein_rows.as_ref().unwrap_or(pae);
         if pae.n != residue_chain.len() {
-            let (tokens, _) = crate::pae::protein_token_rows(pdb, true);
+            let tokens = layouts.as_ref().map_or(pae.n, |l| l[0].0);
             out.pae_note = Some(format!(
                 "the PAE matrix has {} rows, but the model has {} protein residues and {tokens} \
                  tokens (one per standard residue, one per heavy atom of anything else); it may \
