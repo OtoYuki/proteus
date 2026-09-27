@@ -8,6 +8,21 @@ All notable changes to this project are documented here. The format follows
 Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
 
 ### Added
+- `proteus analyze --interface [BINDER[:TARGET]]`: binder–target interface metrics for triaging
+  designed binders. The structure gives interface residues, buried surface (dSASA), shape
+  complementarity, and cross-interface H-bonds and salt bridges. The predictor's PAE and scores
+  files beside the model (Boltz, ColabFold, AlphaFold 3 local runs and AlphaFold Server) give
+  ipTM, ipAE, ipSAE (min and max over chain directions) and LIS. Thirteen new QC columns
+  (`qc_schema_version = 3`). With `--interface`, the table sorts by ipSAE_min.
+- Shape complementarity (Lawrence & Colman 1993), ported from sc-rs (MIT) without `unsafe`, and
+  equal to it to 1e-12 on trypsin–BPTI.
+- `make validate-binders`: the interface metrics against the Overath et al. 2025 meta-analysis
+  (3 669 designs with a lab result, Zenodo 10.5281/zenodo.15722219). On single-chain targets,
+  ipSAE and ipAE agree with the dataset's own values to its rounding. On the lab results,
+  ipSAE_min ranks binders with average precision 0.358 (random 0.107). Results are in
+  `validate/binders/last_run.md`. CI checks one Boltz-1 design from the same dataset.
+- AlphaFold 3 local-run output names (`<name>_confidences.json` beside `<name>_model.cif`, and
+  `confidences.json` beside a sample's `model.cif`) are recognised as PAE and scores files.
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
   NVIDIA CDI spec is installed; `PROTEUS_GPU=off` or a device name overrides it) and records
   the device in the prediction's metadata.

@@ -82,7 +82,7 @@ pub struct InterfaceMetrics {
     /// Hydrogen bonds with donor and acceptor on opposite sides.
     pub interface_hbonds: usize,
     pub interface_salt_bridges: usize,
-    /// Mean PAE from binder residues (aligned) to target residues (scored), Å.
+    /// Mean inter-chain PAE between binder and target residues, both directions, Å.
     pub ipae: Option<f64>,
     /// ipSAE over binder→target and target→binder chain pairs: the smallest and the largest.
     pub ipsae_min: Option<f64>,
@@ -363,11 +363,13 @@ pub fn pae_interface_metrics(
     target: &[String],
 ) -> PaeInterface {
     let is = |set: &[String], c: &str| set.iter().any(|s| s == c);
+    // Both directions: binder rows against target columns and the reverse. This is what the
+    // meta-analysis dataset holds (its af3_ipae agrees to 0.0005 Å on single-chain targets).
     let (mut sum, mut n) = (0.0, 0usize);
     for i in (0..pae.n).filter(|&i| is(binder, &chains[i])) {
         for j in (0..pae.n).filter(|&j| is(target, &chains[j])) {
-            sum += f64::from(pae.get(i, j));
-            n += 1;
+            sum += f64::from(pae.get(i, j)) + f64::from(pae.get(j, i));
+            n += 2;
         }
     }
     if n == 0 {
@@ -453,7 +455,8 @@ mod tests {
             _ => 1.0,
         });
         let p = pae_interface_metrics(&m, &chains, &["A".into()], &["B".into()]);
-        assert_eq!(p.ipae, Some(2.0));
+        // (6 pairs × 2 Å + 6 pairs × 20 Å) / 12.
+        assert_eq!(p.ipae, Some(11.0));
         // A→B: 3 valid pairs, d0 = 1.0 → 1/(1+4) = 0.2. B→A: nothing under 10 Å → 0.
         assert!((p.ipsae_max.unwrap() - 0.2).abs() < 1e-12);
         assert_eq!(p.ipsae_min, Some(0.0));

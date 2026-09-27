@@ -84,3 +84,135 @@ fn trypsin_bpti_interface() {
         .to_string();
     assert!(err.contains("no protein chain 'X'"), "{err}");
 }
+
+/// A float32 `.npy` of `shape`, as numpy writes it.
+fn npy_f32(shape: &[usize], values: &[f32]) -> Vec<u8> {
+    let dims: Vec<String> = shape.iter().map(|d| d.to_string()).collect();
+    let mut header = format!(
+        "{{'descr': '<f4', 'fortran_order': False, 'shape': ({},), }}",
+        dims.join(", ")
+    );
+    while (10 + header.len() + 1) % 64 != 0 {
+        header.push(' ');
+    }
+    header.push('\n');
+    let mut b = b"\x93NUMPY\x01\x00".to_vec();
+    b.extend((header.len() as u16).to_le_bytes());
+    b.extend(header.as_bytes());
+    for v in values {
+        b.extend(v.to_le_bytes());
+    }
+    b
+}
+
+/// A Boltz-style `pae_<model>.npz` beside the model switches the PAE columns on, and the numbers
+/// follow from the matrix: BPTI (rows 223..281) sees trypsin at 2 Å, trypsin sees BPTI at 20 Å.
+#[test]
+fn a_pae_file_beside_the_model_gives_ipsae() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("complex_model_0.pdb");
+    std::fs::copy(data("2ptc_EI.pdb"), &model).unwrap();
+    let pdb = proteus_core::io::open_structure(&model).unwrap();
+    let chains: Vec<(String, usize)> = proteus_core::io::protein_heavy_atoms(&pdb)
+        .chains()
+        .map(|c| (c.id().to_string(), c.residue_count()))
+        .collect();
+    assert_eq!(chains, vec![("E".to_string(), 223), ("I".to_string(), 58)]);
+    let n = 281;
+    let chain = |i: usize| if i < 223 { 'E' } else { 'I' };
+    let mut values = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            values.push(match (chain(i), chain(j)) {
+                ('I', 'E') => 2.0,
+                ('E', 'I') => 20.0,
+                _ => 1.0,
+            });
+        }
+    }
+    let mut zip_bytes = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut zip_bytes);
+        w.start_file("pae.npy", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut w, &npy_f32(&[n, n], &values)).unwrap();
+        w.finish().unwrap();
+    }
+    std::fs::write(
+        dir.path().join("pae_complex_model_0.npz"),
+        zip_bytes.into_inner(),
+    )
+    .unwrap();
+
+    let spec = InterfaceSpec::parse("I:E").unwrap();
+    let qc = proteus_core::qc::structure_qc_with(
+        &model,
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let i = &qc.interface;
+    // Both directions: (2 + 20) / 2 over equal numbers of pairs.
+    assert_eq!(i.ipae, Some(11.0));
+    // I→E: 223 partners under 10 Å, d0 = 1.24·208^(1/3) − 1.8; E→I: none under 10 Å.
+    let d0 = 1.24 * 208f64.cbrt() - 1.8;
+    let expected = 1.0 / (1.0 + (2.0 / d0).powi(2));
+    assert!(
+        (i.ipsae_max.unwrap() - expected).abs() < 1e-9,
+        "{:?}",
+        i.ipsae_max
+    );
+    assert_eq!(i.ipsae_min, Some(0.0));
+    assert!((i.lis.unwrap() - (10.0 / 12.0) / 2.0).abs() < 1e-6);
+    assert!(i.interface_sc.is_some() && i.interface_dsasa.is_some());
+}
+
+/// One design from the binder meta-analysis dataset, end to end: its Boltz-1 files under their
+/// original names, `structure_qc_with` finding the PAE and confidences beside the model, and the
+/// dataset's own values for this design (final_dataset.csv): boltz1_ipSAE_min 0.75,
+/// boltz1_ipSAE_max 0.804, boltz1_ipae 3.91, boltz1_iptm_model_0 0.891. It was measured as a
+/// non-binder: a confident interface is not a guarantee. `make validate-binders` does the same
+/// over the AlphaFold 3 models of all 3 669 designs.
+#[test]
+fn a_dataset_design_reproduces_the_dataset_values() {
+    use std::io::Read;
+    let name = "ems_3hC_1044_0001_000000014_0001";
+    let dir = tempfile::tempdir().unwrap();
+    let src = data("binders");
+    let model = dir.path().join(format!("{name}_model_0.cif"));
+    let mut text = Vec::new();
+    flate2::read::GzDecoder::new(
+        &std::fs::read(src.join(format!("{name}_model_0.cif.gz"))).unwrap()[..],
+    )
+    .read_to_end(&mut text)
+    .unwrap();
+    std::fs::write(&model, text).unwrap();
+    for f in [
+        format!("pae_{name}_model_0.npz"),
+        format!("confidence_{name}_model_0.json"),
+    ] {
+        std::fs::copy(src.join(&f), dir.path().join(&f)).unwrap();
+    }
+    let spec = InterfaceSpec::parse("A").unwrap();
+    let qc = proteus_core::qc::structure_qc_with(
+        &model,
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let i = &qc.interface;
+    assert_eq!(i.interface_target.as_deref(), Some("B"));
+    let near = |ours: Option<f64>, theirs: f64, tol: f64| {
+        let v = ours.unwrap();
+        assert!((v - theirs).abs() <= tol, "{v} vs {theirs}");
+    };
+    // The CSV rounds to three decimals.
+    near(i.ipsae_min, 0.75, 0.0006);
+    near(i.ipsae_max, 0.804, 0.0006);
+    near(i.ipae, 3.91, 0.0006);
+    near(i.iptm, 0.891, 0.0006);
+}

@@ -106,7 +106,7 @@ pub struct InterfaceColumns {
     pub interface_salt_bridges: Option<usize>,
     /// The predictor's own ipTM, from the scores file next to the model.
     pub iptm: Option<f64>,
-    /// Mean PAE from binder to target residues, Å.
+    /// Mean inter-chain PAE between binder and target, both directions, Å.
     pub ipae: Option<f64>,
     /// ipSAE (10 Å PAE cutoff), smallest and largest over binder↔target chain directions.
     pub ipsae_min: Option<f64>,
