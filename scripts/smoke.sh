@@ -62,6 +62,17 @@ check "csv header" grep -q '^file,model,n_chains,n_residues,sequence,' "$WORK/qc
 check "analyze --json" bash -c "'$BIN' analyze '$WORK/models/a.pdb' --json 2>/dev/null"
 expect "json line carries the crambin sequence" '"sequence":"TTCCPSIVARSNFNVCRLPGTPEAICATYTGCIIIPGATCPGDYAN"'
 expect "json: no pLDDT for an X-ray structure" '"plddt_mean":null'
+
+# --- analyze --interface: a binder–target complex (BPTI, chain I, on trypsin, chain E)
+CPLX="$ROOT/crates/proteus-core/tests/data/2ptc_EI.pdb"
+check "analyze --interface" bash -c "'$BIN' analyze '$CPLX' --interface I:E --json 2>/dev/null"
+expect "interface columns filled" '"interface_binder":"I","interface_target":"E"'
+expect "shape complementarity measured" '"interface_sc":0\.7[0-9]'
+expect "no PAE beside an X-ray structure, so no ipSAE" '"ipsae_min":null'
+check "the interface table" "$BIN" analyze "$CPLX" --interface I:E
+expect "…sorted by buried surface when there is no PAE" 'sorted by dSASA'
+check "a chain that is not there" bash -c "'$BIN' analyze '$CPLX' --interface X 2>&1; true"
+expect "…is named" "no protein chain 'X'"
 check "a bad file fails the run but not the others" bash -c "! '$BIN' analyze '$WORK/models' '$FASTA' --export '$WORK/qc2.json' 2>'$WORK/err'"
 check "…and the good rows are still written" grep -q '"model": "a"' "$WORK/qc2.json"
 check "…and the failure is named" grep -q 'failed: .*1crn.fasta' "$WORK/err"

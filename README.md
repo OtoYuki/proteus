@@ -14,17 +14,20 @@
 [![MSRV 1.94](https://img.shields.io/badge/MSRV-1.94-blue)](Cargo.toml)
 [![license MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
 
-**The protein-engineering design loop as one binary, with a GA4GH TES server in it.**
+**Triage for protein design campaigns: which of your models deserve a GPU-hour, a wet-lab slot
+or a closer look. One binary, no Python, no Rosetta licence, and every number that has a reference
+implementation is checked against it.**
 
-Every stage of that loop already has a good tool. Boltz folds, mdtraj and FreeSASA measure,
-PyMOL draws. What is usually missing is the seam between them: the glue that carries a scaffold
-through mutagenesis, folding, all-atom validation, ranking and a columnar dataset without a pile
-of one-off Python that nobody keeps. Proteus is that seam.
+A binder or design campaign ends with thousands of predicted models. Choosing among them usually
+means a local script over Biopython, mdtraj, FreeSASA and PyRosetta: a licence to buy for
+commercial use, an environment to keep alive, and numbers that are rarely compared with anything.
 
-It does two things the tools it sits between mostly do not. It refuses to rank a structure it
-could not really predict, and every number it prints that has an independent implementation
-elsewhere is compared against that implementation on every push — the numbers that have none
-are listed as such rather than left to look validated.
+`proteus analyze` measures every model in a folder in parallel and writes one row per model to
+Parquet, CSV or JSON. It covers confidence, secondary structure, MolProbity's geometry checks,
+contacts and, for complexes, the binder–target interface. Every measurement that has a
+reference implementation is checked against it on every push: mdtraj, cctbx (MolProbity),
+FreeSASA, PLIP and sc-rs. The interface metrics are also checked against a published dataset of 3 669 designs whose
+binding was measured in the lab. Numbers that have no reference are labelled as unchecked.
 
 <p align="center">
   <img src="docs/media/web-1pgb.jpg" width="880"
@@ -38,41 +41,68 @@ HTML file.</sub></p>
 
 ```bash
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
-./proteus analyze model.pdb                          # every measurement, one structure
-./proteus view model.pdb --interactive --dashboard   # the 3-D viewer, in the terminal
-./proteus view model.pdb --web                       # the same, in a browser
-./proteus                                            # the home screen: jobs, files, forms
+./proteus analyze boltz_results/ --interface A --export triage.parquet  # a binder campaign, one row per model
+./proteus analyze models/ --export qc.parquet                           # any folder of predicted models
+./proteus analyze model.pdb                                             # every measurement, one structure
+./proteus view model.pdb --web                                          # look at it, in a browser or the terminal
 ```
 
 Other platforms, `cargo install` and the container image are under [Install](#install).
 
 ---
 
-## 1. Mutate, fold, rank, export
-
-![alanine scan of protein G piped into the screening funnel, producing a ranked leaderboard](docs/media/loop.gif)
+## 1. Triage a binder campaign
 
 ```bash
-proteus mutate wt.fasta --mode alanine --start 24 --end 29 \
-  | proteus screen - --runner esm-api --top 5 --export library.parquet
+proteus analyze boltz_results/ --interface A:B --export triage.parquet
 ```
 
-One pipe, no intermediate files. `mutate` writes a variant library (alanine scan or full
-site-saturation); `screen -` reads it from stdin, folds each variant, runs the whole biophysics
-stack on the result and ranks them.
+`--interface` names the binder and the target: `A:B`, `H,L:A` for a two-chain binder, or `A` for
+chain A against every other chain. For every model it adds two groups of columns.
 
-The ranking is a triage filter, not a fitness predictor. It is checked on one thing only — that
-a folded structure outranks a broken one (40/40 native-vs-decoy pairs, in `make validate`) — and
-it is not validated against experimental stability or activity. For a sequence-level signal use
-`--scorer esm2`, which ranks by ESM-2 likelihood instead, or `--scorer hybrid` for both.
+- **From the structure:** interface residues on each side (heavy atoms within 4 Å, BindCraft's
+  cutoff), buried surface (dSASA), shape complementarity (Sc, Lawrence & Colman 1993), and
+  hydrogen bonds and salt bridges across the interface.
+- **From the predictor's own files beside the model:** ipTM, ipAE, ipSAE and LIS. Proteus reads
+  Boltz, ColabFold, AlphaFold 3 (local runs and the AlphaFold Server) and AlphaFold DB files. ipSAE
+  (Dunbrack 2025) is the pTM-style score over only the residue pairs the predictor is confident
+  about. It is reported both ways round, binder→target and target→binder, and `ipsae_min` is the
+  smaller of the two.
 
-Structures the offline simulator produced are tagged `engine = simulated` and kept out of the
-leaderboard unless you pass `--runner simulated`. A tier that silently fell back tells you which
-tier you asked for and why it could not honour it. Every export row carries the `engine` column;
-the Parquet file is tagged `proteus.schema_version = 5` and reads directly into DuckDB, Polars
-or PyArrow.
+The terminal table sorts by `ipsae_min`, the export has every column, and the rest of the
+per-model QC (section 2) comes with it.
 
-## 2. Triage a folder of predicted models
+**What these numbers are worth**, measured on the 3 669 designs in the Overath et al. 2025
+meta-analysis whose binding was tested in the lab (394 bound). Scores are average precision
+over the AlphaFold 3 models (`make validate-binders`); a random ranking scores 0.107.
+
+| ranked by | AP | |
+|---|---|---|
+| `ipsae_min` | **0.358** | the dataset's own ipSAE_min: 0.350 |
+| `lis` | 0.313 | |
+| `ipae` (lower first) | 0.298 | |
+| `interface_sc` | 0.267 | the dataset's Rosetta Sc: 0.178 |
+| `iptm` | 0.236 | |
+| `plddt_mean` | 0.208 | |
+
+Keeping `ipsae_min > 0.61`, the paper's threshold, keeps 509 of the 3 669 designs. 203 of those
+bound: 40 % of what you would send to the lab, against 11 % unfiltered, and half of all the binders.
+
+```sql
+-- duckdb: the confident interfaces, chemically sound, best first
+SELECT model, ipsae_min, iptm, interface_sc, interface_dsasa, bond_outliers
+FROM 'triage.parquet'
+WHERE ipsae_min > 0.61 AND interface_sc > 0.6 AND handedness_swaps = 0
+ORDER BY ipsae_min DESC;
+```
+
+On single-chain targets, ipTM, ipSAE and ipAE agree with the dataset's own values to its
+three-decimal rounding (p99 |Δ| 0.0018). Sc is ported from sc-rs and equal to it to 1e-12.
+Rosetta's interface ΔG, packstat and unsatisfied hydrogen bonds need an energy function and
+explicit hydrogens, and are not computed. The differences from the dataset, and why they exist,
+are in [`validate/binders/`](validate/binders/last_run.md).
+
+## 2. Triage any folder of predicted models
 
 ```bash
 proteus analyze models/ --export qc.parquet          # every .pdb/.cif(.gz) below models/
@@ -90,7 +120,7 @@ parallel and written as Parquet, CSV or JSON.
 The covalent-geometry columns are MolProbity's checks as Phenix runs them: bond-length and
 bond-angle RMSZ and outliers against the Phenix restraint library (geostd, with the backbone
 from the Conformation-Dependent Library), chirality and planarity, Cβ deviation, cis and
-twisted peptides, and Top8000 rotamers. They reproduce cctbx residue by residue (section 4).
+twisted peptides, and Top8000 rotamers. They reproduce cctbx residue by residue (section 3).
 They answer a question pLDDT does not: whether the model is chemically sound. ESMFold, like
 every AlphaFold2-style structure module, learns the peptide bond and returns the model
 unrelaxed. Every one of 13 ESMFold models in the corpus has bond-length outliers, mostly short
@@ -110,10 +140,51 @@ ORDER BY fitness DESC;
 A file that cannot be read is named on stderr and makes the exit status non-zero, but does not
 stop the rest. pLDDT is read from the B-factor column and rescaled when a predictor wrote it on
 0–1 (ESMFold); on three AlphaFold DB models the per-structure mean matches the database's own
-`globalMetricValue` to 0.01. 1 000 models of 76–142 residues take 23 s on one thread and 3.5 s
-on 16 (i7-11800H laptop, 8 cores; `-j` sets the thread count).
+`globalMetricValue` to 0.01. 1 000 models of 76–142 residues take 39 s on one thread and 6 s on 16 (i7-11800H laptop, 8
+cores; `-j` sets the thread count). With `--interface`, the 3 669 AlphaFold 3 complexes of the
+binder dataset take about 3.5 minutes on 16 threads.
 
-## 3. Look at it, over SSH
+## 3. Check every number against someone else's implementation
+
+![make validate comparing 53 structure files against mdtraj, FreeSASA, cctbx and PLIP](docs/media/validate.gif)
+
+```bash
+make validate     # 53 files, 48 entries: X-ray, NMR, cryo-EM, AlphaFold DB; PDB and mmCIF
+```
+
+This runs on every push (`.github/workflows/validate.yml`). Tolerances are the contract, in
+`validate/tolerances.toml`; the full table for the last run lands in `validate/last_run.md`.
+
+| what | reference | result |
+|---|---|---|
+| φ/ψ, Cα radius of gyration | mdtraj | every angle within 0.1°, Rg within 0.01 Å |
+| Kabsch–Sander DSSP (`proteus-dssp`) | mdtraj | 99.6 % of 30 335 residues on eight states, 99.96 % on three; worst non-exempt file 97.8 % |
+| MolProbity Ramachandran (Top8000 contours) | cctbx `ramalyze` | 100 % label agreement (collagen 1CAG has no reference: cctbx classifies none of its residues) |
+| Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii), two documented exceptions |
+| hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–79 % — heavy-atom criteria over-detect by 1.3–1.7× |
+| salt bridges, π–π stacking, cation–π | PLIP, intra-chain, 15 structures | salt bridges **97.7 %** precision / 72 % recall; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %** |
+| covalent geometry: bonds, angles, chirality, planarity (Phenix restraint library) | cctbx `pdb_interpretation` + `mmtbx.validation.restraints`, 53 corpus files and 13 ESMFold models | every restraint count and every > 4σ outlier identical; RMSZ within 5e-6 |
+| Cβ deviation, cis/twisted peptides | cctbx `cbetadev`, `omegalyze` | every residue: Cβ within 0.001 Å, ω within 0.01°, flags identical |
+| side-chain rotamers (Top8000) | cctbx `rotalyze` | 26 469 of 26 469 residues identical (χ within 5e-4°, percentile within 5e-5) |
+| shape complementarity | sc-rs (the code it is ported from), trypsin–BPTI | equal to 1e-12 |
+| ipTM, ipSAE, ipAE on AlphaFold 3 models | the Overath et al. dataset's own values, 3 532 single-chain designs (`make validate-binders`, local) | ipTM identical; ipSAE and ipAE p99 \|Δ\| ≤ 0.0018 |
+| dSASA, interface H-bonds, interface residues | the dataset's Rosetta values | Pearson r 0.96, 0.77, 0.95 (different definitions; correlation, not parity) |
+| heavy-atom steric overlap | none exists with these definitions | labelled as ours, not compared |
+| Kabsch RMSD, contact density, burial, triage score | none | unit-tested only; the score is checked against decoys (40/40), not against experiment |
+
+Precision sits next to recall even where precision is the unflattering number. The salt-bridge
+cutoff is deliberately stricter than PLIP's (4.0 Å atom-to-atom against 5.5 Å centre-to-centre),
+so reporting a subset of PLIP's is the intent; 97.7 % precision is the evidence that it is the
+right subset. Where a per-structure divergence is real and understood it is recorded in
+`validate/tolerances.toml` with a written reason and printed on every run, rather than hidden by
+widening a global tolerance.
+
+Adopting each of these references found something internal testing had not. PLIP found π–π
+stacking over-reported 5× for want of a lateral-offset test. Growing the corpus found the
+comparison harness itself silently collapsing insertion codes, so residues 52 and 52A were being
+compared as one.
+
+## 4. Look at it, over SSH
 
 ![the interactive terminal viewer with a live Ramachandran plot and biophysical telemetry](docs/media/view.gif)
 
@@ -171,44 +242,31 @@ it works offline and can be attached to a report.
   </tr>
 </table>
 
-## 4. Check every number against someone else's implementation
+## 5. Make the models: mutate, fold, rank
 
-![make validate comparing 53 structure files against mdtraj, FreeSASA, cctbx and PLIP](docs/media/validate.gif)
+![alanine scan of protein G piped into the screening funnel, producing a ranked leaderboard](docs/media/loop.gif)
 
 ```bash
-make validate     # 53 files, 48 entries: X-ray, NMR, cryo-EM, AlphaFold DB; PDB and mmCIF
+proteus mutate wt.fasta --mode alanine --start 24 --end 29 \
+  | proteus screen - --runner esm-api --top 5 --export library.parquet
 ```
 
-This runs on every push (`.github/workflows/validate.yml`). Tolerances are the contract, in
-`validate/tolerances.toml`; the full table for the last run lands in `validate/last_run.md`.
+One pipe, no intermediate files. `mutate` writes a variant library (alanine scan or full
+site-saturation); `screen -` reads it from stdin, folds each variant, runs the whole biophysics
+stack on the result and ranks them.
 
-| what | reference | result |
-|---|---|---|
-| φ/ψ, Cα radius of gyration | mdtraj | every angle within 0.1°, Rg within 0.01 Å |
-| Kabsch–Sander DSSP (`proteus-dssp`) | mdtraj | 99.6 % of 30 335 residues on eight states, 99.96 % on three; worst non-exempt file 97.8 % |
-| MolProbity Ramachandran (Top8000 contours) | cctbx `ramalyze` | 100 % label agreement (collagen 1CAG has no reference: cctbx classifies none of its residues) |
-| Shrake–Rupley SASA (Bondi radii, 960 pts) | mdtraj, FreeSASA | ≤ 1 % vs mdtraj, ≤ 4 % vs FreeSASA (L&R, ProtOr radii), two documented exceptions |
-| hydrogen-bond network | mdtraj `baker_hubbard`, six NMR entries with explicit H | recall 86–100 %, precision 58–79 % — heavy-atom criteria over-detect by 1.3–1.7× |
-| salt bridges, π–π stacking, cation–π | PLIP, intra-chain, 15 structures | salt bridges **97.7 %** precision / 72 % recall; π–π **81.8 / 81.8 %**; cation–π **73.9 / 65.4 %** |
-| covalent geometry: bonds, angles, chirality, planarity (Phenix restraint library) | cctbx `pdb_interpretation` + `mmtbx.validation.restraints`, 53 corpus files and 13 ESMFold models | every restraint count and every > 4σ outlier identical; RMSZ within 5e-6 |
-| Cβ deviation, cis/twisted peptides | cctbx `cbetadev`, `omegalyze` | every residue: Cβ within 0.001 Å, ω within 0.01°, flags identical |
-| side-chain rotamers (Top8000) | cctbx `rotalyze` | 26 469 of 26 469 residues identical (χ within 5e-4°, percentile within 5e-5) |
-| heavy-atom steric overlap | none exists with these definitions | labelled as ours, not compared |
-| Kabsch RMSD, contact density, burial, triage score | none | unit-tested only; the score is checked against decoys (40/40), not against experiment |
+The ranking is a triage filter, not a fitness predictor. It is checked on one thing only — that
+a folded structure outranks a broken one (40/40 native-vs-decoy pairs, in `make validate`) — and
+it is not validated against experimental stability or activity. For a sequence-level signal use
+`--scorer esm2`, which ranks by ESM-2 likelihood instead, or `--scorer hybrid` for both.
 
-Precision sits next to recall even where precision is the unflattering number. The salt-bridge
-cutoff is deliberately stricter than PLIP's (4.0 Å atom-to-atom against 5.5 Å centre-to-centre),
-so reporting a subset of PLIP's is the intent; 97.7 % precision is the evidence that it is the
-right subset. Where a per-structure divergence is real and understood it is recorded in
-`validate/tolerances.toml` with a written reason and printed on every run, rather than hidden by
-widening a global tolerance.
+Structures the offline simulator produced are tagged `engine = simulated` and kept out of the
+leaderboard unless you pass `--runner simulated`. A tier that silently fell back tells you which
+tier you asked for and why it could not honour it. Every export row carries the `engine` column;
+the Parquet file is tagged `proteus.schema_version = 5` and reads directly into DuckDB, Polars
+or PyArrow.
 
-Adopting each of these references found something internal testing had not. PLIP found π–π
-stacking over-reported 5× for want of a lateral-offset test. Growing the corpus found the
-comparison harness itself silently collapsing insertion codes, so residues 52 and 52A were being
-compared as one.
-
-## 5. Drive it from a workflow engine
+## 6. Drive it from a workflow engine
 
 ![Nextflow running a scatter-gather pipeline against the Proteus TES server](docs/media/tes.gif)
 
@@ -249,6 +307,9 @@ Proteus is not the only Rust implementation of any one of its parts.
 | structure prediction and design **inside the binary** (ESMFold, ProteinMPNN, RFdiffusion2 on CPU) | [folding-everywhere](https://github.com/lingxusb/folding-everywhere). Proteus dispatches prediction to containers and APIs instead |
 | a terminal viewer with iTerm2 support and more polish | [ProteinView](https://github.com/001TMF/ProteinView) |
 | interactive analysis in a browser | [Mol\*](https://molstar.org), which Proteus does not try to replace |
+| to **design** binders (hallucination, filters, relaxation) | [BindCraft](https://github.com/martinpacesa/BindCraft), or [FreeBindCraft](https://github.com/cytokineking/FreeBindCraft) without PyRosetta. Proteus scores what they, or RFdiffusion and BoltzGen pipelines, produce |
+| the reference ipSAE implementation, pDockQ and per-residue output | [`ipsae.py`](https://github.com/DunbrackLab/IPSAE) (Dunbrack lab), which Proteus follows |
+| Rosetta interface energies (ΔG, packstat, buried unsatisfied H-bonds) | PyRosetta's InterfaceAnalyzer |
 | a full validation report with the all-atom **clashscore** (Reduce hydrogens + Probe) | [MolProbity](https://molprobity.biochem.duke.edu) or `phenix.molprobity`. Proteus reproduces MolProbity's covalent-geometry, Cβ, ω and rotamer checks, not its all-atom contacts |
 
 **What this is not.** Not a folding engine — it orchestrates ESMFold and Boltz rather than
@@ -258,9 +319,9 @@ ChimeraX for interactive analysis. The terminal viewer is not unusual any more: 
 [StrucTTY](https://github.com/steineggerlab/StrucTTY) and
 [pixelfold](https://github.com/fuyu-myk/pixelfold) all render structures in a terminal.
 
-What is actually unoccupied is narrower than any of those: the whole loop in one binary that
-runs against a local container socket, with every number that has an independent
-implementation elsewhere checked against it on every push.
+What Proteus adds is narrower than any of those. It puts the measurements a design campaign
+filters on into one binary with no Python and no Rosetta. It checks each of them against the
+implementation that defines it, and it measures the interface ranking against lab results.
 
 ## Speed
 
@@ -347,6 +408,14 @@ All-atom, pure Rust, O(N) through spatial cell lists.
 - **Rotamers** — the seventeen Top8000 χ-angle distributions, outlier below 0.3 %, allowed below
   2 %, with rotamer names, as MolProbity's rotalyze.
 - **Superposition** — Kabsch, via SVD on the 3×3 covariance matrix (`nalgebra`).
+- **Interfaces** (`--interface`):
+  - contacts: heavy atoms within 4 Å;
+  - dSASA: the two sides' SASA minus the complex's, same Shrake–Rupley settings;
+  - shape complementarity: Lawrence & Colman's Sc over Connolly surfaces with a 1.7 Å probe,
+    15 dots/Å², a 1.5 Å peripheral band and w = 0.5 Å⁻², ported from sc-rs;
+  - H-bonds and salt bridges whose two ends are on opposite sides;
+  - from the PAE: ipAE, the mean inter-chain PAE over both directions; ipSAE and LIS as in
+    `ipsae.py`.
 
 ## ESM-2, in pure Rust
 
@@ -537,12 +606,26 @@ proteus analyze structure.pdb                          # the full report, below
 proteus analyze models/ --export qc.parquet            # one row per file: .parquet, .csv, .json
 proteus analyze a.pdb b.cif.gz --json                  # JSON Lines on stdout
 proteus analyze models/ --reference wt.pdb -j 8 --top 50
+proteus analyze boltz_results/ --interface A:B --export triage.parquet   # binder–target interface
 ```
 
 Directories are searched recursively for `.pdb`, `.ent`, `.cif` and `.mmcif`, each optionally
 gzipped. `--confidence-source predicted|experimental` overrides the pLDDT-vs-B-factor detection.
-The Parquet file is tagged `proteus.qc_schema_version = 2` (2 added the eleven covalent-geometry
-columns).
+The Parquet file is tagged `proteus.qc_schema_version = 3`. Version 2 added the eleven
+covalent-geometry columns, and 3 added the thirteen interface columns, which are empty without
+`--interface`.
+
+`--interface BINDER[:TARGET]` measures a binder–target interface (section 1). Without a value it
+takes the first chain against the rest. The PAE and scores files are found beside each model:
+
+- Boltz: `pae_<model>.npz` and `confidence_<model>.json`.
+- ColabFold: `<name>_scores_rank_….json`.
+- AlphaFold 3 run locally: `<name>_confidences.json` and `<name>_summary_confidences.json`
+  beside `<name>_model.cif`, or `confidences.json` beside a sample's `model.cif`.
+- AlphaFold Server: `<name>_full_data_<k>.json`.
+
+The PAE metrics need one PAE row per protein residue in file order. When a matrix does not fit
+the model, for example because it has ligand tokens, those columns stay empty.
 
 1CRN (crambin). It is an X-ray structure, so no pLDDT is reported — the B-factor column is not
 a confidence and Proteus will not pretend it is. The ten worst covalent-geometry outliers follow
@@ -705,6 +788,20 @@ the modelled CB to the mean of two ideal CB positions built from N, CA, C.
 - **Cation–π:**
   $$d(\text{cation}, \mathbf{c}) \le 6.0\,\text{Å}, \quad \cos\alpha = \frac{|\mathbf{n} \cdot (\mathbf{r}_{\text{cat}} - \mathbf{c})|}{\|\mathbf{r}_{\text{cat}} - \mathbf{c}\|} \ge \frac{1}{\sqrt{2}}$$
 
+### ipSAE
+
+For an ordered chain pair (aligned chain $A$, scored chain $B$) and a residue $i \in A$, let
+$V_i = \{\, j \in B : \text{PAE}_{ij} < 10\,\text{Å} \,\}$ and $n_i = |V_i|$:
+
+$$d_0(n) = \max\!\left(1,\; 1.24\,\sqrt[3]{\max(n, 26) - 15} - 1.8\right)$$
+
+$$\text{ipSAE}_{A \to B} = \max_{i \in A} \; \frac{1}{n_i} \sum_{j \in V_i} \frac{1}{1 + \left(\text{PAE}_{ij} / d_0(n_i)\right)^2}$$
+
+`ipsae_min` and `ipsae_max` are the smaller and larger of $A \to B$ and $B \to A$ over every
+binder–target chain pair. A direction with no pair under 10 Å scores 0. LIS is the mean of
+$(12 - \text{PAE}_{ij})/12$ over the inter-chain pairs under 12 Å, averaged over the two
+directions.
+
 ### Composite fitness score
 
 $$S_{\text{fitness}} = 0.30 \cdot \text{pLDDT} + 0.20 \cdot S_{\text{compactness}} + 0.15 \cdot f_{\text{favored}} + 0.15 \cdot f_{\text{burial}} + 0.20 \cdot B_{\text{network}} - P_{\text{clash}}$$
@@ -736,10 +833,13 @@ Where no reference implementation exists the table above says so on the row rath
 implying more validation than there is.
 `scripts/smoke.sh` exercises every command and the daemon end to end; the GA4GH TES compliance
 suite runs against the daemon in CI; the ESM-2 implementation (8M checkpoint) is checked against
-`transformers` reference logits on every push.
+`transformers` reference logits on every push. `make validate-binders` checks the interface
+metrics against a published dataset of 3 669 designs and their lab results. It downloads about
+2 GB, so it runs locally rather than in CI, and its last result is committed in
+[`validate/binders/last_run.md`](validate/binders/last_run.md).
 
 That does not make the code good. It makes the claims falsifiable by a stranger in one command,
-which is the part that matters when nobody is going to audit 18 000 lines by eye.
+which is the part that matters when nobody is going to audit 43 000 lines of Rust by eye.
 
 The Python/Django/Celery undergraduate thesis prototype this grew out of (2025) is preserved
 under the git tag `v0.1.0-thesis`. Everything at the repository root is Rust.

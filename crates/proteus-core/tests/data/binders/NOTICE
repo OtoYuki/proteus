@@ -1,0 +1,7 @@
+ems_3hC_1044_0001_000000014_0001: the Boltz-1 top model (model_0) of this design, its PAE
+(pae_…_model_0.npz) and confidences (confidence_…_model_0.json); the model is gzipped, the rest is
+as distributed. The design was measured as a non-binder of FGFR2 despite a confident predicted
+interface. From the dataset of Overath, Rygaard, Jacobsen, Brasas, Morell, Sormanni and Jenkins,
+"Predicting Experimental Success in De Novo Binder Design: A Meta-Analysis of 3,766 Experimentally
+Characterised Binders" (bioRxiv 2025.08.14.670059), Zenodo 10.5281/zenodo.15722219, licensed
+CC-BY-4.0 (https://creativecommons.org/licenses/by/4.0/). Boltz-1 is MIT-licensed.

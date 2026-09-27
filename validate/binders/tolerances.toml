@@ -1,0 +1,67 @@
+# Gates for `make validate-binders` (validate/binders/compare.py).
+
+# PAE-derived metrics against the dataset's values, on single-chain targets. The dataset's CSV
+# rounds to three decimals, so 0.0005 is the floor of any agreement.
+[parity.iptm]
+ours = "iptm"
+dataset = "af3_iptm_model_0"
+p99_abs = 0.001
+
+[parity.ipsae_max]
+ours = "ipsae_max"
+dataset = "af3_ipSAE_max"
+p99_abs = 0.005
+
+[parity.ipsae_min]
+ours = "ipsae_min"
+dataset = "af3_ipSAE_min"
+p99_abs = 0.005
+only_positive = true
+
+[parity.ipae]
+ours = "ipae"
+dataset = "af3_ipae"
+p99_abs = 0.005
+
+[parity.lis]
+ours = "lis"
+dataset = "af3_LIS"
+p99_abs = 0.15
+
+
+# Structure-based metrics against the dataset's Rosetta values, as correlation floors.
+[agreement.dsasa]
+ours = "interface_dsasa"
+dataset = "af3_rosetta_interface_dSASA"
+min_pearson = 0.95
+
+[agreement.sc]
+ours = "interface_sc"
+dataset = "af3_rosetta_interface_sc"
+min_pearson = 0.5
+
+[agreement.hbonds]
+ours = "interface_hbonds"
+dataset = "af3_rosetta_interface_interface_hbonds"
+min_pearson = 0.7
+
+[agreement.binder_residues]
+ours = "interface_binder_residues"
+dataset = "af3_rosetta_interface_nres_binder"
+min_pearson = 0.9
+
+
+[outcome]
+ipsae_min_threshold = 0.61
+
+[notes]
+parity = [
+    "ipSAE follows the current `ipsae.py` (DunbrackLab, which since 2026-01-03 floors d0's residue count at 26). The dataset was made in 2025 with the earlier floor of 27, which only moves low-confidence values; with 27, our formula reproduces the dataset to its rounding (checked on 30 designs, max |Δ| 0.0005).",
+    "Where one direction has no PAE under 10 Å, `ipsae.py` scores that direction 0 and so does Proteus's ipSAE_min; the dataset's ipSAE_min instead takes the other direction. Such designs have no confident interface in either direction (every one has ipSAE_max below 0.02), so under either definition they sit at the bottom of an ipSAE ranking.",
+    "LIS is `ipsae.py`'s reported value: the mean of the two directions, over PAE < 12 Å. The dataset holds one direction of an earlier version (PAE ≤ 12 Å), and which direction varies by design; so LIS is gated loosely, as a regression floor, not as parity.",
+    "Multi-chain targets (pMHC, 131 designs) are left out of parity: the paper does not say how ipSAE and ipAE aggregate over several target chains, and our reading (min/max over binder↔chain directions) does not reproduce its values.",
+]
+agreement = [
+    "Shape complementarity is a port of sc-rs, checked against it to 1e-12 (crates/proteus-core/tests/interface.rs); FreeBindCraft's README describes sc-rs's values as nearly identical to PyRosetta's. The dataset's Rosetta Sc was computed with a protocol adapted from BindCraft whose details (relaxation before scoring, in particular) are not published, and correlates only moderately with Sc on the raw AF3 model.",
+    "Rosetta counts H-bonds from its energy function with explicit hydrogens; Proteus uses heavy-atom geometry. dSASA uses different radii and probe conventions. Interface residues: Proteus counts heavy atoms within 4 Å (BindCraft's hotspot cutoff), Rosetta's InterfaceAnalyzer uses its own definition.",
+]

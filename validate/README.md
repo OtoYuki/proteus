@@ -141,6 +141,45 @@ peptide bond and does not relax the model. 4HHB (1984) accounts for most X-ray o
 including the only inverted Thr Cβ centres; the one inverted centre in a predicted model is an
 Ile Cβ of AF-P00533 at pLDDT 46.
 
+## Binder triage against wet-lab outcomes (`make validate-binders`)
+
+`analyze --interface` is checked against the dataset of Overath et al. (2025), *Predicting
+Experimental Success in De Novo Binder Design* (bioRxiv 2025.08.14.670059; Zenodo
+10.5281/zenodo.15722219, CC-BY-4.0). The dataset has one row per tested design across 15
+targets. It records the lab result, the authors' AlphaFold 3, Boltz-1 and ColabFold confidence
+metrics, and Rosetta interface metrics. The released CSV has 3 676 rows (3 669 with an AF3 model
+and a result, 394 of them binders); the paper's title and abstract say 3 766 designs and 436
+binders.
+
+`make validate-binders` downloads the CSV and the AlphaFold 3 archive (~2 GB, md5-checked) into
+`~/.cache/proteus-validate/binders`. It runs `proteus analyze --interface A` over the top-ranked
+AF3 model of every design and writes `binders/last_run.md`. Gates are in
+`binders/tolerances.toml`. It takes about four minutes on 16 threads and is **not run in CI**
+because of the download. CI runs one Boltz-1 design from the same dataset instead
+(`crates/proteus-core/tests/interface.rs`). AlphaFold 3 outputs carry Google's non-commercial
+output terms, so none are committed to this repository.
+
+| what | compared with | result (last run) |
+|---|---|---|
+| ipTM | the AF3 scores file, via the dataset | identical |
+| ipSAE max / min (single-chain targets) | dataset `af3_ipSAE_*` | p99 \|Δ\| 0.0018 / 0.0018 (CSV rounds to 0.001; min over the 3 138 designs where both directions are scored) |
+| ipAE | dataset `af3_ipae` | p99 \|Δ\| 0.0005 |
+| ipSAE, ipAE, ipTM on Boltz-1 | dataset `boltz1_*`, the 96 single-chain designs at the head of the Boltz archive (checked once, by hand) | ipAE and ipTM max \|Δ\| 0.0005; ipSAE max \|Δ\| 0.010 |
+| dSASA, interface H-bonds, interface residues | dataset Rosetta values | Pearson r 0.96, 0.77, 0.95 |
+| shape complementarity | sc-rs (the code it was ported from) | 1e-12 on 2PTC |
+| shape complementarity | dataset Rosetta Sc | Pearson r 0.57 (protocol not published; see `last_run.md`) |
+
+What the metrics are worth, measured on the lab results (average precision; random = 0.107):
+ipSAE_min 0.358 (the dataset's own AF3 ipSAE_min: 0.350), LIS 0.313, −ipAE 0.298, Sc 0.267 (the
+dataset's Rosetta Sc: 0.178), ipTM 0.236, mean pLDDT 0.208. Keeping `ipsae_min > 0.61`, the paper's
+threshold, keeps 509 of 3 669 designs, of which 203 bound (precision 0.40, recall 0.52).
+
+Known differences, each explained in `binders/tolerances.toml`:
+- the d0 floor changed in `ipsae.py` after the dataset was made;
+- a direction with no PAE under 10 Å is scored 0 here and skipped there;
+- the dataset's LIS comes from an older version;
+- multi-chain targets aggregate differently, and the paper does not say how it did it.
+
 ## Corpus
 
 `corpus.toml` lists 53 files of 48 structures (~65 MB): 27 X-ray PDB files, 5 of them also as
