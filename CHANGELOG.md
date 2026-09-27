@@ -102,6 +102,16 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- New lighting in both renderers (the browser shader and the terminal's CPU pipeline, kept
+  identical):
+  - a wrap-lit key light with a soft terminator;
+  - a sky-to-ground hemispheric ambient;
+  - a cream specular and a rim light, added rather than multiplied, so lit faces keep their
+    true colour and silhouettes lift off the dark ground;
+  - lighter depth cueing (background at 70 %, was 55 %) and gentler occlusion (floor 0.62).
+- The viewers title a job by its sequence name and short id instead of its full UUID.
+- The home screen's header counts jobs by state (running, queued, done, failed), each as a
+  glyph and a word.
 - A model that is confident everywhere (≥ 95 % of residues at pLDDT ≥ 90) opens coloured by
   secondary structure in both viewers, with a note; in pLDDT colours it is one flat blue.
 - Interface colours are brighter: every body colour is at least 3:1 against the ground, as a

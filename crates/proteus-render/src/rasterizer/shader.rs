@@ -236,28 +236,35 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> ColorRGB {
 
 /// Shade a surface point with Blinn-Phong lighting model (key light + fill light + ambient)
 pub fn shade_blinn_phong(base_color: ColorRGB, normal: Vector3<f32>) -> ColorRGB {
+    // The browser page's GEOM_FS, on the CPU: a wrap-lit key light (soft terminator), a
+    // sky-to-ground hemispheric ambient, a cool fill; a cream specular and a rim light added
+    // rather than multiplied, so lit faces keep their true colour and silhouettes lift off the
+    // dark ground.
     let key_light = Vector3::new(0.5, 0.8, 1.0).normalize();
     let fill_light = Vector3::new(-0.6, -0.4, 0.5).normalize();
-    let view_dir = Vector3::new(0.0, 0.0, 1.0); // Facing viewer in camera view
-
-    let n = if normal.norm_squared() < 1e-6 {
+    let view_dir = Vector3::new(0.0, 0.0, 1.0);
+    let mut n = if normal.norm_squared() < 1e-6 {
         Vector3::new(0.0, 0.0, 1.0)
     } else {
         normal.normalize()
     };
-
-    let ambient = 0.30;
-    let diff_key = n.dot(&key_light).max(0.0) * 0.65;
-    let diff_fill = n.dot(&fill_light).max(0.0) * 0.25;
-
+    if n.z < 0.0 {
+        n = -n;
+    }
+    let wrap = ((n.dot(&key_light) + 0.3) / 1.3).max(0.0);
+    let intensity =
+        0.34 + 0.12 * (n.y * 0.5 + 0.5) + wrap * 0.62 + n.dot(&fill_light).max(0.0) * 0.16;
     let half_vec = (key_light + view_dir).normalize();
-    let spec = n.dot(&half_vec).max(0.0).powf(16.0) * 0.25;
-
-    let intensity = (ambient + diff_key + diff_fill + spec).clamp(0.0, 1.3);
-
+    let spec = n.dot(&half_vec).max(0.0).powf(28.0) * 0.22;
+    let rim = (1.0 - n.z).powi(3) * 0.30;
+    let ch = |c: u8, highlight: f32| {
+        let base = c as f32 / 255.0;
+        let v = (base * intensity).min(1.0) + highlight * spec + base * rim;
+        (v.min(1.0) * 255.0) as u8
+    };
     ColorRGB::new(
-        ((base_color.r as f32 * intensity).min(255.0)) as u8,
-        ((base_color.g as f32 * intensity).min(255.0)) as u8,
-        ((base_color.b as f32 * intensity).min(255.0)) as u8,
+        ch(base_color.r, 1.0),
+        ch(base_color.g, 0.98),
+        ch(base_color.b, 0.88),
     )
 }
