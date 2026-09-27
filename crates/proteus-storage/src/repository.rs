@@ -840,7 +840,7 @@ pub struct JobSummary {
 }
 
 /// The named chains of a stored sequence.
-fn chain_names(fasta: &str) -> Vec<(String, String)> {
+pub fn chain_names(fasta: &str) -> Vec<(String, String)> {
     use proteus_core::complex::ComplexSpec;
     if !ComplexSpec::is_spec(fasta) {
         return Vec::new();

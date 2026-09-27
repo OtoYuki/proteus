@@ -214,6 +214,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         )?;
     }
     let target_path = PathBuf::from(&target);
+    let mut chain_names: Vec<(String, String)> = Vec::new();
     let (pdb_content, title, structure_path) = if target_path.exists() {
         let content = proteus_core::io::read_structure_text(&target_path)
             .with_context(|| format!("Failed to read structure file at {:?}", target_path))?;
@@ -253,16 +254,16 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         // The title is the only provenance the viewers show, so say what the file is.
         let engine = proteus_engine::engine_name(pred.metadata.as_ref());
         // Named as the jobs list names it: the sequence's header and the short id.
-        let name = match repo.get_job(job_id).await {
-            Ok(Some(j)) => repo
-                .get_sequence(j.sequence_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|s| s.header)
-                .filter(|h| !h.trim().is_empty()),
+        let sequence = match repo.get_job(job_id).await {
+            Ok(Some(j)) => repo.get_sequence(j.sequence_id).await.ok().flatten(),
             _ => None,
         };
+        // A complex's chains by the names its input gave them, for the browser page.
+        chain_names = sequence
+            .as_ref()
+            .map(|s| proteus_storage::repository::chain_names(&s.fasta))
+            .unwrap_or_default();
+        let name = sequence.map(|s| s.header).filter(|h| !h.trim().is_empty());
         let short = job_ref::short(job_id);
         let who = match name {
             Some(n) => format!("{n} · {short}"),
@@ -405,6 +406,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             scheme,
             scheme_chosen: color.is_some() || scores_scheme,
             source: Some((&source_name, &pdb_content)),
+            chain_names: &chain_names,
         }
         .render();
 
