@@ -719,8 +719,14 @@ fn draw_job_detail(
             sub.push(Span::styled(engine(j).to_string(), look.text()));
         }
     }
+    // The date only where the line has room for it (the list's age column has it roughly).
+    let date = if area.width >= 110 {
+        format!("  ·  {}", when(j.job.created_at))
+    } else {
+        String::new()
+    };
     sub.push(Span::styled(
-        format!("  ·  {} residues  ·  {}", j.length, when(j.job.created_at)),
+        format!("  ·  {} residues{date}", j.length),
         look.dim(),
     ));
     if let Some(done) = j.job.completed_at {
