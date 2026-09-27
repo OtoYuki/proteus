@@ -57,7 +57,12 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   ipSAE and ipAE agree with the dataset's own values to its rounding. On the lab results,
   ipSAE_min ranks each target's designs with average precision 0.513 on average (random 0.131),
   ahead of every other score in the dataset, pDockQ2 and Rosetta's interface ΔG included.
-  Results, per target and pooled, are in `validate/binders/last_run.md`. CI checks one Boltz-1 design from the same dataset.
+  Results, per target and pooled, are in `validate/binders/last_run.md`. CI checks one Boltz-1
+  design from the same dataset.
+- `make validate-nipah`: the same metrics against Adaptyv's Nipah binder competition (1 196 designs
+  with a lab result, Boltz-2 models and PAE from ProteinBase). ipSAE_min ranks with AP 0.191
+  against a random 0.093 on a set already filtered by ipSAE. Results are in
+  `validate/nipah/last_run.md`.
 - AlphaFold 3 local-run output names (`<name>_confidences.json` beside `<name>_model.cif`, and
   `confidences.json` beside a sample's `model.cif`) are recognised as PAE and scores files.
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
