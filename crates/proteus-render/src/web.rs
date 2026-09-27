@@ -437,6 +437,34 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             })
         }),
         "metrics": s.metrics.as_ref().map_or_else(Vec::new, |m| proteus_core::qc::summary_rows(m, s.num_residues)),
+        // Some of those rows' numbers unformatted, for the panel's gauges and bars.
+        "stats": s.metrics.as_ref().map(|m| {
+            let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
+            serde_json::json!({
+                "plddt": m.plddt().map(|p| serde_json::json!({
+                    "mean": r3(p.mean),
+                    "high": r3(p.high_confidence_fraction),
+                    "veryHigh": r3(p.very_high_confidence_fraction),
+                })),
+                "ss": m.secondary_structure_summary.as_ref().map(|x| serde_json::json!({
+                    "helix": r3(x.helix_fraction),
+                    "strand": r3(x.strand_fraction),
+                    "coil": r3(x.coil_fraction),
+                })),
+                "rama": m.ramachandran_stats.as_ref().map(|x| serde_json::json!({
+                    "favoured": r3(x.favored_fraction),
+                    "outliers": x.outlier_count,
+                })),
+                "overlap": m.steric_overlap.as_ref().map(|x| serde_json::json!({
+                    "score": r3(x.heavy_atom_overlap_score),
+                    "count": x.clash_count,
+                })),
+            })
+        }),
+        // The names the input gave its chains (a job's complex), by chain ID.
+        "chainNames": page.chain_names.iter()
+            .map(|(id, name)| (id.clone(), serde_json::Value::from(name.as_str())))
+            .collect::<serde_json::Map<_, _>>(),
         "interfaces": s.interfaces.iter().map(|v| {
             let m = &v.metrics;
             let r3 = |x: Option<f64>| x.map(|v| (v * 1000.0).round() / 1000.0);
@@ -480,6 +508,8 @@ pub struct WebPage<'a> {
     /// The structure file itself, `(file name, text)`, embedded so the page can hand it back
     /// (the "model" download); `None` leaves it out.
     pub source: Option<(&'a str, &'a str)>,
+    /// Chain ID and name of each chain the input named (`A`, `PD-L1`); empty when none were.
+    pub chain_names: &'a [(String, String)],
 }
 
 impl WebPage<'_> {
@@ -518,12 +548,20 @@ impl WebPage<'_> {
 <canvas id="view" tabindex="0" aria-label="3D structure"></canvas>
 <header id="head">{brand}<div id="subject"><h1 id="title"></h1><p id="caption"></p></div></header>
 <aside id="panel" aria-label="structure details"></aside>
+<button id="panelshow" class="ghost" type="button" aria-controls="panel">‹ details<kbd>p</kbd></button>
 <div id="legend" aria-live="polite"></div>
 <div id="overlay" aria-hidden="true"></div>
 <div id="tip" role="tooltip" hidden></div>
 <section id="selbox" aria-live="polite" hidden></section>
-<nav id="seq" aria-label="sequence"></nav>
-<footer id="keys"><span><kbd>drag</kbd> <kbd>←↑↓→</kbd> rotate</span><span><kbd>wheel</kbd> <kbd>+ −</kbd> zoom</span><span><kbd>right-drag</kbd> pan</span><span><kbd>click</kbd> select</span><span><kbd>n</kbd> neighbours</span><span><kbd>f</kbd> focus</span><span><kbd>m</kbd> measure</span><span><kbd>l</kbd> label</span><span><kbd>u</kbd> surface</span><span><kbd>esc</kbd> clear</span><span><kbd>c</kbd> colour</span><span class="iface-key"><kbd>i</kbd> interface</span><span class="iface-key"><kbd>b</kbd> binder</span><span><kbd>o</kbd> effects</span><span><kbd>d</kbd> disulfides</span><span><kbd>x</kbd> reference</span><span><kbd>space</kbd> spin</span><span><kbd>r</kbd> reset</span><span><kbd>s</kbd> save png</span><span class="sig">{signature}</span></footer>
+<div id="dock"><nav id="seq" aria-label="sequence"></nav>
+<footer id="keys"><span class="hint"><kbd>drag</kbd>rotate</span><span class="hint"><kbd>wheel</kbd>zoom</span><span class="hint"><kbd>click</kbd>select</span><span class="hint"><kbd>f</kbd>focus</span><span class="hint"><kbd>c</kbd>colour</span><span class="hint iface-key"><kbd>i</kbd>interface</span><button id="helpshow" class="ghost" type="button" aria-controls="help"><kbd>?</kbd>all keys</button><span class="sig">{signature}</span></footer></div>
+<div id="help" role="dialog" aria-modal="true" aria-label="keys" hidden><div class="sheet"><div class="top"><span>(keys)</span><button class="ghost" type="button" data-close>close<kbd>esc</kbd></button></div><div class="groups">
+<section><h3>move</h3><dl><dt>drag · ←↑↓→</dt><dd>rotate</dd><dt>wheel · + −</dt><dd>zoom</dd><dt>right-drag</dt><dd>pan (or shift-drag)</dd><dt>space</dt><dd>spin</dd><dt>r · double-click</dt><dd>reset the view</dd></dl></section>
+<section><h3>select</h3><dl><dt>click</dt><dd>select a residue</dd><dt>shift-click</dt><dd>select a range</dd><dt>ctrl-click</dt><dd>add or remove one</dd><dt>n</dt><dd>5 Å neighbours on or off</dd><dt>f</dt><dd>focus on the selection</dd><dt>l</dt><dd>label the selection</dd><dt>esc</dt><dd>clear</dd></dl></section>
+<section><h3>measure</h3><dl><dt>m</dt><dd>measure: click 2, 3 or 4 atoms</dd><dt>enter</dt><dd>keep the measurement</dd><dt>backspace</dt><dd>remove the last one</dd></dl></section>
+<section><h3>show</h3><dl><dt>c</dt><dd>next colour scheme</dd><dt>u</dt><dd>surface, then its colourings</dd><dt>o</dt><dd>outlines and shading</dd><dt>d</dt><dd>disulfides</dd><dt>x</dt><dd>reference structure</dd><dt class="iface-key">i</dt><dd class="iface-key">the interface</dd><dt class="iface-key">b</dt><dd class="iface-key">next binder chain</dd><dt>p</dt><dd>the side panel</dd></dl></section>
+<section><h3>save</h3><dl><dt>s</dt><dd>save a PNG</dd><dt>?</dt><dd>this list</dd></dl></section>
+</div></div></div>
 <div id="fallback" hidden></div>
 <script id="proteus-meta" type="application/json">{meta}</script>
 <script id="proteus-mesh" type="application/octet-stream">{mesh}</script>
@@ -736,6 +774,7 @@ mod tests {
             scheme: ColorScheme::SecondaryStructure,
             scheme_chosen: chosen,
             source: None,
+            chain_names: &[],
         };
         let m = metadata(&page(false));
         let f = m["interfaces"].as_array().unwrap();
@@ -770,10 +809,38 @@ mod tests {
             scheme: ColorScheme::SecondaryStructure,
             scheme_chosen: false,
             source: None,
+            chain_names: &[],
         };
         let m = metadata(&single);
         assert!(m["interfaces"].as_array().unwrap().is_empty());
         assert_eq!(m["scheme"], "ss");
+    }
+
+    /// The panel's gauges read the measurements unformatted, and chains carry their input names.
+    #[test]
+    fn the_page_carries_chain_names_and_raw_stats() {
+        let text = include_str!("../../proteus-core/tests/data/2ptc_EI.pdb");
+        let s = crate::parse_pdb_structure(text).unwrap();
+        let names = [("E".to_string(), "trypsin".to_string())];
+        let m = metadata(&WebPage {
+            title: "2ptc",
+            caption: "x",
+            structure: &s,
+            scheme: ColorScheme::SecondaryStructure,
+            scheme_chosen: false,
+            source: None,
+            chain_names: &names,
+        });
+        assert_eq!(m["chainNames"], serde_json::json!({ "E": "trypsin" }));
+        let ss = &m["stats"]["ss"];
+        let sum: f64 = ["helix", "strand", "coil"]
+            .iter()
+            .map(|k| ss[k].as_f64().unwrap())
+            .sum();
+        assert!((sum - 1.0).abs() < 0.01, "fractions sum to {sum}");
+        assert!(m["stats"]["rama"]["favoured"].as_f64().unwrap() > 0.5);
+        // An experimental structure's B-factors are not a pLDDT.
+        assert!(m["stats"]["plddt"].is_null());
     }
 
     #[test]
@@ -786,6 +853,7 @@ mod tests {
             structure: &s,
             scheme: s.default_color_scheme(),
             source: Some(("1crn.pdb", CRAMBIN)),
+            chain_names: &[],
         }
         .render();
         assert!(html.contains("id=\"proteus-mesh\""));
@@ -797,9 +865,9 @@ mod tests {
                 "page reaches outside itself: {forbidden}"
             );
         }
-        // Measured 2026-09-24: 264 KB = fonts 58 KB, viewer code 112 KB, crambin's mesh and 327
-        // atoms, and the embedded model file.
-        assert!(html.len() < 290_000, "crambin page is {} bytes", html.len());
+        // Measured 2026-09-27: 299 KB = fonts 58 KB, viewer code 148 KB (the panel's tabs, tiles
+        // and key list added 25 KB), crambin's mesh and 327 atoms, and the embedded model file.
+        assert!(html.len() < 315_000, "crambin page is {} bytes", html.len());
     }
 
     #[test]
@@ -813,6 +881,7 @@ mod tests {
             structure: &s,
             scheme: ColorScheme::SecondaryStructure,
             source: Some(("\"><b>x.pdb", "</script>")),
+            chain_names: &[],
         }
         .render();
         // The page's own six script elements, and no more.

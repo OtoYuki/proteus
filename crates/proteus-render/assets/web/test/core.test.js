@@ -170,3 +170,16 @@ test('a session survives the URL fragment', () => {
   assert.deepEqual(C.decodeSession(C.encodeSession(v)), v);
   assert.equal(C.decodeSession('not base64 json'), null);
 });
+
+test('a measurement value splits into lines outside brackets only', () => {
+  assert.deepEqual(C.valueLines('bond RMSZ 0.57 (4 > 4σ) · angle RMSZ 0.57 (1 > 4σ)'), ['bond RMSZ 0.57 (4 > 4σ)', 'angle RMSZ 0.57 (1 > 4σ)']);
+  assert.deepEqual(C.valueLines('18.08 Å (×0.96 of a compact fold)'), ['18.08 Å (×0.96 of a compact fold)']);
+  assert.deepEqual(C.valueLines('RMSD 1.20 Å (by number · 2 gaps) · 3 differ'), ['RMSD 1.20 Å (by number · 2 gaps)', '3 differ']);
+  assert.deepEqual(C.valueLines(''), []);
+});
+
+test('pLDDT bands use plddtColor\'s boundaries', () => {
+  assert.deepEqual(C.plddtBands([95, 90, 89.9, 70, 69.9, 50, 49.9, 10]), [0.25, 0.25, 0.25, 0.25]);
+  assert.deepEqual(C.plddtBands([]), [0, 0, 0, 0]);
+  assert.deepEqual(C.plddtColor(90), C.plddtColor(99));
+});

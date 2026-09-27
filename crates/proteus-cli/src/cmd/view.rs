@@ -406,6 +406,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             scheme,
             scheme_chosen: color.is_some() || scores_scheme,
             source: Some((&source_name, &pdb_content)),
+            chain_names: &chain_names,
         }
         .render();
 
