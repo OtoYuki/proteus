@@ -108,6 +108,14 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- The browser page's side panel is wider (380–440 px) and hides with `p`. It opens on a
+  headline, the verdict as glyph and word over the number it rests on (ipSAE_min for a complex,
+  mean pLDDT with its band split for a predicted monomer, favoured φ, ψ for an experimental
+  structure), then tabs: interface, quality (stat tiles with gauges, a secondary-structure bar,
+  measurements as label and value rows, findings) and plots. A job's complex names its chains
+  there (`BPTI (B) → trypsin (A)`). On a narrow window the panel is a bottom sheet.
+- The page's bottom is one sequence row with a position ruler, and six key hints; every key is
+  in a grouped list behind `?`. The structure is fitted between the legend and the sequence.
 - A complex keeps its chains' names (`>PD-L1`, `>PD-1`, or a UniProt entry name), stored as a
   fourth header field (`>A|protein|empty|PD-L1`); older records still parse. The home screen's
   interface panel names binder and target: `PD-L1 (A) → PD-1 (B)`.
