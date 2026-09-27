@@ -25,15 +25,15 @@ impl Tab {
         }
     }
 
-    /// The tab's icon: the identity's dot-matrix drawing, two braille cells.
-    pub fn icon(self) -> String {
+    /// The tab's icon glyph.
+    pub fn icon(self) -> char {
         use proteus_render::brand::icons::Icon;
         match self {
             Tab::Jobs => Icon::Jobs,
             Tab::Structures => Icon::Structures,
             Tab::Run => Icon::Run,
         }
-        .braille()
+        .glyph()
     }
 
     fn index(self) -> usize {
@@ -326,6 +326,18 @@ pub struct FilesView {
     pub entries: Vec<Entry>,
     pub selected: usize,
     pub error: Option<String>,
+    /// The folder proteus started in (`.` goes back to it).
+    pub start: PathBuf,
+    /// What each folder looked at holds, read once.
+    peeks: std::cell::RefCell<HashMap<PathBuf, std::rc::Rc<DirPeek>>>,
+}
+
+/// What a folder holds, for the folder card: its structure files (the first few) and counts.
+#[derive(Debug, Default)]
+pub struct DirPeek {
+    pub structures: Vec<(String, u64)>,
+    pub n_structures: usize,
+    pub n_dirs: usize,
 }
 
 impl FilesView {
@@ -335,6 +347,8 @@ impl FilesView {
             entries: Vec::new(),
             selected: 0,
             error: None,
+            start: dir.to_path_buf(),
+            peeks: Default::default(),
         };
         view.rescan();
         view
@@ -343,6 +357,7 @@ impl FilesView {
     /// Folders (not hidden) and structure files of `dir`, folders first, each sorted by name.
     /// Names that are not UTF-8 are skipped: they could not be passed on as arguments intact.
     pub fn rescan(&mut self) {
+        self.peeks.borrow_mut().clear();
         let mut dirs = Vec::new();
         let mut files = Vec::new();
         match std::fs::read_dir(&self.dir) {
@@ -396,6 +411,37 @@ impl FilesView {
 
     pub fn current(&self) -> Option<&Entry> {
         self.entries.get(self.selected)
+    }
+
+    /// What folder `dir` holds: read on first look (at most 5 000 entries), then remembered
+    /// until a rescan.
+    pub fn peek(&self, dir: &Path) -> std::rc::Rc<DirPeek> {
+        if let Some(p) = self.peeks.borrow().get(dir) {
+            return p.clone();
+        }
+        let mut p = DirPeek::default();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten().take(5000) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => p.n_dirs += 1,
+                    Ok(_) if proteus_core::qc::is_structure_file_name(&e.path()) => {
+                        p.n_structures += 1;
+                        let size = e.metadata().map_or(0, |m| m.len());
+                        p.structures.push((name, size));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        p.structures.sort();
+        p.structures.truncate(12);
+        let p = std::rc::Rc::new(p);
+        self.peeks.borrow_mut().insert(dir.to_path_buf(), p.clone());
+        p
     }
 
     fn enter(&mut self, dir: PathBuf) {
@@ -553,7 +599,22 @@ pub struct RunView {
     pub editing: bool,
     pub fold: Vec<Field>,
     pub scan: Vec<Field>,
+    /// The example ctrl-e put in last (it cycles).
+    pub example: Option<usize>,
 }
+
+/// Sequences to try, as FASTA records (name, sequence): small, well known, and quick to fold.
+pub const EXAMPLES: [(&str, &str); 3] = [
+    (
+        "ubiquitin",
+        "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
+    ),
+    (
+        "protein G B1",
+        "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+    ),
+    ("Trp-cage", "NLYIQWLKDGGPSSGRPPPS"),
+];
 
 impl Default for RunView {
     fn default() -> Self {
@@ -561,6 +622,7 @@ impl Default for RunView {
             form: FormKind::Fold,
             focus: 0,
             editing: false,
+            example: None,
             fold: vec![
                 Field::text(
                     "Sequence",
@@ -781,7 +843,7 @@ pub struct App {
     /// The preview the last frame drew a pane for (set while drawing, read by the loop).
     pub preview_want: std::cell::RefCell<Option<(PreviewKey, ratatui::layout::Rect)>>,
     /// The latest rendered preview.
-    pub preview: Option<(PreviewKey, Preview)>,
+    pub previews: HashMap<PreviewKey, Preview>,
     /// Pixels per cell when the terminal draws kitty graphics, else `None`.
     pub cell_pixels: Option<(f32, f32)>,
 }
@@ -797,7 +859,7 @@ impl App {
             run: RunView::default(),
             scenes: HashMap::new(),
             preview_want: std::cell::RefCell::new(None),
-            preview: None,
+            previews: HashMap::new(),
             cell_pixels: None,
             help: false,
             status: None,
@@ -814,6 +876,59 @@ impl App {
             || id.to_string()[..8].to_string(),
             |j| display_name(&j.header),
         )
+    }
+
+    /// A still of `path` at any size: shown (in half-block cells) while the right size renders.
+    pub fn any_preview(&self, path: &Path) -> Option<&Preview> {
+        self.previews
+            .iter()
+            .find(|(k, _)| k.path == path)
+            .map(|(_, p)| p)
+    }
+
+    /// Keep a rendered still, forgetting the others when there are many (each is a few MB of
+    /// pixels at kitty resolution).
+    pub fn keep_preview(&mut self, key: PreviewKey, p: Preview) {
+        if self.previews.len() >= 40 {
+            self.previews.clear();
+        }
+        self.previews.insert(key, p);
+    }
+
+    /// Structure files worth measuring before they are asked for: every job's model, the
+    /// selected job's neighbours first, then newest first. Skips what is measured or under way.
+    pub fn prefetch(&self) -> Vec<PathBuf> {
+        let jobs = self.jobs.visible();
+        let sel = self.jobs.selected;
+        let mut order: Vec<usize> = Vec::new();
+        for d in 1..=jobs.len() {
+            if let Some(i) = sel.checked_add(d).filter(|i| *i < jobs.len()) {
+                order.push(i);
+            }
+            if let Some(i) = sel.checked_sub(d) {
+                order.push(i);
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|i| jobs[i].pdb_path.as_ref().map(PathBuf::from))
+            .filter(|p| !self.analyses.contains_key(p))
+            .collect()
+    }
+
+    /// The jobs next to the selected one (for previews rendered ahead of a key press).
+    pub fn neighbour_models(&self) -> Vec<PathBuf> {
+        let jobs = self.jobs.visible();
+        let sel = self.jobs.selected;
+        [sel.checked_add(1), sel.checked_sub(1), sel.checked_add(2)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| {
+                jobs.get(i)
+                    .and_then(|j| j.pdb_path.as_ref())
+                    .map(PathBuf::from)
+            })
+            .collect()
     }
 
     /// Whether keys are going into a text box rather than being commands.
@@ -867,6 +982,20 @@ impl App {
         // F1 opens the help from anywhere, even a text field where ? is just a character.
         if key.code == KeyCode::F(1) {
             self.help = true;
+            return Action::None;
+        }
+        // Ctrl-e in the Run tab puts the next example into the sequence field.
+        if ctrl && key.code == KeyCode::Char('e') && self.tab == Tab::Run {
+            let i = self.run.example.map_or(0, |i| (i + 1) % EXAMPLES.len());
+            self.run.example = Some(i);
+            let (name, seq) = EXAMPLES[i];
+            let fields = match self.run.form {
+                FormKind::Fold => &mut self.run.fold,
+                FormKind::Scan => &mut self.run.scan,
+            };
+            fields[0].kind = FieldKind::Text(format!(">{name}\n{seq}"));
+            self.run.editing = false;
+            self.status = Some(format!("example: {name}; ctrl-e for another"));
             return Action::None;
         }
         // Alt+1..3 switches tabs from anywhere, even mid-edit; the edit is kept.
@@ -1106,6 +1235,17 @@ impl App {
                 if let Some(parent) = self.files.dir.parent().map(Path::to_path_buf) {
                     self.files.enter(parent);
                 }
+            }
+            KeyCode::Char('~') => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    self.files.enter(PathBuf::from(home));
+                    self.files.selected = 0;
+                }
+            }
+            KeyCode::Char('.') => {
+                let start = self.files.start.clone();
+                self.files.enter(start);
+                self.files.selected = 0;
             }
             KeyCode::Enter
             | KeyCode::Right
