@@ -5,7 +5,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
+## [0.9.0] — 2026-09-27
+
+Binder triage, validated on two lab datasets: `analyze --interface` ranks designed binders by
+ipSAE and measures their interfaces, reading PAE from Boltz, AlphaFold 3, Protenix, OpenFold3
+and ColabFold output, complexes with ligands and modified residues included. Also MolProbity's
+covalent-geometry and rotamer checks reproduced from cctbx, and a redesigned home screen and
+viewers.
 
 ### Added
 - `scripts/vision.sh`: the terminal UI as a user sees it. A real kitty on an invisible Hyprland
@@ -76,7 +82,10 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
 - Protenix (`*_sample_N.cif`, `token_pair_pae`), OpenFold3 (`*_confidences.json`/`.npz`,
   `*_confidences_aggregated.json`) and Chai-1 (`scores.model_idx_N.npz`) outputs are found
   beside their models, file names checked against each predictor's writer. float16 `.npy`
-  arrays are read (OpenFold3's `.npz` default).
+  arrays are read (OpenFold3's `.npz` default). Real output of a complex with a phosphoserine
+  and ATP from Protenix 2.0.0 and OpenFold3 0.5.0 (JSON and float16 `.npz`) is a test, its
+  values checked against computations independent of Proteus. Chai-1 is checked against its
+  source only: it needs more than a 6 GB GPU.
 - `analyze --interface` keeps a model whose PAE file cannot be used and says why on stderr
   (`no PAE metrics: …`, and in the JSON as `interface_note`), instead of failing the model or
   leaving ipSAE silently empty.
@@ -959,8 +968,9 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/OtoYuki/proteus/compare/c7b0761...v0.9.0
+[0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...c7b0761
 [0.7.0]: https://github.com/OtoYuki/proteus/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OtoYuki/proteus/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0
