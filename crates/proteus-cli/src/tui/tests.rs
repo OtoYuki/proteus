@@ -448,7 +448,7 @@ fn every_tab_renders_at_every_size_without_panicking() {
         screen.matches("query_I6A [mutation=I6A]").count() >= 2,
         "{screen}"
     );
-    assert!(screen.contains("esmfold-api"), "{screen}");
+    assert!(screen.contains("esmfold"), "{screen}");
     assert!(screen.contains("84.2"), "{screen}");
 }
 
@@ -859,4 +859,22 @@ fn the_help_takes_down_the_preview_picture() {
         "{screen}"
     );
     assert!(app.preview_want.borrow().is_none());
+}
+
+#[test]
+fn the_list_names_the_model_and_whether_it_had_an_alignment() {
+    let mut j = job("barnase", JobStatus::Completed, true);
+    assert_eq!(model(&j), "esmfold");
+    j.metadata = Some(serde_json::json!({
+        "engine": "oci", "image": "ghcr.io/jwohlwend/boltz:latest", "msa": "none"
+    }));
+    assert_eq!(model(&j), "boltz");
+    j.metadata = Some(serde_json::json!({
+        "engine": "oci", "image": "ghcr.io/jwohlwend/boltz:latest", "msa": "server"
+    }));
+    assert_eq!(model(&j), "boltz+msa");
+    j.metadata = Some(serde_json::json!({ "engine": "oci" }));
+    assert_eq!(model(&j), "oci");
+    j.metadata = Some(serde_json::json!({ "engine": "simulated" }));
+    assert_eq!(model(&j), "simulated");
 }

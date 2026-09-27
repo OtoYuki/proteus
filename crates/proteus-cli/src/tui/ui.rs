@@ -6,7 +6,7 @@
 //! state is always a glyph and a word, never a colour alone.
 
 use super::app::{
-    display_name, engine, short_id, Analysis, App, FieldKind, FormKind, Preview, Tab,
+    display_name, engine, model, short_id, Analysis, App, FieldKind, FormKind, Preview, Tab,
 };
 use super::style::Look;
 use chrono::Utc;
@@ -458,8 +458,8 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let rows = visible.iter().map(|j| {
-        let eng = engine(j);
-        let eng_style = if eng == proteus_engine::ENGINE_SIMULATED {
+        let eng = model(j);
+        let eng_style = if engine(j) == proteus_engine::ENGINE_SIMULATED {
             look.warm()
         } else {
             look.muted()
@@ -505,7 +505,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             Cell::from("name"),
             Cell::from(Line::from("len").right_aligned()),
             Cell::from(Line::from("pLDDT").right_aligned()),
-            Cell::from("engine"),
+            Cell::from("model"),
             Cell::from(Line::from("age").right_aligned()),
         ])
         .style(look.dim())
@@ -545,8 +545,13 @@ fn draw_job_detail(
         Span::styled(tier_slug(&j.job.tier).to_string(), look.text()),
     ];
     if !engine(j).is_empty() {
-        sub.push(Span::styled(" on ", look.dim()));
-        sub.push(Span::styled(engine(j).to_string(), look.text()));
+        // "sota · boltz+msa on oci": the model, then where a container ran it.
+        sub.push(Span::styled(" · ", look.dim()));
+        sub.push(Span::styled(model(j), look.text()));
+        if engine(j) == proteus_engine::ENGINE_OCI && !model(j).starts_with("oci") {
+            sub.push(Span::styled(" on ", look.dim()));
+            sub.push(Span::styled(engine(j).to_string(), look.text()));
+        }
     }
     sub.push(Span::styled(
         format!("  ·  {} residues  ·  {}", j.length, when(j.job.created_at)),

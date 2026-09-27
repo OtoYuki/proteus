@@ -108,6 +108,10 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- The jobs list's engine column is now the model: `boltz`, `boltz+msa`, `esmfold` or
+  `simulated` (a container run names its image; `+msa` marks a run with an alignment, which
+  explains most confidence gaps between two runs of one protein). The job line reads
+  `sota · boltz+msa on oci`. The filter matches the model too.
 - The home screen's bottom line says what happened ("✓ opened ubq in your browser") instead of
   the child's last line of output, with the command dim at the right when there is room, and
   cuts a long message with an ellipsis. Commands use the job's short id.

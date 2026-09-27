@@ -216,6 +216,7 @@ impl JobsView {
                         .contains(&needle)
                     || state_word(&j.job.status).contains(&needle)
                     || engine(j).to_lowercase().contains(&needle)
+                    || model(j).to_lowercase().contains(&needle)
             })
             .collect();
         // Stable sorts over the newest-first list, so ties stay newest first.
@@ -274,6 +275,39 @@ pub fn engine(j: &JobSummary) -> &str {
         return "";
     }
     proteus_engine::engine_name(j.metadata.as_ref())
+}
+
+/// The model that folded a job, for the list: the engine, except that a container run names
+/// its image (`boltz`), with `+msa` when it had an alignment, which explains most of the
+/// difference in confidence between two runs of one protein.
+pub fn model(j: &JobSummary) -> String {
+    let eng = engine(j);
+    let Some(m) = j.metadata.as_ref() else {
+        return eng.to_string();
+    };
+    let base = match eng {
+        proteus_engine::ENGINE_OCI => {
+            let image = m.get("image").and_then(|v| v.as_str()).unwrap_or("");
+            let name = image.rsplit('/').next().unwrap_or(image);
+            let name = name.split([':', '@']).next().unwrap_or(name);
+            if name.is_empty() {
+                eng.to_string()
+            } else {
+                name.to_string()
+            }
+        }
+        proteus_engine::ENGINE_ESMFOLD_API => "esmfold".to_string(),
+        other => other.to_string(),
+    };
+    let msa = m
+        .get("msa")
+        .and_then(|v| v.as_str())
+        .is_some_and(|v| !v.is_empty() && v != "none");
+    if msa {
+        format!("{base}+msa")
+    } else {
+        base
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
