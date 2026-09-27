@@ -367,14 +367,7 @@ pub fn nipah_svg(t: &Theme, bins: &[(String, usize, usize, f64)], overall: f64) 
             "middle",
             &format!("{:.0}%", rate * 100.0),
         );
-        b += &text(
-            cx,
-            h - bottom + 20.0,
-            &muted,
-            12.0,
-            "middle",
-            &label.replace('–', "–"),
-        );
+        b += &text(cx, h - bottom + 20.0, &muted, 12.0, "middle", label);
         b += &text(
             cx,
             h - bottom + 38.0,
