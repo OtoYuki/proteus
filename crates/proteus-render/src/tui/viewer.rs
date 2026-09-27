@@ -5,7 +5,10 @@ use crate::rasterizer::camera::OrbitCamera;
 use crate::rasterizer::pipeline::Rasterizer;
 use crate::rasterizer::shader::ColorScheme;
 use crate::terminal::halfblock::HalfBlockRenderer;
-use crate::tui::dashboard::{fit_to_width, DashboardData, DashboardRenderer};
+use crate::tui::dashboard::{
+    fit_to_width, split_line, visible_width, DashboardData, DashboardPage, DashboardRenderer,
+    DashboardView,
+};
 use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -107,7 +110,7 @@ impl ViewerLayout {
         let view_rows = rows - hud_rows;
         let (view_cols, dashboard) =
             if dashboard && cols >= DASHBOARD_MIN_COLS && view_rows >= DASHBOARD_MIN_ROWS {
-                let left = (u32::from(cols) * 58 / 100) as u16;
+                let left = (u32::from(cols) * 56 / 100) as u16;
                 (left, Some((left + 1, cols - left - 1)))
             } else {
                 (cols, None)
@@ -144,6 +147,128 @@ impl ViewerLayout {
             })
             .collect()
     }
+}
+
+/// Space between two status items or key hints.
+const GAP: &str = "   ";
+
+/// One status line `width` columns wide: `left` items from the left edge, `right` items flush
+/// with the right edge. When they do not fit, right items go first (the first of them first:
+/// callers list them lowest priority first), then left items from the end; the first left item
+/// is cut rather than dropped.
+pub fn status_line(left: &[String], right: &[String], width: usize) -> String {
+    let join = |items: &[String], gap: &str| items.join(gap);
+    let inner = width.saturating_sub(2);
+    let mut right: Vec<String> = right.to_vec();
+    let mut left: Vec<String> = left.to_vec();
+    let fits = |l: &[String], r: &[String]| {
+        let lw = visible_width(&join(l, GAP));
+        let rw = visible_width(&join(r, "  "));
+        lw + if r.is_empty() { 0 } else { rw + 4 } <= inner
+    };
+    while !right.is_empty() && !fits(&left, &right) {
+        right.remove(0);
+    }
+    while left.len() > 1 && !fits(&left, &right) {
+        left.pop();
+    }
+    format!(
+        " {}",
+        split_line(&join(&left, GAP), &join(&right, "  "), inner, 4)
+    )
+}
+
+/// The key hints on one line: each key in the accent, its meaning dim. Too many for the width:
+/// pairs go from the middle, keeping the first three (moving the view) and the last two (help,
+/// back), which every screen needs.
+pub fn key_strip(ansi: &crate::brand::ansi::Ansi, pairs: &[(&str, &str)], width: usize) -> String {
+    use crate::brand::Role;
+    let cost = |p: &(&str, &str)| visible_width(p.0) + 1 + visible_width(p.1) + GAP.len();
+    let mut shown: Vec<&(&str, &str)> = pairs.iter().collect();
+    while shown.len() > 5 && 1 + shown.iter().map(|p| cost(p)).sum::<usize>() > width + GAP.len() {
+        shown.remove(shown.len() - 3);
+    }
+    let line = shown
+        .iter()
+        .map(|(k, v)| {
+            format!(
+                "{} {}",
+                ansi.paint(Role::Accent, k),
+                ansi.paint(Role::Dim, v)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(GAP);
+    format!(" {line}")
+}
+
+/// The key overlay for a `cols` × `rows` view: every key, grouped, centred in the view.
+pub fn help_lines(ansi: &crate::brand::ansi::Ansi, cols: usize, rows: usize) -> Vec<String> {
+    use crate::brand::Role;
+    let groups: [(&str, &[(&str, &str)]); 4] = [
+        (
+            "view",
+            &[
+                ("← ↑ ↓ → h j k l", "orbit"),
+                ("+ −", "zoom in, out"),
+                ("space", "spin on or off"),
+                ("r", "reset the view"),
+                ("c", "next colouring"),
+                ("o", "shading effects"),
+                ("p", "real pixels (kitty)"),
+                ("d", "disulfide bonds"),
+            ],
+        ),
+        (
+            "dashboard",
+            &[
+                ("tab  b", "show or hide the panel"),
+                ("1 2 3 4", "overview, geometry, confidence, measurements"),
+                ("pgup pgdn", "scroll a long page"),
+            ],
+        ),
+        (
+            "findings",
+            &[
+                ("]  [", "next, previous finding"),
+                ("0", "back to the whole structure"),
+            ],
+        ),
+        ("leave", &[("?  esc", "close this"), ("q", "back")]),
+    ];
+    let key_w = 16;
+    let w = cols.saturating_sub(4).min(64);
+    let mut body = Vec::new();
+    for (title, keys) in groups {
+        if !body.is_empty() {
+            body.push(String::new());
+        }
+        let head = format!("({title})");
+        body.push(format!(
+            "{} {}",
+            ansi.paint(Role::Muted, &head),
+            ansi.paint(
+                Role::Line,
+                &"─".repeat(w.saturating_sub(visible_width(&head) + 1))
+            )
+        ));
+        for (k, v) in keys {
+            body.push(format!(
+                "{}  {}",
+                ansi.paint(Role::Accent, &crate::tui::dashboard::pad_to_width(k, key_w)),
+                ansi.paint(Role::Text, v)
+            ));
+        }
+    }
+    let top = rows.saturating_sub(body.len()) / 2;
+    let left = " ".repeat(cols.saturating_sub(w) / 2);
+    let mut out = vec![String::new(); rows];
+    for (i, line) in body.into_iter().enumerate() {
+        if let Some(slot) = out.get_mut(top + i) {
+            *slot = crate::tui::dashboard::truncate_to_width(&format!("{left}{line}"), cols);
+        }
+    }
+    out.into_iter().map(|l| fit_to_width(&l, cols)).collect()
 }
 
 pub struct ViewerConfig {
@@ -349,6 +474,12 @@ pub fn run_interactive_viewer(
 
     let mut dashboard_mode = config.dashboard_enabled && config.dashboard_data.is_some();
     let dashboard_renderer = DashboardRenderer::new();
+    let mut dash_view = DashboardView::default();
+    // The panel only changes on a key or a resize, so it is drawn then and not every frame.
+    let mut dash_dirty = true;
+    // The key overlay, drawn over the view in place of the picture.
+    let mut show_help = false;
+    let mut last_hud: Vec<String> = Vec::new();
     use crate::brand::Role;
 
     let mut layout = ViewerLayout::compute(term_cols, term_rows, dashboard_mode);
@@ -410,8 +541,44 @@ pub fn run_interactive_viewer(
         if event::poll(timeout).map_err(|e| RenderError::Terminal(e.to_string()))? {
             match event::read().map_err(|e| RenderError::Terminal(e.to_string()))? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => break,
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+                    // With the key overlay up, back and ? only take it down.
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') if show_help => {
+                        show_help = false;
+                        relayout = Some((layout.cols, layout.rows));
+                    }
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('?') => {
+                        show_help = true;
+                        if cell_px.is_some() {
+                            let mut del = String::new();
+                            crate::terminal::kitty::KittyRenderer::delete(IMAGE_ID, &mut del);
+                            let _ = stdout.write_all(del.as_bytes());
+                        }
+                        relayout = Some((layout.cols, layout.rows));
+                    }
+                    KeyCode::Char(c @ '1'..='9') if config.dashboard_data.is_some() => {
+                        if let Some(page) = DashboardPage::from_key(c) {
+                            if dash_view.page != page {
+                                dash_view = DashboardView { page, scroll: 0 };
+                                dash_dirty = true;
+                            }
+                            // A page key also brings the panel up.
+                            if !dashboard_mode {
+                                dashboard_mode = true;
+                                relayout = Some((layout.cols, layout.rows));
+                            }
+                        }
+                    }
+                    KeyCode::PageDown | KeyCode::PageUp if layout.dashboard.is_some() => {
+                        let step = (layout.view_rows as usize / 2).max(1);
+                        dash_view.scroll = if key.code == KeyCode::PageDown {
+                            dash_view.scroll + step
+                        } else {
+                            dash_view.scroll.saturating_sub(step)
+                        };
+                        dash_dirty = true;
+                    }
                     KeyCode::Char(' ') => auto_rotate = !auto_rotate,
                     KeyCode::Char('p') if cell_px.is_some() => {
                         pixels = !pixels;
@@ -498,6 +665,8 @@ pub fn run_interactive_viewer(
                 pixels &= cell_px.is_some();
             }
             compositor.invalidate();
+            dash_dirty = true;
+            last_hud.clear();
             let _ = execute!(
                 stdout,
                 crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
@@ -520,7 +689,23 @@ pub fn run_interactive_viewer(
         }
 
         out_buf.clear();
-        if layout.view_cols > 0 && layout.view_rows > 0 {
+        if show_help {
+            // Drawn once after the screen is cleared; the picture is not drawn under it.
+            if relayout.is_some() {
+                for (i, line) in
+                    help_lines(&ansi, layout.view_cols as usize, layout.view_rows as usize)
+                        .iter()
+                        .enumerate()
+                {
+                    let _ = write!(
+                        out_buf,
+                        "\x1b[{};1H{line}{}",
+                        i + 1,
+                        crate::brand::ansi::RESET
+                    );
+                }
+            }
+        } else if layout.view_cols > 0 && layout.view_rows > 0 {
             // Render frame
             let frame_start = Instant::now();
             match (pixels, cell_px) {
@@ -608,9 +793,10 @@ pub fn run_interactive_viewer(
         }
 
         // Render the side-by-side biophysical dashboard where the layout has room for it
-        if let (Some((dash_col, dash_width)), Some(d_data)) =
-            (layout.dashboard, config.dashboard_data.as_ref())
+        if let (Some((dash_col, dash_width)), Some(d_data), true) =
+            (layout.dashboard, config.dashboard_data.as_ref(), dash_dirty)
         {
+            dash_dirty = false;
             // Vertical separator in the column just left of the panel (1-based `dash_col`)
             for r in 0..layout.view_rows {
                 let row_pos = r + 1;
@@ -622,6 +808,7 @@ pub fn run_interactive_viewer(
             }
             dashboard_renderer.render_to_buffer(
                 d_data,
+                &mut dash_view,
                 &mut out_buf,
                 dash_col,
                 0,
@@ -630,9 +817,7 @@ pub fn run_interactive_viewer(
             );
         }
 
-        // The status bar: the structure, a legend for the current colours (swatch and word, so
-        // it reads without colour), the toggles, the frame rate; then the keys.
-        let sep = ansi.paint(Role::Line, "  ·  ");
+        // A legend for the current colours: swatch and word, so it reads without colour.
         let sw = |c: ColorRGB, word: &str| {
             format!(
                 "{} {}",
@@ -719,95 +904,88 @@ pub fn run_interactive_viewer(
                 },
             }
         };
-        let toggle = |name: &str, state: Option<bool>| match state {
-            Some(true) => format!(
-                "{} {}",
-                ansi.paint(Role::Dim, name),
-                ansi.paint(Role::Text, "on")
-            ),
-            Some(false) => format!(
-                "{} {}",
-                ansi.paint(Role::Dim, name),
-                ansi.paint(Role::Dim, "off")
-            ),
-            None => String::new(),
+        // The status line: the structure, what is being pointed at, the colour legend on the
+        // left; the toggles, quiet, on the right, each a glyph and its word.
+        let toggle = |name: &str, on: bool| {
+            if on {
+                format!(
+                    "{} {}",
+                    ansi.paint(Role::Accent, "●"),
+                    ansi.paint(Role::Muted, name)
+                )
+            } else {
+                format!(
+                    "{} {}",
+                    ansi.paint(Role::Dim, "○"),
+                    ansi.paint(Role::Dim, name)
+                )
+            }
         };
         let fx_on = rasterizer.enable_ssao && rasterizer.enable_outlines;
-        let dash_state = config.dashboard_data.as_ref().map(|_| dashboard_mode);
-        let dash_note =
-            if dashboard_mode && config.dashboard_data.is_some() && layout.dashboard.is_none() {
-                ansi.paint(Role::Warm, " (no room)")
-            } else {
-                String::new()
-            };
-        let parts: Vec<String> = [
-            format!(
+        let mut left = vec![format!(
+            "{} {}",
+            ansi.paint(Role::Accent, "proteus"),
+            ansi.paint(Role::Text, &config.title)
+        )];
+        if let Some((i, f)) = finding.and_then(|i| config.findings.get(i).map(|f| (i, f))) {
+            left.push(format!(
                 "{} {}",
-                ansi.paint(Role::Accent, "proteus"),
-                ansi.paint(Role::Text, &config.title)
-            ),
-            legend,
-            // `d` is always in the key help, so a structure without disulfides says so here.
-            match config.disulfide_mesh {
-                Some(_) => toggle("disulfides", Some(show_disulfides)),
-                None => format!(
-                    "{} {}",
-                    ansi.paint(Role::Dim, "disulfides"),
-                    ansi.paint(Role::Dim, "none")
-                ),
-            },
-            format!("{}{dash_note}", toggle("dashboard", dash_state)),
-            toggle("effects", Some(fx_on)),
-            toggle("spin", Some(auto_rotate)),
-            toggle("pixels", cell_px.map(|_| pixels)),
-            match finding.and_then(|i| config.findings.get(i).map(|f| (i, f))) {
-                Some((i, f)) => ansi.paint(
+                ansi.paint(
                     Role::Accent,
-                    &format!("{}/{} {}", i + 1, config.findings.len(), f.label),
+                    &format!("▸ {}/{}", i + 1, config.findings.len())
                 ),
-                None => String::new(),
-            },
-            ansi.paint(Role::Dim, &format!("{fps:.0} fps")),
-        ]
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .collect();
-        let status_row1 = format!(" {}", parts.join(&sep));
-        let key = |k: &str, v: &str| {
-            format!(
-                "{} {}",
-                ansi.paint(Role::Accent, k),
-                ansi.paint(Role::Dim, v)
-            )
-        };
-        let status_row2 = format!(
-            " {}",
-            [
-                key("←↑↓→ hjkl", "orbit"),
-                key("+ −", "zoom"),
-                key("space", "spin"),
-                key("tab", "dashboard"),
-                key("c", "colour"),
-                key("o", "effects"),
-                if cell_px.is_some() {
-                    key("p", "pixels")
-                } else {
-                    String::new()
-                },
-                key("d", "disulfides"),
-                key("[ ]", "findings"),
-                key("r", "reset"),
-                key("q", "back"),
-            ]
-            .into_iter()
-            .filter(|k| !k.is_empty())
-            .collect::<Vec<_>>()
-            .join(&sep)
-        );
-        let status_row2 = status_row2.as_str();
+                ansi.paint(Role::Text, &f.label)
+            ));
+        }
+        left.push(legend);
+        // Lowest priority first: these go first when the line is short.
+        let mut right = Vec::new();
+        if dashboard_mode && config.dashboard_data.is_some() && layout.dashboard.is_none() {
+            right.push(ansi.paint(
+                Role::Warm,
+                &format!("! panel needs {DASHBOARD_MIN_COLS} columns"),
+            ));
+        }
+        if config.disulfide_mesh.is_some() {
+            right.push(toggle("disulfides", show_disulfides));
+        }
+        if cell_px.is_some() {
+            right.push(toggle("pixels", pixels));
+        }
+        right.push(toggle("effects", fx_on));
+        right.push(ansi.paint(Role::Dim, &format!("{fps:.0} fps")));
+        right.push(toggle("spin", auto_rotate));
+        let status_row1 = status_line(&left, &right, layout.cols as usize);
 
-        for line in layout.hud_lines(&status_row1, status_row2) {
-            out_buf.push_str(&line);
+        let mut keys: Vec<(&str, &str)> =
+            vec![("←↑↓→", "orbit"), ("+ −", "zoom"), ("space", "spin")];
+        if config.dashboard_data.is_some() {
+            keys.push(("1–4", "pages"));
+            keys.push(("tab", "panel"));
+        }
+        keys.push(("c", "colour"));
+        if !config.findings.is_empty() {
+            keys.push(("[ ]", "findings"));
+        }
+        keys.push(("o", "effects"));
+        if cell_px.is_some() {
+            keys.push(("p", "pixels"));
+        }
+        if config.disulfide_mesh.is_some() {
+            keys.push(("d", "disulfides"));
+        }
+        keys.push(("r", "reset"));
+        keys.push(("?", "keys"));
+        keys.push(("q", "back"));
+        let status_row2 = key_strip(&ansi, &keys, layout.cols as usize);
+
+        // Only what changed goes out: the frame rate moves twice a second.
+        let hud = layout.hud_lines(&status_row1, &status_row2);
+        if hud != last_hud {
+            for line in &hud {
+                out_buf.push_str(line);
+            }
+            last_hud = hud;
         }
 
         if !out_buf.is_empty() {
@@ -907,6 +1085,100 @@ mod tests {
             small.hud_lines(STATUS, CONTROLS)[0].find("\x1b[19;1H"),
             Some(0)
         );
+    }
+
+    /// The status line never overflows: the right-hand toggles go first, lowest priority
+    /// first, then legend items from the end; the title stays.
+    #[test]
+    fn the_status_line_drops_quiet_items_first() {
+        let left = vec![
+            "proteus trypsin + BPTI · 2a07b158 (oci)".to_string(),
+            "■ binder contact ■ binder ■ target contact ■ target  B → A".to_string(),
+        ];
+        let right = vec![
+            "● disulfides".to_string(),
+            "● effects".to_string(),
+            "12 fps".to_string(),
+            "○ spin".to_string(),
+        ];
+        for width in 0..=220 {
+            let line = status_line(&left, &right, width);
+            assert!(visible_width(&line) <= width.max(1), "{width}: {line}");
+        }
+        let wide = status_line(&left, &right, 200);
+        assert!(wide.contains("disulfides") && wide.trim_end().ends_with("○ spin"));
+        let mid = status_line(&left, &right, 120);
+        assert!(!mid.contains("disulfides") && mid.contains("spin"), "{mid}");
+        assert!(mid.contains("binder contact"), "{mid}");
+        let narrow = status_line(&left, &right, 50);
+        assert!(
+            narrow.contains("proteus trypsin") && !narrow.contains("binder"),
+            "{narrow}"
+        );
+    }
+
+    /// One line of keys: from the middle out when narrow, keeping orbit, zoom, spin, help and
+    /// back.
+    #[test]
+    fn the_key_strip_keeps_help_and_back() {
+        let a = crate::brand::ansi::Ansi {
+            plain: true,
+            ..crate::brand::ansi::Ansi::with_depth(crate::brand::ColorDepth::None)
+        };
+        let keys = [
+            ("←↑↓→", "orbit"),
+            ("+ −", "zoom"),
+            ("space", "spin"),
+            ("1–4", "pages"),
+            ("tab", "panel"),
+            ("c", "colour"),
+            ("[ ]", "findings"),
+            ("o", "effects"),
+            ("p", "pixels"),
+            ("d", "disulfides"),
+            ("r", "reset"),
+            ("?", "keys"),
+            ("q", "back"),
+        ];
+        for width in 60..=220 {
+            let line = key_strip(&a, &keys, width);
+            assert!(visible_width(&line) <= width, "{width}: {line}");
+            assert!(
+                line.contains("? keys") && line.contains("q back"),
+                "{width}: {line}"
+            );
+            assert!(line.contains("orbit"), "{width}: {line}");
+        }
+        let full = key_strip(&a, &keys, 200);
+        assert!(full.contains("r reset") && full.contains("1–4 pages"));
+        let narrow = key_strip(&a, &keys, 90);
+        assert!(
+            !narrow.contains("reset") && narrow.contains("pages"),
+            "{narrow}"
+        );
+    }
+
+    #[test]
+    fn the_key_overlay_fits_the_view() {
+        let a = crate::brand::ansi::Ansi::with_depth(crate::brand::ColorDepth::TrueColor);
+        for (cols, rows) in [(0, 0), (20, 8), (70, 30), (112, 53)] {
+            let lines = help_lines(&a, cols, rows);
+            assert_eq!(lines.len(), rows);
+            assert!(
+                lines.iter().all(|l| visible_width(l) == cols),
+                "{cols}x{rows}"
+            );
+        }
+        let text = help_lines(&a, 112, 53).join("\n");
+        for k in [
+            "orbit",
+            "pgup pgdn",
+            "1 2 3 4",
+            "next, previous finding",
+            "close this",
+        ] {
+            assert!(text.contains(k), "{k}");
+        }
     }
 
     static RESTORED: AtomicUsize = AtomicUsize::new(0);
