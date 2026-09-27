@@ -14,6 +14,7 @@ use app::{Action, Analysis, App, CommandSpec, RunMode};
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind};
 use crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
 use proteus_storage::repository::ProteusRepository;
+use ratatui::layout::Rect;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -41,8 +42,27 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
 
     let mut app = App::new(&cwd, data_dir);
     app.look = style::Look::detect();
+    // Real pixels for previews in a local kitty-protocol terminal (not over SSH, not in tmux).
+    if proteus_render::terminal::KittyRenderer::is_supported()
+        && std::env::var_os("SSH_CONNECTION").is_none()
+        && std::env::var_os("TMUX").is_none()
+    {
+        app.cell_pixels = crossterm::terminal::window_size().ok().and_then(|w| {
+            (w.width > 0 && w.height > 0 && w.columns > 0 && w.rows > 0).then(|| {
+                (
+                    w.width as f32 / w.columns as f32,
+                    w.height as f32 / w.rows as f32,
+                )
+            })
+        });
+    }
     let mut repo: Option<ProteusRepository> = None;
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Analysis)>();
+    type Scene = Option<Arc<proteus_render::StructureRenderData>>;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(PathBuf, Analysis, Scene)>();
+    let (ptx, mut prx) = tokio::sync::mpsc::unbounded_channel::<(app::PreviewKey, app::Preview)>();
+    // The preview being rendered, so a pane that keeps asking starts it once.
+    let mut rendering: Option<app::PreviewKey> = None;
+    let mut placed: Option<(app::PreviewKey, Rect)> = None;
     // The file selected and since when: only a selection that rests is measured, so scrolling
     // past a 5 MB file does not start (and wait for) its analysis.
     let mut resting: (Option<PathBuf>, Instant) = (None, Instant::now());
@@ -65,8 +85,32 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             refresh_jobs(&mut app, db_path, &mut repo).await;
             last_refresh = Some(Instant::now());
         }
-        while let Ok((path, analysis)) = rx.try_recv() {
+        while let Ok((path, analysis, scene)) = rx.try_recv() {
+            if let Some(scene) = scene {
+                app.scenes.insert(path.clone(), scene);
+            }
             app.analyses.insert(path, analysis);
+        }
+        while let Ok((key, preview)) = prx.try_recv() {
+            if rendering.as_ref() == Some(&key) {
+                rendering = None;
+            }
+            app.preview = Some((key, preview));
+        }
+        // The pane the last frame drew asks for a still of its size; render it off the loop.
+        let want = app.preview_want.borrow().as_ref().map(|(k, _)| k.clone());
+        if let Some(key) = want {
+            let have = app.preview.as_ref().is_some_and(|(k, _)| *k == key);
+            if !have && rendering.as_ref() != Some(&key) {
+                if let Some(scene) = app.scenes.get(&key.path).cloned() {
+                    rendering = Some(key.clone());
+                    let (ptx, cell) = (ptx.clone(), app.cell_pixels);
+                    tokio::task::spawn_blocking(move || {
+                        let p = render_preview(&scene, &key, cell);
+                        let _ = ptx.send((key, p));
+                    });
+                }
+            }
         }
         let wanted = app.wanted_analysis();
         if wanted != resting.0 {
@@ -77,14 +121,18 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                 app.stamps.insert(path.clone(), app::file_stamp(&path));
                 let tx = tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let result = analyse(&path);
-                    let _ = tx.send((path, result));
+                    let (result, scene) = analyse(&path);
+                    let _ = tx.send((path, result, scene));
                 });
             }
         }
 
         app.tick = (started.elapsed().as_millis() / 500) as u64;
+        *app.preview_want.borrow_mut() = None;
         terminal.draw(|f| ui::draw(f, &app))?;
+        if app.cell_pixels.is_some() {
+            place_picture(&app, &mut placed);
+        }
 
         if !event::poll(Duration::from_millis(100))? {
             continue;
@@ -104,6 +152,11 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             Action::Run(spec) => {
                 // A quiet command needs no terminal: the home screen stays up while it runs.
                 let leave = spec.mode != RunMode::Quiet;
+                if leave && placed.is_some() {
+                    // The picture would outlive the home screen on the child's screen.
+                    *app.preview_want.borrow_mut() = None;
+                    place_picture(&app, &mut placed);
+                }
                 if leave {
                     let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste);
                     ratatui::restore();
@@ -131,6 +184,10 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                 app.files.rescan();
             }
         }
+    }
+    if placed.is_some() {
+        *app.preview_want.borrow_mut() = None;
+        place_picture(&app, &mut placed);
     }
     // End here rather than returning: dropping the runtime would wait for any analysis still
     // running on a blocking thread (a large file takes seconds; a FIFO never finishes).
@@ -202,9 +259,12 @@ async fn refresh_jobs(app: &mut App, db_path: &Path, repo: &mut Option<ProteusRe
 }
 
 /// The same analysis as `proteus analyze`, summarised as the browser page summarises it, plus
-/// what the viewers would open on: a preview still and, for a complex, its interface.
-fn analyse(path: &Path) -> Analysis {
-    let run = || -> Result<Analysis> {
+/// what the viewers would open on: the structure bundle (for previews) and, for a complex, its
+/// interface.
+fn analyse(path: &Path) -> (Analysis, Option<Arc<proteus_render::StructureRenderData>>) {
+    let mut scene = None;
+    let mut run = || -> Result<Analysis> {
+        let qc = proteus_core::qc::structure_qc(path, None, None)?;
         let loaded = proteus_core::io::load_structure(path)?;
         let a = proteus_core::metrics::analyze_pdb_detailed_with_header(
             &loaded.pdb,
@@ -212,11 +272,11 @@ fn analyse(path: &Path) -> Analysis {
             Some(&loaded.header_preview),
         )?;
         let residues = a.plddts.len();
-        let (mut interface, mut verdict, mut preview) = (Vec::new(), None, None);
-        // The viewers' own structure bundle: interfaces, the PAE beside the file, the still.
+        let confidence = proteus_core::pae::read_confidence(path, None).ok();
+        let (mut interface, mut verdict) = (Vec::new(), None);
         if let Ok(text) = proteus_core::io::read_structure_text(path) {
             if let Ok(mut s) = proteus_render::parse_pdb_structure(&text) {
-                if let Ok(c) = proteus_core::pae::read_confidence(path, None) {
+                if let Some(c) = confidence.clone() {
                     s.attach_confidence(c);
                 }
                 if let Some(v) = s.default_interface() {
@@ -239,47 +299,59 @@ fn analyse(path: &Path) -> Analysis {
                         )
                     });
                     interface.push([
-                        "Interface".into(),
+                        "binder → target".into(),
                         format!("{} → {}", m.binder_chains, m.target_chains),
                     ]);
                     if m.ipsae_min.is_some() {
                         interface.push([
-                            "ipSAE · ipAE · LIS".into(),
-                            format!(
-                                "{} / {} · {} Å · {}",
-                                n(m.ipsae_min, 3),
-                                n(m.ipsae_max, 3),
-                                n(m.ipae, 1),
-                                n(m.lis, 3)
-                            ),
+                            "ipSAE min / max".into(),
+                            format!("{} / {}", n(m.ipsae_min, 3), n(m.ipsae_max, 3)),
+                        ]);
+                        interface.push([
+                            "ipAE · LIS".into(),
+                            format!("{} Å · {}", n(m.ipae, 1), n(m.lis, 3)),
                         ]);
                     }
                     interface.push([
-                        "Sc · dSASA · contacts".into(),
+                        "Sc · buried".into(),
+                        format!("{} · {:.0} Å²", n(m.shape_complementarity, 2), m.dsasa),
+                    ]);
+                    interface.push([
+                        "contacts".into(),
                         format!(
-                            "{} · {:.0} Å² · {}/{}",
-                            n(m.shape_complementarity, 2),
-                            m.dsasa,
+                            "{} + {} residues · {} H-bonds · {} salt bridges",
                             m.binder_interface_residues,
-                            m.target_interface_residues
+                            m.target_interface_residues,
+                            m.interface_hbonds,
+                            m.interface_salt_bridges
                         ),
                     ]);
                 }
-                let fb = proteus_render::preview_framebuffer(&s, 96, 72, s.default_color_scheme());
-                preview = Some(app::Preview {
-                    width: fb.width,
-                    height: fb.height,
-                    pixels: fb
-                        .colors
-                        .iter()
-                        .map(|c| {
-                            (*c != proteus_render::rasterizer::buffer::ColorRGB::BLACK)
-                                .then_some((c.r, c.g, c.b))
-                        })
-                        .collect(),
-                });
+                scene = Some(Arc::new(s));
             }
         }
+        let facts = app::Facts {
+            chains: qc.n_chains,
+            plddt: qc.plddt_mean,
+            ptm: confidence.as_ref().and_then(|c| c.ptm),
+            iptm: confidence.as_ref().and_then(|c| c.iptm),
+            rama_favored: qc.rama_favored_pct,
+            rama_outliers: qc.rama_outliers,
+            helix: qc.helix_pct,
+            strand: qc.strand_pct,
+            coil: qc.coil_pct,
+            rg_ratio: qc.rg_ratio,
+            sasa: qc.sasa_total,
+            burial: qc.hydrophobic_burial_pct,
+            overlaps_per_1k: qc.heavy_atom_overlap_score,
+            bond_outliers: qc.bond_outliers,
+            angle_outliers: qc.angle_outliers,
+            rotamer_outliers: qc.rotamer_outlier_pct,
+            hbonds: qc.hbond_count,
+            salt_bridges: qc.salt_bridge_count,
+            pi: qc.pi_stacking_count + qc.cation_pi_count,
+            triage: qc.fitness,
+        };
         Ok(Analysis::Done {
             residues,
             predicted: a.metrics.confidence_source
@@ -287,10 +359,84 @@ fn analyse(path: &Path) -> Analysis {
             rows: proteus_core::qc::summary_rows(&a.metrics, residues),
             interface,
             verdict,
-            preview,
+            facts: Some(Box::new(facts)),
         })
     };
-    run().unwrap_or_else(|e| Analysis::Failed(format!("{e:#}")))
+    let analysis = run().unwrap_or_else(|e| Analysis::Failed(format!("{e:#}")));
+    (analysis, scene)
+}
+
+/// A still of `scene` for a pane of `key.cols` × `key.rows` cells: two pixels per cell high in
+/// half-block, or the pane's real pixel size under kitty graphics.
+fn render_preview(
+    scene: &proteus_render::StructureRenderData,
+    key: &app::PreviewKey,
+    cell: Option<(f32, f32)>,
+) -> app::Preview {
+    let (w, h) = match (key.pixels, cell) {
+        (true, Some((cw, ch))) => (
+            ((key.cols as f32 * cw) as usize).min(1400),
+            ((key.rows as f32 * ch) as usize).min(1400),
+        ),
+        _ => (key.cols as usize, key.rows as usize * 2),
+    };
+    let fb = proteus_render::preview_framebuffer(scene, w, h, scene.default_color_scheme());
+    app::Preview {
+        width: fb.width,
+        height: fb.height,
+        pixels: fb
+            .colors
+            .iter()
+            .map(|c| {
+                (*c != proteus_render::rasterizer::buffer::ColorRGB::BLACK)
+                    .then_some((c.r, c.g, c.b))
+            })
+            .collect(),
+    }
+}
+
+/// Place (or clear) the kitty picture over the preview pane after a frame: sent only when the
+/// picture or its place changed, deleted when no pane wants one.
+fn place_picture(app: &App, placed: &mut Option<(app::PreviewKey, Rect)>) {
+    use std::io::Write;
+    const ID: u32 = 0x5068; // "Ph"
+    let want = app.preview_want.borrow().clone().filter(|(k, _)| k.pixels);
+    let ready = match (&want, &app.preview) {
+        (Some((k, r)), Some((pk, p))) if k == pk => Some((k.clone(), *r, p)),
+        _ => None,
+    };
+    let mut out = String::new();
+    match ready {
+        Some((k, r, p)) => {
+            if placed.as_ref() != Some(&(k.clone(), r)) {
+                let mut fb =
+                    proteus_render::rasterizer::buffer::Framebuffer::new(p.width, p.height);
+                for (i, px) in p.pixels.iter().enumerate() {
+                    if let Some((r_, g, b)) = px {
+                        fb.colors[i] =
+                            proteus_render::rasterizer::buffer::ColorRGB::new(*r_, *g, *b);
+                    }
+                }
+                out.push_str(&format!("\x1b7\x1b[{};{}H", r.y + 1, r.x + 1));
+                proteus_render::terminal::KittyRenderer::frame(
+                    &fb, r.width, r.height, ID, &mut out,
+                );
+                out.push_str("\x1b8");
+                *placed = Some((k, r));
+            }
+        }
+        None => {
+            if placed.is_some() {
+                proteus_render::terminal::KittyRenderer::delete(ID, &mut out);
+                *placed = None;
+            }
+        }
+    }
+    if !out.is_empty() {
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(out.as_bytes());
+        let _ = stdout.flush();
+    }
 }
 
 /// Run `spec` and return one line for the status bar. For [`RunMode::Quiet`] the output goes
