@@ -878,3 +878,32 @@ fn the_list_names_the_model_and_whether_it_had_an_alignment() {
     j.metadata = Some(serde_json::json!({ "engine": "simulated" }));
     assert_eq!(model(&j), "simulated");
 }
+
+#[test]
+fn the_card_fits_its_lines_instead_of_wrapping_them() {
+    let fx = super::app::Facts {
+        chains: 2,
+        plddt: Some(94.1),
+        rama_favored: 97.0,
+        rama_outliers: 1,
+        rg_ratio: 1.08,
+        triage: 94.0,
+        ..Default::default()
+    };
+    let look = &app_in(Path::new("/")).look;
+    for width in [31u16, 34, 40, 48, 60, 90] {
+        let lines = super::ui::headline_card_for_test(look, 233, true, Some(&fx), width);
+        for l in &lines {
+            assert!(l.width() <= width as usize, "{width}: {l:?}");
+        }
+        let text: String = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("1 outlier") && !text.contains("1 outliers"),
+            "{text}"
+        );
+    }
+}
