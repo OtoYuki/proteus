@@ -115,3 +115,17 @@ jobs:
       - run: scripts/smoke.sh --tes docker.io/library/alpine:3.20
       - name: Container-executor unit tests (need the Docker socket)
         run: PROTEUS_TEST_OCI=1 cargo test -p proteus-engine --lib -- --ignored container_executor
+      # The nf-core-style module in packaging/nf-core, run by nf-test against the binary just built.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: nf-test the PROTEUS_ANALYZE module
+        env:
+          NXF_VER: 26.04.6
+        run: |
+          mkdir -p "$HOME/bin" && cd "$HOME/bin"
+          curl -fsSL https://get.nextflow.io | bash
+          curl -fsSL https://get.nf-test.com | bash -s 0.9.5
+          cd "$GITHUB_WORKSPACE/packaging/nf-core"
+          PATH="$GITHUB_WORKSPACE/target/release:$HOME/bin:$PATH" nf-test test modules/proteus/analyze/tests/main.nf.test

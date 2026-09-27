@@ -91,7 +91,9 @@ tempfile = "3.17"
 toml = "1"
 criterion = { version = "0.8", default-features = false, features = ["html_reports"] }
 utoipa = { version = "5.3", features = ["uuid", "chrono"] }
-utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
+# vendored: bundle Swagger UI instead of downloading it with curl in the build script, so
+# the build works offline and in sandboxes (conda-build, Nix).
+utoipa-swagger-ui = { version = "9.0", features = ["axum", "vendored"] }
 
 # The biophysics is numeric inner loops; unoptimised, a single protein complex takes tens of
 # seconds in the test suite. Level 1 keeps debug info and makes it ~10x faster.

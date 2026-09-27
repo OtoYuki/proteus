@@ -53,3 +53,8 @@ docs/media/*.cast
 
 # Playwright MCP screenshots and page snapshots
 .playwright-mcp/
+
+# nf-test work directories
+.nf-test/
+.nextflow/
+.nextflow.log*

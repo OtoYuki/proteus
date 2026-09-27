@@ -1,0 +1,68 @@
+name: "proteus_analyze"
+description: |
+  Measure a set of predicted protein models and write one row per model: confidence (pLDDT),
+  DSSP secondary structure, MolProbity Ramachandran, covalent geometry and rotamers, SASA and the
+  non-covalent interaction network. With `ext.args = '--interface A:B'`, binder–target interface
+  metrics for design campaigns: ipSAE, ipAE, LIS and ipTM from the predictor's PAE and scores,
+  plus dSASA, shape complementarity and cross-interface contacts.
+keywords:
+  - protein structure
+  - quality control
+  - binder design
+  - ipsae
+  - alphafold
+  - boltz
+tools:
+  - proteus:
+      description: Triage of predicted protein structures and designed binders, with every metric
+        that has a reference implementation checked against it.
+      homepage: https://github.com/OtoYuki/proteus
+      documentation: https://github.com/OtoYuki/proteus#readme
+      tool_dev_url: https://github.com/OtoYuki/proteus
+      licence:
+        - "MIT"
+        - "Apache-2.0"
+input:
+  - - meta:
+        type: map
+        description: |
+          Groovy Map containing sample information
+          e.g. `[ id:'campaign_1' ]`
+    - models:
+        type: file
+        description: |
+          Structure files, and the predictor's PAE and scores files beside them when interface
+          metrics are wanted
+        pattern: "*.{pdb,cif,mmcif,ent,pdb.gz,cif.gz,npz,json}"
+output:
+  qc:
+    - - meta:
+          type: map
+          description: |
+            Groovy Map containing sample information
+      - ${prefix}.parquet:
+          type: file
+          description: One row per model; the columns are listed in the Proteus README
+          pattern: "*.parquet"
+  versions_proteus:
+    - - ${task.process}:
+          type: string
+          description: The name of the process
+      - proteus:
+          type: string
+          description: The name of the tool
+      - proteus --version | sed 's/^proteus //':
+          type: eval
+          description: The expression to obtain the version of the tool
+topics:
+  versions:
+    - - ${task.process}:
+          type: string
+          description: The name of the process
+      - proteus:
+          type: string
+          description: The name of the tool
+authors:
+  - "@OtoYuki"
+maintainers:
+  - "@OtoYuki"
