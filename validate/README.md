@@ -169,9 +169,11 @@ output terms, so none are committed to this repository.
 | shape complementarity | sc-rs (the code it was ported from) | 1e-12 on 2PTC |
 | shape complementarity | dataset Rosetta Sc | Pearson r 0.57 (protocol not published; see `last_run.md`) |
 
-What the metrics are worth, measured on the lab results (average precision; random = 0.107):
-ipSAE_min 0.358 (the dataset's own AF3 ipSAE_min: 0.350), LIS 0.313, −ipAE 0.298, Sc 0.267 (the
-dataset's Rosetta Sc: 0.178), ipTM 0.236, mean pLDDT 0.208. Keeping `ipsae_min > 0.61`, the paper's
+What the metrics are worth, measured on the lab results as average precision per target, averaged
+over the 15 targets (random = the binder rate, 0.131 on average): ipSAE_min 0.513 (the dataset's
+own AF3 ipSAE_min: 0.513), LIS 0.477, −ipAE 0.444, pDockQ2 (dataset) 0.436, ipTM 0.425, mean pLDDT
+0.409, Sc 0.381 (the dataset's Rosetta Sc: 0.267, Rosetta interface ΔG: 0.332). Pooled over all
+designs instead, ipSAE_min scores 0.358 against 0.107. Keeping `ipsae_min > 0.61`, the paper's
 threshold, keeps 509 of 3 669 designs, of which 203 bound (precision 0.40, recall 0.52).
 
 Known differences, each explained in `binders/tolerances.toml`:
@@ -179,6 +181,20 @@ Known differences, each explained in `binders/tolerances.toml`:
 - a direction with no PAE under 10 Å is scored 0 here and skipped there;
 - the dataset's LIS comes from an older version;
 - multi-chain targets aggregate differently, and the paper does not say how it did it.
+
+## Binder triage, second dataset (`make validate-nipah`)
+
+The Adaptyv Nipah binder competition (ProteinBase collection `nipah-binder-competition-results`,
+ODC-By): 1 196 designs against the Nipah G head with a lab result, 111 of them binders, each with
+the Boltz-2 complex and full PAE ProteinBase publishes. A different predictor, lab and assay from
+the Overath set. `make validate-nipah` downloads ~10 GB into `~/.cache/proteus-validate/nipah` and
+writes `nipah/last_run.md`.
+
+ipSAE_min: AP 0.191 against a random 0.093, AUROC 0.658. Boltz's interface pLDDT ties it on AP
+(0.190) and does better on AUROC (0.707); Sc is close (0.179). Half the tested designs were chosen by their collection's mean ipSAE, so the set is
+pre-filtered on the score being tested. ProteinBase's own ipSAE used 15 Å cutoffs and a
+`boltz2_min_ipsae` that is one direction, not a minimum; its pDockQ columns are constant. The
+report explains each.
 
 ## Corpus
 

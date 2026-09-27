@@ -5,9 +5,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced from cctbx.
+## [0.9.0] — 2026-09-27
+
+Binder triage, validated on two lab datasets: `analyze --interface` ranks designed binders by
+ipSAE and measures their interfaces, reading PAE from Boltz, AlphaFold 3, Protenix, OpenFold3
+and ColabFold output, complexes with ligands and modified residues included. Also MolProbity's
+covalent-geometry and rotamer checks reproduced from cctbx, and a redesigned home screen and
+viewers.
 
 ### Added
+- `scripts/vision.sh`: the terminal UI as a user sees it. A real kitty on an invisible Hyprland
+  output, driven by keys and captured with grim, so layout work is reviewed on real fonts, Nerd
+  Font icons and kitty pictures rather than on text dumps.
+- The terminal viewer's side panel has four pages (`1`–`4`): overview, geometry (a large
+  Ramachandran plot), confidence (a large PAE map with chain bands, pLDDT per residue) and
+  measurements; `?` lists every key; the key strip is one line.
+- Home screen: an overview of all jobs under the list; the Structures tab previews folders,
+  finds structure files further down, and `f` lists all of them to open; the Run tab shows the
+  latest jobs, the tiers side by side, and `ctrl-e` fills in an example. Chains are named in
+  every viewer (`PD-L1 (A) → PD-1 (B)`), and titles name the model (`boltz+msa`).
 - `proteus rename JOB NAME` and `proteus delete JOB` (alias `rm`; `--keep-files` keeps the
   job's folder). In the home screen's jobs tab, `n` renames the selected job, `x` deletes it
   after a `y`, and `s` sorts the list: newest first, by name, by state, or most confident first.
@@ -45,8 +61,34 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
 - `make validate-binders`: the interface metrics against the Overath et al. 2025 meta-analysis
   (3 669 designs with a lab result, Zenodo 10.5281/zenodo.15722219). On single-chain targets,
   ipSAE and ipAE agree with the dataset's own values to its rounding. On the lab results,
-  ipSAE_min ranks binders with average precision 0.358 (random 0.107). Results are in
-  `validate/binders/last_run.md`. CI checks one Boltz-1 design from the same dataset.
+  ipSAE_min ranks each target's designs with average precision 0.513 on average (random 0.131),
+  ahead of every other score in the dataset, pDockQ2 and Rosetta's interface ΔG included.
+  Results, per target and pooled, are in `validate/binders/last_run.md`. CI checks one Boltz-1
+  design from the same dataset.
+- `make validate-nipah`: the same metrics against Adaptyv's Nipah binder competition (1 196 designs
+  with a lab result, Boltz-2 models and PAE from ProteinBase). ipSAE_min ranks with AP 0.191
+  against a random 0.093 on a set already filtered by ipSAE. Results are in
+  `validate/nipah/last_run.md`.
+- PAE files from complexes with ligands or modified residues are read. AlphaFold 3-style
+  predictors write one row per token (one per standard residue, one per ligand heavy atom; a
+  modified residue is one token in Boltz-2 and one per atom in AlphaFold 3); the protein
+  residues' rows are now picked out in file order, under whichever convention accounts for
+  every row, where before the matrix was refused as the wrong size. ipSAE and LIS equal
+  `ipsae.py`'s on a Boltz-2 HIV protease + MK1 model (198 residues, 243 tokens). On Boltz-2
+  folds with a modified residue, `ipsae.py` (v4) assumes one token per atom: with a
+  phosphoserine alone it stops with `index 86 is out of bounds` (DunbrackLab/IPSAE #28); with a
+  phosphoserine and ATP it runs and reports ipSAE 0.619 where the value is 0.253. Proteus gives
+  0.253, as does `ipsae.py` itself once the ATP is removed and the SEP read as SER.
+- Protenix (`*_sample_N.cif`, `token_pair_pae`), OpenFold3 (`*_confidences.json`/`.npz`,
+  `*_confidences_aggregated.json`) and Chai-1 (`scores.model_idx_N.npz`) outputs are found
+  beside their models, file names checked against each predictor's writer. float16 `.npy`
+  arrays are read (OpenFold3's `.npz` default). Real output of a complex with a phosphoserine
+  and ATP from Protenix 2.0.0 and OpenFold3 0.5.0 (JSON and float16 `.npz`) is a test, its
+  values checked against computations independent of Proteus. Chai-1 is checked against its
+  source only: it needs more than a 6 GB GPU.
+- `analyze --interface` keeps a model whose PAE file cannot be used and says why on stderr
+  (`no PAE metrics: …`, and in the JSON as `interface_note`), instead of failing the model or
+  leaving ipSAE silently empty.
 - AlphaFold 3 local-run output names (`<name>_confidences.json` beside `<name>_model.cif`, and
   `confidences.json` beside a sample's `model.cif`) are recognised as PAE and scores files.
 - The OCI runner hands tier containers the GPU through CDI (`nvidia.com/gpu=all` when the
@@ -108,6 +150,21 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- Home screen speed: every job's model is measured ahead in the background (up to four at a
+  time, nearest the selection first), previews are cached and the neighbours rendered ahead,
+  and the launch is shorter. Tab icons are Nerd Font glyphs where the terminal ships them
+  (kitty, WezTerm, Ghostty; `PROTEUS_ICONS=nerd|none` decides elsewhere).
+- The browser page's side panel is wider (380–440 px) and hides with `p`. It opens on a
+  headline, the verdict as glyph and word over the number it rests on (ipSAE_min for a complex,
+  mean pLDDT with its band split for a predicted monomer, favoured φ, ψ for an experimental
+  structure), then tabs: interface, quality (stat tiles with gauges, a secondary-structure bar,
+  measurements as label and value rows, findings) and plots. A job's complex names its chains
+  there (`BPTI (B) → trypsin (A)`). On a narrow window the panel is a bottom sheet.
+- The page's bottom is one sequence row with a position ruler, and six key hints; every key is
+  in a grouped list behind `?`. The structure is fitted between the legend and the sequence.
+- A complex keeps its chains' names (`>PD-L1`, `>PD-1`, or a UniProt entry name), stored as a
+  fourth header field (`>A|protein|empty|PD-L1`); older records still parse. The home screen's
+  interface panel names binder and target: `PD-L1 (A) → PD-1 (B)`.
 - When Boltz runs the GPU out of memory on a run with an alignment, the error suggests a
   shallower one (`PROTEUS_BOLTZ_MAX_MSA_SEQS=256`) first: on a 6 GB GPU trypsin + BPTI (281
   residues) failed at the default 1 024 sequences and folded at 256.
@@ -911,8 +968,9 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...v0.8.0
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/OtoYuki/proteus/compare/c7b0761...v0.9.0
+[0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...c7b0761
 [0.7.0]: https://github.com/OtoYuki/proteus/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/OtoYuki/proteus/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/OtoYuki/proteus/compare/v0.4.0...v0.5.0

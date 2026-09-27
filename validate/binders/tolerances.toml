@@ -53,6 +53,8 @@ min_pearson = 0.9
 
 [outcome]
 ipsae_min_threshold = 0.61
+# Targets with fewer binders than this get their own per-target mean: one binder's rank is noise.
+min_binders_per_target = 5
 
 [notes]
 parity = [

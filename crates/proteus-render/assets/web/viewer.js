@@ -97,18 +97,53 @@
   buildSequence();
   showLegend();
   updateSelectionUI();
-  // The key help wraps on narrow windows: stack the sequence track and the selection box on it.
-  function layoutBottom() {
-    const keys = $('keys'), seq = $('seq'), box = $('selbox');
-    // offsetParent is always null for a fixed element: ask the computed style instead.
-    if (getComputedStyle(keys).display === 'none') { seq.style.bottom = box.style.bottom = ''; return; }
-    const top = 16 + keys.offsetHeight + 6;
-    seq.style.bottom = top + 'px';
-    box.style.bottom = top + seq.offsetHeight + 8 + 'px';
+  // Narrow windows: the panel is a bottom sheet, and the dock sits on it.
+  const narrow = window.matchMedia('(max-width: 900px)');
+  // The legend goes under the header, and the selection box over the dock, whatever wraps.
+  function layout() {
+    const dock = $('dock'), box = $('selbox'), panel = $('panel');
+    const sheet = narrow.matches ? Math.max(0, window.innerHeight - panel.getBoundingClientRect().top) : 0;
+    dock.style.bottom = (narrow.matches ? sheet + 10 : 14) + 'px';
+    box.style.bottom = window.innerHeight - dock.getBoundingClientRect().top + 8 + 'px';
+    $('legend').style.top = Math.round($('head').getBoundingClientRect().bottom + 12) + 'px';
   }
-  layoutBottom();
-  window.addEventListener('resize', layoutBottom);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutBottom);
+  layout();
+  window.addEventListener('resize', layout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
+
+  // The panel hides with p (or its button) and comes back the same way; the view refits to
+  // the room it leaves while it slides.
+  function togglePanel(show) {
+    const off = show === undefined ? !document.body.classList.contains('panel-off') : !show;
+    document.body.classList.toggle('panel-off', off);
+    $('panelhide').setAttribute('aria-expanded', String(!off));
+    $('panelhide').firstChild.textContent = narrow.matches ? (off ? '▴ show' : '▾ hide') : 'hide ›';
+    $('panelshow').setAttribute('aria-expanded', String(!off));
+    const t0 = performance.now();
+    const step = () => { layout(); if (V) V.redraw(); if (performance.now() - t0 < 360) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+  $('panelshow').addEventListener('click', () => togglePanel(true));
+  narrow.addEventListener('change', () => togglePanel(!document.body.classList.contains('panel-off')));
+
+  // Every key, grouped, behind `?`.
+  function toggleHelp(show) {
+    const help = $('help');
+    help.hidden = show === undefined ? !help.hidden : !show;
+    if (!help.hidden) help.querySelector('[data-close]').focus();
+    else $('view').focus();
+  }
+  $('helpshow').addEventListener('click', () => toggleHelp(true));
+  $('help').addEventListener('click', (e) => { if (e.target === $('help') || e.target.closest('[data-close]')) toggleHelp(false); });
+  // Registered before the 3D view's keys, so Escape closes the list rather than the selection.
+  window.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+    const open = !$('help').hidden;
+    if (e.key === '?' || (open && e.key === 'Escape')) { toggleHelp(); e.stopImmediatePropagation(); e.preventDefault(); return; }
+    if (open) return;
+    if (e.key === 'p') { togglePanel(); e.stopImmediatePropagation(); }
+  });
 
   function fail(msg) {
     const fb = $('fallback');
@@ -412,13 +447,22 @@
 
     function rotation() { return C.mat3Mul(C.yawPitch(state.yaw, state.pitch), base); }
 
-    // The panel covers part of the canvas: fit the structure to the rest, in device pixels.
+    // The panel (at the side, or a sheet at the bottom) and the sequence dock cover part of the
+    // canvas: fit the structure to the rest, in device pixels.
     function visibleArea() {
       const r = $('panel').getBoundingClientRect();
-      const k = W / canvas.clientWidth;
-      const right = r.left > canvas.clientWidth / 2 ? (canvas.clientWidth - r.left) * k : 0;
-      const bottom = right === 0 && r.top > canvas.clientHeight / 2 ? (canvas.clientHeight - r.top) * k : 0;
-      return { w: Math.max(1, W - right), h: Math.max(1, H - bottom), right, bottom };
+      const cw = canvas.clientWidth, ch = canvas.clientHeight;
+      const k = W / cw;
+      const side = r.left > cw / 2 && r.top < ch / 2;
+      const right = side ? Math.max(0, cw - r.left) * k : 0;
+      const dockTop = $('dock').getBoundingClientRect().top;
+      const sheetTop = side ? ch : r.top;
+      const cover = ch - Math.min(sheetTop, dockTop > ch / 2 ? dockTop - 8 : ch);
+      // The header and legend at the top; at least a quarter of the height stays the structure's.
+      const topCss = Math.max(0, Math.min(ch / 4, $('legend').getBoundingClientRect().bottom + 4));
+      const bottom = Math.max(0, Math.min(ch * 0.75 - topCss, cover)) * k;
+      const top = topCss * k;
+      return { w: Math.max(1, W - right), h: Math.max(1, H - bottom - top), right, bottom, top };
     }
     function pxPerA() {
       const v = visibleArea();
@@ -432,7 +476,7 @@
       gl.uniform2f(prog.u.uScale, 2 * s / W, 2 * s / H);
       gl.uniform2fv(prog.u.uPan, state.pan);
       const v = visibleArea();
-      gl.uniform2f(prog.u.uOffset, -v.right / W, v.bottom / H);
+      gl.uniform2f(prog.u.uOffset, -v.right / W, (v.bottom - v.top) / H);
       gl.uniform1f(prog.u.uZ, zRange);
     }
 
@@ -520,7 +564,7 @@
       const d = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
       const x = rot[0] * d[0] + rot[1] * d[1] + rot[2] * d[2] + state.pan[0];
       const y = rot[3] * d[0] + rot[4] * d[1] + rot[5] * d[2] + state.pan[1];
-      const nx = x * 2 * s / W - v.right / W, ny = y * 2 * s / H + v.bottom / H;
+      const nx = x * 2 * s / W - v.right / W, ny = y * 2 * s / H + (v.bottom - v.top) / H;
       return [(nx + 1) / 2 * canvas.clientWidth, (1 - ny) / 2 * canvas.clientHeight];
     }
     const atomPos = (i) => [mesh.atoms.pos[3 * i], mesh.atoms.pos[3 * i + 1], mesh.atoms.pos[3 * i + 2]];
@@ -838,6 +882,7 @@
       recolor() { recolor(); saveSession(); },
       saveSession,
       previewChanged() { applyDimming(); request(); },
+      redraw: request,
       atoms: mesh.atoms,
       caOf,
     };
@@ -992,6 +1037,8 @@
       });
     }
     restoreSession();
+    // A binder restored from the link: the panel was drawn for the default one.
+    if (interfaces.length) { renderInterface($('interface')); renderHeadline(); }
     if (scheme !== (SCHEMES.includes(meta.scheme) ? meta.scheme : 'ss')) recolor();
     rebuildSticks();
     applyDimming();
@@ -1203,7 +1250,7 @@
         swatch(compare.colour, 'reference'));
     } else if (scheme === 'interface') {
       const f = interfaces[ifaceIdx], k = meta.interfaceColours;
-      name.textContent = '(interface · binder ' + f.binder + ' → ' + f.target + ')';
+      name.textContent = '(interface · binder ' + shortChains(f.binder) + ' → ' + shortChains(f.target) + ')';
       el.append(name, swatch(k.binderInterface, 'binder contact'), swatch(k.binder, 'binder'),
         swatch(k.targetInterface, 'target contact'), swatch(k.target, 'target'));
       if (new Set(meta.labels.chain).size > f.binder.split(',').length + f.target.split(',').length) el.append(swatch(k.other, 'other chains'));
@@ -1229,181 +1276,399 @@
     }
   }
 
+  // ---------------------------------------------------------------- panel
+  // A headline (the verdict that matters most, as glyph + word, and the number behind it), then
+  // tabs: interface (complexes), quality (numbers, measurements, findings) and plots. Files and
+  // provenance close every tab.
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  /** `B` as `BPTI (B)` when the input named the chain; several chains one by one. */
+  // (Function declarations: the panel is built before this part of the file runs.)
+  function chainName(id) { return (meta.chainNames && meta.chainNames[id]) || ''; }
+  function nameChains(ids) { return ids.split(',').map((c) => (chainName(c) ? chainName(c) + ' (' + c + ')' : c)).join(', '); }
+  function shortChains(ids) { return ids.split(',').map((c) => chainName(c) || c).join(', '); }
+  function pct(x) { return Math.round(x * 100) + ' %'; }
+  /** AlphaFold's pLDDT bands: a value inside each (for its colour) and its name. */
+  function plddtBandList() { return [[95, '≥ 90'], [80, '70–90'], [60, '50–70'], [25, '< 50']]; }
+
+  function gauge(v, colour, mark) {
+    const g = el('div', 'gauge');
+    const i = el('i');
+    i.style.width = Math.max(0, Math.min(1, v)) * 100 + '%';
+    if (colour) i.style.background = colour;
+    g.append(i);
+    if (mark !== undefined) { const b = el('b'); b.style.left = mark * 100 + '%'; g.append(b); }
+    return g;
+  }
+  /** Segments side by side, [fraction, rgb, word] each, and a key naming them. */
+  function stack(parts, key) {
+    const bar = el('div', 'stack');
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', parts.map(([f, , w]) => w + ' ' + pct(f)).join(', '));
+    for (const [f, rgb] of parts) {
+      if (f <= 0) continue;
+      const i = el('i');
+      i.style.flex = f + ' 1 0';
+      i.style.background = 'rgb(' + rgb.join(',') + ')';
+      bar.append(i);
+    }
+    if (!key) return [bar];
+    const k = el('div', 'stack-key');
+    for (const [f, rgb, w] of parts) {
+      const s = el('span');
+      const sw = el('i');
+      sw.style.background = 'rgb(' + rgb.join(',') + ')';
+      s.append(sw, document.createTextNode(w + ' '), el('em', '', pct(f)));
+      k.append(s);
+    }
+    return [bar, k];
+  }
+  function plddtStack(key) {
+    const f = C.plddtBands(meta.perResidue);
+    return stack(plddtBandList().map(([v, w], k) => [f[k], C.plddtColor(v), w]), key);
+  }
+  /** A stat tile: label, figure (with a unit), then an optional gauge and a sub-line. */
+  function tile(label, value, o) {
+    o = o || {};
+    const t = el('div', 'tile' + (o.wide ? ' wide' : ''));
+    if (o.title) t.title = o.title;
+    t.append(el('span', 'tl', label));
+    const v = el('span', 'tv' + (o.cls ? ' ' + o.cls : ''), value);
+    if (o.unit) v.append(el('small', '', o.unit));
+    t.append(v);
+    for (const x of o.extra || []) t.append(x);
+    if (o.sub) t.append(el('span', 'ts', C.keepUnits(o.sub)));
+    return t;
+  }
+
   function buildPanel() {
     const panel = $('panel');
-    const h = (text) => { const e = document.createElement('h2'); e.textContent = '(' + text + ')'; panel.append(e); return e; };
     const conf = meta.confidence;
-    const rows = meta.metrics.slice();
-    if (conf && (conf.ptm != null || conf.iptm != null)) {
-      const parts = [];
-      if (conf.ptm != null) parts.push('pTM ' + conf.ptm.toFixed(3));
-      if (conf.iptm != null) parts.push('ipTM ' + conf.iptm.toFixed(3));
-      if (conf.ligandIptm != null) parts.push('ligand ipTM ' + conf.ligandIptm.toFixed(3));
-      rows.splice(Math.min(2, rows.length), 0, ['predicted TM-score', parts.join(' · ')]);
+    const st = meta.stats || {};
+    const head = el('section', '');
+    head.id = 'headline';
+    panel.append(head);
+
+    const tabs = el('div', 'tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'panel sections');
+    panel.append(tabs);
+    const panes = {};
+    const pane = (key, word) => {
+      const p = el('section', 'pane');
+      p.id = key === 'interface' ? 'interface' : 'pane-' + key;
+      p.setAttribute('role', 'tabpanel');
+      p.setAttribute('aria-label', word);
+      const b = el('button', '', word);
+      b.type = 'button';
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-controls', p.id);
+      b.addEventListener('click', () => showTab(key));
+      tabs.append(b);
+      panel.append(p);
+      panes[key] = { p, b };
+      return p;
+    };
+    function showTab(key) {
+      for (const [k, { p, b }] of Object.entries(panes)) {
+        p.hidden = k !== key;
+        b.setAttribute('aria-selected', String(k === key));
+        b.tabIndex = k === key ? 0 : -1;
+      }
     }
+    const section = (into, text) => { const e = el('h2', '', '(' + text + ')'); into.append(e); return e; };
+
+    if (interfaces.length) buildInterfacePanel(pane('interface', 'interface'));
+    const quality = pane('quality', 'quality');
+    const plots = pane('plots', 'plots');
+
+    // ---- quality: the key numbers as tiles, the rest as rows, then the findings.
+    const tiles = el('div', 'tiles');
+    // Rows the headline or a tile already shows.
+    const covered = new Set(st.plddt ? ['pLDDT'] : []);
+    // A monomer's headline is its pLDDT already; a complex's is its interface.
+    if (st.plddt && meta.perResidue.length && interfaces.length) {
+      covered.add('pLDDT');
+      const m = st.plddt.mean;
+      tiles.append(tile('mean pLDDT', m.toFixed(1), {
+        cls: m >= 70 ? '' : m >= 50 ? 'warm' : 'bad',
+        extra: [gauge(m / 100, 'rgb(' + C.plddtColor(m).join(',') + ')')],
+        sub: '≥ 70 ' + pct(st.plddt.high) + ' · ≥ 90 ' + pct(st.plddt.veryHigh),
+        title: 'Local confidence per residue, 0–100 (AlphaFold\'s scale)',
+      }));
+    }
+    if (conf && conf.ptm != null) {
+      tiles.append(tile('pTM', conf.ptm.toFixed(3), {
+        extra: [gauge(conf.ptm, null, 0.5)],
+        sub: conf.iptm != null ? 'ipTM ' + conf.iptm.toFixed(3) + (conf.ligandIptm != null ? ' · ligand ' + conf.ligandIptm.toFixed(3) : '') : 'predicted TM-score',
+        title: 'Predicted TM-score of the whole model; above 0.5 the fold is usually right',
+      }));
+    }
+    if (st.rama) {
+      covered.add('Ramachandran');
+      tiles.append(tile('Ramachandran favoured', (st.rama.favoured * 100).toFixed(1), {
+        unit: '%',
+        extra: [gauge(st.rama.favoured, null, 0.98)],
+        sub: st.rama.outliers + ' outlier' + (st.rama.outliers === 1 ? '' : 's'),
+        title: 'MolProbity expects ≥ 98 % favoured in a good structure (the mark)',
+      }));
+    }
+    if (st.overlap) {
+      covered.add('Heavy-atom overlaps');
+      tiles.append(tile('Heavy-atom overlaps', st.overlap.score.toFixed(1), {
+        sub: 'per 1000 atoms · ' + st.overlap.count + ' pair' + (st.overlap.count === 1 ? '' : 's'),        title: 'Heavy-atom pairs closer than their van der Waals radii allow (not a MolProbity clashscore)',
+      }));
+    }
+    if (st.ss) {
+      covered.add('Secondary structure');
+      const t = tile('Secondary structure', '', {
+        wide: true,
+        extra: stack([[st.ss.helix, C.ssColor(0), 'helix'], [st.ss.strand, C.ssColor(1), 'strand'], [st.ss.coil, C.ssColor(2), 'coil']], true),
+      });
+      t.querySelector('.tv').remove();
+      tiles.append(t);
+    }
+    // An odd tile out stretches across, so the grid has no hole.
+    const half = [...tiles.children].filter((t) => !t.classList.contains('wide'));
+    if (half.length % 2 === 1) half[half.length - 1].classList.add('wide');
+    if (tiles.children.length) quality.append(tiles);
+
+    const rows = meta.metrics.filter(([k]) => !covered.has(k));
     if (compare) {
-      rows.unshift(['superposed on ' + compare.name, 'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å over ' + compare.paired +
+      rows.unshift(['Superposed on ' + compare.name, 'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å · ' + compare.paired +
         ' pairs (' + compare.pairing + ')' + (compare.mismatched ? ' · ' + compare.mismatched + ' differ in residue' : '')]);
     }
-    if (interfaces.length) buildInterfacePanel(panel);
     if (rows.length) {
-      h('measurements');
-      const dl = document.createElement('dl');
+      section(quality, 'measurements');
+      const dl = el('dl');
       for (const [k, v] of rows) {
-        const dt = document.createElement('dt'); dt.textContent = k;
-        const dd = document.createElement('dd'); dd.textContent = C.keepUnits(v);
-        dl.append(dt, dd);
+        const dd = el('dd');
+        let lines = C.valueLines(v);
+        // One figure and a note on it ("18.08 Å (×0.96 of a compact fold)"): the note goes under.
+        const m = lines.length === 1 && /^(.+?) (\(.+\))$/.exec(lines[0]);
+        if (m) lines = [m[1], m[2]];
+        for (const line of lines) dd.append(el('span', '', C.keepUnits(line)));
+        dl.append(el('dt', '', k), dd);
       }
-      panel.append(dl);
+      quality.append(dl);
     }
-    // Complexes: each chain's pTM and each pair's ipTM (Boltz), chains in input order.
-    if (conf && conf.pairIptm && conf.pairIptm.length > 1) {
-      h('chains · pTM on the diagonal, ipTM off it');
-      const names = chainNames();
-      const t = document.createElement('table');
-      t.className = 'grid';
-      const head = document.createElement('tr');
-      head.append(document.createElement('th'));
-      for (const n of names.slice(0, conf.pairIptm.length)) { const th = document.createElement('th'); th.textContent = n; head.append(th); }
-      t.append(head);
-      conf.pairIptm.forEach((row, i) => {
-        const tr = document.createElement('tr');
-        const th = document.createElement('th'); th.textContent = names[i] || String(i); tr.append(th);
-        row.forEach((v, j) => {
-          const td = document.createElement('td');
-          td.textContent = v.toFixed(2);
-          td.className = v >= 0.8 ? 'good' : v >= 0.6 ? '' : 'bad';
-          if (i === j) td.classList.add('diag');
-          tr.append(td);
-        });
-        t.append(tr);
-      });
-      panel.append(t);
-      const note = document.createElement('p');
-      note.className = 'note tight';
-      note.textContent = 'ipTM above 0.8 is a confident interface; below 0.6 the chains\' relative placement is a guess.';
-      panel.append(note);
-    }
-    if (meta.models && meta.models.length > 1) {
-      h('models · ranked by the predictor');
-      const t = document.createElement('table');
-      t.className = 'grid models';
-      const hr = document.createElement('tr');
-      const hasLig = meta.models.some((m) => m.ligandRmsd !== null && m.ligandRmsd !== undefined);
-      for (const c of ['#', 'score', 'pTM', 'ipTM', 'pLDDT', 'Cα', ...(hasLig ? ['ligand'] : [])]) { const th = document.createElement('th'); th.textContent = c; hr.append(th); }
-      t.append(hr);
-      const f = (v, d) => (v === null || v === undefined ? '—' : v.toFixed(d));
-      for (const m of meta.models) {
-        const tr = document.createElement('tr');
-        if (m.shown) tr.className = 'shown';
-        tr.title = m.file + (m.shown ? ' (shown)' : ' — proteus view … --model ' + m.rank);
-        const cells = [String(m.rank) + (m.shown ? ' ◀' : ''), f(m.score, 3), f(m.ptm, 3), f(m.iptm, 3), f(m.plddt, 1), m.shown ? '—' : f(m.rmsd, 2)];
-        if (hasLig) cells.push(m.shown ? '—' : f(m.ligandRmsd, 2));
-        for (const v of cells) {
-          const td = document.createElement('td'); td.textContent = v; tr.append(td);
+    // Complexes without an interface view (a protein and its ligands) keep the chain table here.
+    if (!interfaces.length) chainTable(quality, section);
+    buildFindings((t) => section(quality, t), quality);
+
+    // ---- plots: along the chain, PAE, Ramachandran, substitutions, sampled models.
+    if (meta.perResidue.length) {
+      section(plots, meta.predicted ? 'plddt along the chain' : 'b-factor along the chain');
+      plots.append(residueStrip());
+      if (meta.predicted) {
+        const k = el('div', 'key');
+        for (const [v, w] of plddtBandList()) {
+          const s = el('span', 'sw');
+          const g = el('span', '', '■ ');
+          g.style.color = 'rgb(' + C.plddtColor(v).join(',') + ')';
+          s.append(g, document.createTextNode(w));
+          k.append(s);
         }
-        t.append(tr);
+        plots.append(k);
+      } else {
+        plots.append(el('p', 'note warn', '! An experimental B-factor measures motion and disorder, not confidence.'));
       }
-      panel.append(t);
-      const note = document.createElement('p');
-      note.className = 'note tight';
-      note.textContent = 'RMSDs (Å) to the model shown, after superposing on the protein; the ligand column is heavy atoms. Models that agree are more likely right; open another with --model K.';
-      panel.append(note);
     }
     if (paeInfo) {
-      h('predicted aligned error');
-      const c = document.createElement('canvas');
-      c.className = 'pae';
+      section(plots, 'predicted aligned error');
+      const c = el('canvas', 'pae');
       c.id = 'pae';
       c.setAttribute('aria-label', 'predicted aligned error heatmap');
-      panel.append(c);
-      const key = document.createElement('div');
-      key.className = 'key gradient';
-      const bar = document.createElement('i');
+      plots.append(c);
+      const key = el('div', 'key gradient');
+      const bar = el('i');
       bar.style.background = 'linear-gradient(90deg,' + [0, 0.25, 0.5, 0.75, 1].map((t) => 'rgb(' + C.paeColor(t * paeInfo.max, paeInfo.max).join(',') + ')').join(',') + ')';
       key.append(document.createTextNode('0'), bar, document.createTextNode(paeInfo.max.toFixed(1) + ' Å'));
-      panel.append(key);
-      const note = document.createElement('p');
-      note.className = 'note tight';
-      note.textContent = 'Expected error (Å) at the scored residue (x) when the model is aligned on residue (y); mean ' +
-        paeInfo.mean.toFixed(1) + ' Å. Dark blocks are parts placed confidently relative to each other. Drag a box to select two ranges.';
-      panel.append(note);
-    }
-    if (scores && scores.matrix) {
-      h('substitutions · ' + scores.column);
-      panel.append(scanMap());
-      const note = document.createElement('p');
-      note.className = 'note tight';
-      note.textContent = 'One column per residue, one row per amino acid (A at the top). Red is the damaging end; ' +
-        'dotted cells are the wild type. Positions matched by ' + scores.matchedBy + '.';
-      panel.append(note);
+      plots.append(key);
+      plots.append(el('p', 'note tight', 'Expected error (Å) at the scored residue (x) when the model is aligned on residue (y); mean ' +
+        paeInfo.mean.toFixed(1) + ' Å. Dark blocks are parts placed confidently relative to each other. Drag a box to select two ranges.'));
     }
     if (meta.rama.length) {
-      h('ramachandran φ, ψ');
-      panel.append(ramaPlot());
+      section(plots, 'ramachandran φ, ψ');
+      plots.append(ramaPlot());
       // Each region has its own shape, so the plot reads without colour.
-      const key = document.createElement('div');
-      key.className = 'key';
+      const key = el('div', 'key');
       for (const [shape, word, r] of [['●', 'favoured', 'accent'], ['○', 'allowed', 'warm'], ['▲', 'outlier', 'bad']]) {
-        const s = document.createElement('span');
-        const g = document.createElement('span');
+        const s = el('span');
+        const g = el('span', '', shape + ' ');
         g.style.color = role(r);
-        g.textContent = shape + ' ';
         s.append(g, document.createTextNode(word));
         key.append(s);
       }
-      panel.append(key);
+      plots.append(key);
     }
-    buildFindings(h);
-    if (meta.perResidue.length) {
-      h(meta.predicted ? 'plddt along the chain' : 'b-factor along the chain');
-      panel.append(residueStrip());
-      if (!meta.predicted) {
-        const w = document.createElement('p');
-        w.className = 'note warn';
-        w.textContent = '! An experimental B-factor measures motion and disorder, not confidence.';
-        panel.append(w);
+    if (scores && scores.matrix) {
+      section(plots, 'substitutions · ' + scores.column);
+      plots.append(scanMap());
+      plots.append(el('p', 'note tight', 'One column per residue, one row per amino acid (A at the top). Red is the damaging end; ' +
+        'dotted cells are the wild type. Positions matched by ' + scores.matchedBy + '.'));
+    }
+    if (meta.models && meta.models.length > 1) {
+      section(plots, 'models · ranked by the predictor');
+      const t = el('table', 'grid models');
+      const hr = el('tr');
+      const hasLig = meta.models.some((m) => m.ligandRmsd !== null && m.ligandRmsd !== undefined);
+      for (const c of ['#', 'score', 'pTM', 'ipTM', 'pLDDT', 'Cα', ...(hasLig ? ['ligand'] : [])]) hr.append(el('th', '', c));
+      t.append(hr);
+      const f = (v, d) => (v === null || v === undefined ? '—' : v.toFixed(d));
+      for (const m of meta.models) {
+        const tr = el('tr', m.shown ? 'shown' : '');
+        tr.title = m.file + (m.shown ? ' (shown)' : ' — proteus view … --model ' + m.rank);
+        const cells = [String(m.rank) + (m.shown ? ' ◀' : ''), f(m.score, 3), f(m.ptm, 3), f(m.iptm, 3), f(m.plddt, 1), m.shown ? '—' : f(m.rmsd, 2)];
+        if (hasLig) cells.push(m.shown ? '—' : f(m.ligandRmsd, 2));
+        for (const v of cells) tr.append(el('td', '', v));
+        t.append(tr);
       }
+      plots.append(t);
+      plots.append(el('p', 'note tight', 'RMSDs (Å) to the model shown, after superposing on the protein; the ligand column is heavy atoms. Models that agree are more likely right; open another with --model K.'));
     }
-    // Files: the model this page was drawn from, and its PAE in AlphaFold DB's JSON layout.
+    if (!plots.children.length) plots.append(el('p', 'note', 'No per-residue values to plot for this structure.'));
+
+    // ---- files and provenance, under every tab.
+    const foot = el('section', 'foot');
+    section(foot, 'files');
     const src = $('proteus-source');
     const files = [];
-    if (src && src.textContent.trim()) files.push(['model · ' + src.dataset.name, () =>
+    if (src && src.textContent.trim()) files.push(['↓ model · ' + src.dataset.name, () =>
       C.gunzip(C.b64ToBytes(src.textContent)).then((b) => download(src.dataset.name, b, 'chemical/x-pdb'))]);
-    if (paeInfo) files.push(['PAE · json', () => {
+    if (paeInfo) files.push(['↓ PAE · json', () => {
       if (!pae) return;
       const rows = [];
       for (let i = 0; i < pae.n; i++) rows.push(Array.from(pae.v.subarray(i * pae.n, (i + 1) * pae.n), (x) => x / 8));
       const name = (src && src.dataset.name ? src.dataset.name.replace(/\.[^.]+$/, '') : subject) + '-predicted_aligned_error.json';
       download(name, new TextEncoder().encode(JSON.stringify([{ predicted_aligned_error: rows, max_predicted_aligned_error: pae.max }])), 'application/json');
     }]);
-    files.push(['view link', () => {
+    files.push(['⧉ copy view link', () => {
       const url = V ? V.link() : location.href;
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(() => notice('link to this view copied'), () => notice(url));
       else notice(url);
     }]);
-    if (files.length) {
-      h('files');
-      const row = document.createElement('div');
-      row.className = 'files';
-      for (const [text, fn] of files) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.textContent = '↓ ' + text;
-        b.addEventListener('click', fn);
-        row.append(b);
-      }
-      panel.append(row);
+    const row = el('div', 'files');
+    for (const [text, fn] of files) {
+      const b = el('button', '', text);
+      b.type = 'button';
+      b.addEventListener('click', fn);
+      row.append(b);
     }
-    const note = document.createElement('p');
-    note.className = 'note';
-    note.textContent = 'Drawn by Proteus from its own ribbon geometry and DSSP. Nothing is fetched from the network.' +
-      (conf && conf.sources && conf.sources.length ? ' Confidence read from ' + conf.sources.join(', ') + '.' : '');
-    panel.append(note);
+    foot.append(row);
+    foot.append(el('p', 'note', 'Drawn by Proteus from its own ribbon geometry and DSSP. Nothing is fetched from the network.' +
+      (conf && conf.sources && conf.sources.length ? ' Confidence read from ' + conf.sources.join(', ') + '.' : '')));
+    panel.append(foot);
+
+    renderHeadline();
+    showTab(interfaces.length ? 'interface' : 'quality');
   }
 
+  /** Each chain's pTM and each pair's ipTM (Boltz), chains in input order. */
+  function chainTable(into, section) {
+    const conf = meta.confidence;
+    if (!(conf && conf.pairIptm && conf.pairIptm.length > 1)) return;
+    section(into, 'chains · pTM on the diagonal, ipTM off it');
+    const names = chainNames();
+    const t = el('table', 'grid');
+    const head = el('tr');
+    head.append(el('th'));
+    for (const n of names.slice(0, conf.pairIptm.length)) { const th = el('th', '', n); if (chainName(n)) th.title = chainName(n); head.append(th); }
+    t.append(head);
+    conf.pairIptm.forEach((r, i) => {
+      const tr = el('tr');
+      const th = el('th', '', names[i] || String(i));
+      if (chainName(names[i])) th.title = chainName(names[i]);
+      tr.append(th);
+      r.forEach((v, j) => {
+        const td = el('td', v >= 0.8 ? 'good' : v >= 0.6 ? '' : 'bad', v.toFixed(2));
+        if (i === j) td.classList.add('diag');
+        tr.append(td);
+      });
+      t.append(tr);
+    });
+    into.append(t);
+    into.append(el('p', 'note tight', 'ipTM above 0.8 is a confident interface; below 0.6 the chains\' relative placement is a guess.'));
+  }
+
+  /** The headline: the one judgement a reader wants first, then the number it rests on. */
+  function renderHeadline() {
+    const hd = $('headline');
+    if (!hd) return;
+    hd.textContent = '';
+    const st = meta.stats || {};
+    let kicker, glyph, word, cls, figure, figLabel, figUnit = '', visual = [], caveat = '';
+    if (interfaces.length) {
+      const f = interfaces[ifaceIdx];
+      kicker = '(interface · ' + shortChains(f.binder) + ' → ' + shortChains(f.target) + ')';
+      if (f.ipsaeMin !== null && f.ipsaeMin !== undefined) {
+        const ok = f.ipsaeMin > 0.61;
+        [glyph, word, cls] = ok ? ['●', 'Confident interface', 'good'] : ['○', 'Not a confident interface', 'warm'];
+        figure = f.ipsaeMin.toFixed(3);
+        figLabel = 'ipSAE min, ' + (ok ? 'above' : 'at or below') + ' the 0.61 line';
+        visual = [gauge(f.ipsaeMin, ok ? role('accent') : role('warm'), 0.61)];
+        caveat = ok ? 'A prediction, not a result: in Proteus\'s benchmarks, 40 % of lab-tested designs above this line bound on Overath et al. 2025\'s data and 14 % on Adaptyv\'s Nipah set.'
+          : 'In Proteus\'s benchmarks, designs above 0.61 bound at 40 % against 11 % overall (Overath et al. 2025 data) and 14 % against 9 % (Adaptyv Nipah).';
+      } else {
+        [glyph, word, cls] = ['–', 'Interface confidence unavailable', 'none'];
+        caveat = 'No PAE beside this model, so ipSAE, ipAE and LIS cannot be computed. The geometry is under interface.';
+      }
+    } else if (meta.predicted && st.plddt) {
+      const m = st.plddt.mean;
+      kicker = '(model confidence)';
+      [glyph, word, cls] = m >= 90 ? ['●', 'Very high confidence', 'good'] : m >= 70 ? ['●', 'Confident', 'good']
+        : m >= 50 ? ['○', 'Low confidence', 'warm'] : ['○', 'Very low confidence', 'bad'];
+      figure = m.toFixed(1);
+      figLabel = 'mean pLDDT over ' + N + ' residues';
+      visual = plddtStack(true);
+      caveat = m < 70 ? 'Below 50 a region\'s shape should not be read: such regions are often disordered in isolation.'
+        : paeInfo ? 'pLDDT is local; how confidently the parts sit relative to each other is in the PAE map (plots).' : '';
+    } else if (!meta.predicted) {
+      kicker = '(structure quality)';
+      [glyph, word, cls] = ['■', 'Experimental structure', 'none'];
+      if (st.rama) {
+        figure = (st.rama.favoured * 100).toFixed(1);
+        figUnit = '%';
+        figLabel = 'of residues in favoured φ, ψ · ' + st.rama.outliers + ' outlier' + (st.rama.outliers === 1 ? '' : 's');
+        visual = [gauge(st.rama.favoured, null, 0.98)];
+      }
+      caveat = 'Its B-factors measure motion and disorder, not confidence; colours default to secondary structure.';
+    } else {
+      kicker = '(structure)';
+      [glyph, word, cls] = ['–', 'No confidence values', 'none'];
+    }
+    const k = el('div', 'kicker');
+    k.append(el('span', '', kicker));
+    const hide = el('button', 'ghost', '');
+    hide.id = 'panelhide';
+    hide.type = 'button';
+    hide.setAttribute('aria-controls', 'panel');
+    hide.setAttribute('aria-expanded', String(!document.body.classList.contains('panel-off')));
+    const narrowNow = window.matchMedia('(max-width: 900px)').matches;
+    const off = document.body.classList.contains('panel-off');
+    hide.append(document.createTextNode(narrowNow ? (off ? '▴ show' : '▾ hide') : 'hide ›'), el('kbd', '', 'p'));
+    hide.addEventListener('click', () => togglePanel());
+    k.append(hide);
+    hd.append(k);
+    const v = el('p', 'verdict ' + cls);
+    v.append(el('span', 'g', glyph), document.createTextNode(word));
+    hd.append(v);
+    if (figure !== undefined) {
+      const fig = el('div', 'figure');
+      const strong = el('strong', '', figure);
+      if (figUnit) strong.append(el('small', '', figUnit));
+      fig.append(strong, el('span', '', figLabel));
+      hd.append(fig);
+    }
+    for (const x of visual) hd.append(x);
+    if (caveat) hd.append(el('p', 'caveat', caveat));
+  }
   // The findings, each one a click away from being shown in 3D.
-  function buildFindings(h) {
+  function buildFindings(h, into) {
     const groups = [];
     const rama = issues.rama || [];
     if (rama.length || meta.rama.length) {
@@ -1467,12 +1732,12 @@
       });
       wrap.append(d);
     }
-    $('panel').append(wrap);
+    into.append(wrap);
   }
 
   function ramaPlot() {
     const c = document.createElement('canvas');
-    const px = 268, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const px = 360, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = px * dpr; c.height = px * dpr; c.className = 'rama';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
@@ -1526,7 +1791,7 @@
 
   function residueStrip() {
     const c = document.createElement('canvas');
-    const n = meta.perResidue.length, w = 268, h = 16, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const n = meta.perResidue.length, w = 360, h = 22, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = w * dpr; c.height = h * dpr; c.className = 'strip';
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
@@ -1557,7 +1822,7 @@
   function scanMap() {
     const c = document.createElement('canvas');
     c.className = 'scan';
-    const n = N, rows = 20, w = 268, cellH = 5, h = rows * cellH, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const n = N, rows = 20, w = 360, cellH = 5, h = rows * cellH, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = w * dpr; c.height = h * dpr;
     const off = document.createElement('canvas');
     off.width = n; off.height = rows;
@@ -1608,93 +1873,66 @@
   // ligand chains not already named.
   // ---------------------------------------------------------------- interface
   /** The interface section: which chain is the binder, what the interface measures, and a verdict. */
-  function buildInterfacePanel(panel) {
-    const box = document.createElement('section');
-    box.id = 'interface';
-    panel.append(box);
+  function buildInterfacePanel(box) {
     renderInterface(box);
   }
+  /** The interface tab: which chain is the binder, then what the interface measures. */
   function renderInterface(box) {
     box.textContent = '';
     const f = interfaces[ifaceIdx];
-    const head = document.createElement('h2');
-    head.textContent = '(interface)';
-    box.append(head);
     if (interfaces.length > 1) {
-      const chips = document.createElement('div');
-      chips.className = 'chips';
+      const chips = el('div', 'chips');
       chips.setAttribute('role', 'radiogroup');
       chips.setAttribute('aria-label', 'binder chain');
-      const lab = document.createElement('span');
-      lab.textContent = 'binder';
-      chips.append(lab);
+      chips.append(el('span', '', 'Binder'));
       interfaces.forEach((x, i) => {
-        const b = document.createElement('button');
+        const b = el('button', '', shortChains(x.binder));
         b.type = 'button';
-        b.textContent = x.binder;
+        if (x.binder.split(',').some(chainName)) b.append(el('small', '', x.binder));
         b.setAttribute('role', 'radio');
         b.setAttribute('aria-checked', String(i === ifaceIdx));
-        b.title = 'chain ' + x.binder + ' against ' + x.target + ' (b cycles)';
+        b.title = nameChains(x.binder) + ' against ' + nameChains(x.target) + ' (b cycles)';
         b.addEventListener('click', () => setBinder(i));
         chips.append(b);
       });
       box.append(chips);
     }
-    // The verdict leads: the one number that best separated binders from non-binders in the lab.
-    const v = document.createElement('p');
-    v.className = 'verdict';
-    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined) {
-      const ok = f.ipsaeMin > 0.61;
-      v.classList.add(ok ? 'good' : 'bad');
-      v.textContent = (ok ? '● confident interface' : '○ not a confident interface') + ' · ipSAE_min ' + f.ipsaeMin.toFixed(3) +
-        (ok ? ' > 0.61' : ' ≤ 0.61');
-      v.title = 'Among 3 669 lab-tested designs (Overath et al. 2025), 40 % of those above 0.61 bound, against 11 % overall.';
-    } else {
-      v.textContent = '– no PAE beside this model: confidence metrics unavailable';
-    }
-    box.append(v);
-    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined && f.ipsaeMin > 0.61) {
-      const c = document.createElement('p');
-      c.className = 'note tight';
-      c.textContent = 'A prediction, not a result: of lab-tested designs above this line, 40 % bound (Overath et al. 2025).';
-      box.append(c);
-    }
-    const dl = document.createElement('dl');
-    dl.className = 'iface';
-    const row = (k, val, tip) => {
-      const dt = document.createElement('dt'); dt.textContent = k;
-      const dd = document.createElement('dd'); dd.textContent = val;
-      if (tip) { dt.title = tip; dd.title = tip; }
-      dl.append(dt, dd);
-    };
     const n = (x, d) => (x === null || x === undefined ? '–' : x.toFixed(d));
-    row('chains', f.binder + ' → ' + f.target);
-    if (f.ipsaeMin !== null && f.ipsaeMin !== undefined) {
-      row('ipSAE', 'min ' + n(f.ipsaeMin, 3) + ' · max ' + n(f.ipsaeMax, 3), 'pTM-style score over the residue pairs the predictor is confident about (PAE < 10 Å), each direction');
+    const has = f.ipsaeMin !== null && f.ipsaeMin !== undefined;
+    const tiles = el('div', 'tiles');
+    if (has) {
+      tiles.append(tile('ipSAE', n(f.ipsaeMin, 3), { sub: 'min · max ' + n(f.ipsaeMax, 3),
+        extra: [gauge(f.ipsaeMin, f.ipsaeMin > 0.61 ? null : role('warm'), 0.61)],
+        title: 'pTM-style score over the residue pairs the predictor is confident about (PAE < 10 Å), each direction; the mark is 0.61' }));
       const iptm = meta.confidence && meta.confidence.iptm;
-      row('ipAE · LIS', n(f.ipae, 1) + ' Å · ' + n(f.lis, 3) + (iptm !== null && iptm !== undefined ? ' · ipTM ' + iptm.toFixed(3) : ''));
+      tiles.append(tile('ipTM', n(iptm, 3), { extra: [gauge(iptm || 0, null, 0.8)],
+        sub: 'confident above 0.8', title: 'Interface predicted TM-score of the whole complex' }));
+      tiles.append(tile('ipAE', n(f.ipae, 1), { unit: 'Å', sub: 'mean PAE across it', title: 'Mean predicted aligned error between the two sides' }));
+      tiles.append(tile('LIS', n(f.lis, 3), { sub: 'pairs under 12 Å', title: 'Local Interaction Score: mean of (12 − PAE) / 12 over pairs with PAE under 12 Å, both directions' }));
     }
-    row('shape complementarity', n(f.sc, 2), 'Lawrence & Colman Sc: 1 is a perfect fit; protein–protein interfaces sit around 0.6–0.75');
-    row('buried surface', f.dsasa.toFixed(0) + ' Å²', 'dSASA: the two sides\' SASA minus the complex\'s');
-    row('contacts', f.binderResidues.length + ' binder · ' + f.targetResidues.length + ' target residues', 'heavy atoms within 4 Å of the other side');
+    tiles.append(tile('Shape complementarity', n(f.sc, 2), { extra: f.sc === null || f.sc === undefined ? [] : [gauge(f.sc)],
+      sub: '1 is a perfect fit', title: 'Lawrence & Colman Sc: 1 is a perfect fit; protein–protein interfaces sit around 0.6–0.75' }));
+    tiles.append(tile('Buried surface', f.dsasa.toFixed(0), { unit: 'Å²', sub: 'ΔSASA', title: 'dSASA: the two sides\' SASA minus the complex\'s' }));
+    tiles.append(tile('Contacts', f.binderResidues.length + ' + ' + f.targetResidues.length, { sub: 'binder + target', title: 'residues with a heavy atom within 4 Å of the other side' }));
     const plural = (k, one, many) => k + ' ' + (k === 1 ? one : many);
-    row('across it', plural(f.hbonds, 'H-bond', 'H-bonds') + ' · ' + plural(f.saltBridges, 'salt bridge', 'salt bridges'));
-    box.append(dl);
-    const act = document.createElement('div');
-    act.className = 'actions';
-    const btn = document.createElement('button');
+    tiles.append(tile('Across it', String(f.hbonds), { unit: f.hbonds === 1 ? 'H-bond' : 'H-bonds', sub: plural(f.saltBridges, 'salt bridge', 'salt bridges') }));
+    box.append(tiles);
+    const act = el('div', 'actions');
+    const btn = el('button', 'act');
     btn.type = 'button';
-    btn.textContent = 'show the interface (i)';
+    btn.append(document.createTextNode('Show the interface'), el('kbd', '', 'i'));
     btn.addEventListener('click', focusInterface);
     act.append(btn);
     box.append(act);
+    chainTable(box, (into, text) => { const e = el('h2', '', '(' + text + ')'); into.append(e); return e; });
   }
   function setBinder(i) {
     ifaceIdx = i;
     const box = $('interface');
     if (box) renderInterface(box);
+    renderHeadline();
     if (V && scheme === 'interface') V.recolor(); else showLegend();
-    notice('binder ' + interfaces[i].binder + ' against ' + interfaces[i].target);
+    notice('binder ' + nameChains(interfaces[i].binder) + ' against ' + nameChains(interfaces[i].target));
     if (V) V.saveSession();
   }
   /** Colour by interface and select both sides' contact residues, centred. */
@@ -1724,7 +1962,7 @@
   function drawPae() {
     const c = $('pae');
     if (!c || !pae) return;
-    const n = pae.n, px = 268, dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const n = pae.n, px = 360, dpr = Math.min(window.devicePixelRatio || 1, 2);
     c.width = px * dpr; c.height = px * dpr;
     const img = new ImageData(n, n);
     for (let i = 0; i < n * n; i++) {

@@ -17,7 +17,17 @@
 //! - AlphaFold 3: `…_full_data_<k>.json` (`pae`) and `…_summary_confidences_<k>.json` (AlphaFold
 //!   Server); `<name>_confidences.json` and `<name>_summary_confidences.json` beside
 //!   `<name>_model.cif`, or `confidences.json` beside a sample's `model.cif` (a local run).
-//! - A bare `.npy` holding the N×N matrix.
+//! - OpenFold3: `<q>_seed_<s>_sample_<n>_confidences.json` or `.npz` (`pae`, float16 in the
+//!   `.npz`) and `…_confidences_aggregated.json` beside `…_model.cif`.
+//! - Protenix: `<job>_full_data_sample_<k>.json` (`token_pair_pae`, written with
+//!   `--need_atom_confidence`) and `<job>_summary_confidence_sample_<k>.json` beside
+//!   `<job>_sample_<k>.cif`.
+//! - Chai-1: `scores.model_idx_<k>.npz` (`ptm`, `iptm`) beside `pred.model_idx_<k>.cif`. Chai-1
+//!   writes no PAE file; `pae.model_idx_<k>.npy` saved from its Python API is read if present.
+//! - A bare `.npy` holding the N×N matrix (float16, float32 or float64).
+//!
+//! AlphaFold 3-style predictors write one row per token, not per residue; see
+//! [`protein_token_rows`] for how a complex with ligands is matched to its residues.
 
 use crate::error::CoreError;
 use serde_json::Value;
@@ -143,6 +153,91 @@ impl PredictedAlignedError {
     }
 }
 
+/// Two chains with a modified residue and a ligand between them: 11 tokens, protein rows
+/// 0, 2, 6 and 10 (see `token_rows_follow_the_file_order`).
+#[cfg(test)]
+pub(crate) const TOKEN_TEST_PDB: &[u8] = b"\
+ATOM      1  N   GLY A   1       0.000   0.000   0.000  1.00 90.00           N
+ATOM      2  CA  GLY A   1       1.458   0.000   0.000  1.00 90.00           C
+ATOM      3  C   GLY A   1       2.009   1.420   0.000  1.00 90.00           C
+ATOM      4  O   GLY A   1       1.251   2.390   0.000  1.00 90.00           O
+HETATM    5  N   SEP A   2       3.332   1.536   0.000  1.00 90.00           N
+HETATM    6  H   SEP A   2       3.800   0.700   0.000  1.00 90.00           H
+HETATM    7  CA  SEP A   2       3.970   2.845   0.000  1.00 90.00           C
+HETATM    8  C   SEP A   2       5.486   2.715   0.000  1.00 90.00           C
+HETATM    9  O   SEP A   2       6.022   1.604   0.000  1.00 90.00           O
+HETATM   10  P   SEP A   2       3.500   4.500   1.000  1.00 90.00           P
+ATOM     11  N   ALA A   3       6.180   3.850   0.000  1.00 90.00           N
+ATOM     12  CA  ALA A   3       7.633   3.859   0.000  1.00 90.00           C
+ATOM     13  C   ALA A   3       8.176   5.281   0.000  1.00 90.00           C
+ATOM     14  O   ALA A   3       7.418   6.251   0.000  1.00 90.00           O
+HETATM   15  C1  LIG C   1      10.000  10.000  10.000  1.00 80.00           C
+HETATM   16  C2  LIG C   1      11.000  10.000  10.000  1.00 80.00           C
+HETATM   17  O1  LIG C   1      12.000  10.000  10.000  1.00 80.00           O
+ATOM     18  N   ALA B   1      20.000   0.000   0.000  1.00 90.00           N
+ATOM     19  CA  ALA B   1      21.458   0.000   0.000  1.00 90.00           C
+ATOM     20  C   ALA B   1      22.009   1.420   0.000  1.00 90.00           C
+ATOM     21  O   ALA B   1      21.251   2.390   0.000  1.00 90.00           O
+HETATM   22  O   HOH W   1      30.000  30.000  30.000  1.00 10.00           O
+END
+";
+
+/// Where each protein residue sits in an AlphaFold 3-style token layout, and how many tokens
+/// the model has: `(n_tokens, rows)`, `rows[k]` being the PAE row of the `k`-th protein residue
+/// in the order [`crate::io::protein_heavy_atoms`] keeps them.
+///
+/// AlphaFold 3, Boltz, Chai-1, Protenix and OpenFold3 give a standard residue or nucleotide one
+/// token and a ligand one token per heavy atom, in input order, which is file order. Waters are
+/// not tokenised. A modified residue in a protein chain differs by predictor: AlphaFold 3 gives
+/// it one token per heavy atom (the first layout returned; its row is then its CA atom's, as
+/// `ipsae.py` takes it), Boltz-2 one token (the second) (measured: a SEP in a 30 + 56-residue complex gives
+/// an 86-row PAE). `ipsae.py`'s `index N is out of bounds` failures on Boltz-2 complexes
+/// (DunbrackLab/IPSAE #20, #28) are a miscount of exactly this.
+pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> [(usize, Vec<usize>); 2] {
+    use crate::io::{is_hydrogen, is_protein_residue, is_standard_amino_acid};
+    const NUCLEOTIDES: &[&str] = &["A", "C", "G", "U", "DA", "DC", "DG", "DT", "N", "DN"];
+    let mut pdb = pdb.clone();
+    crate::io::split_merged_residues(&mut pdb);
+    // [0]: modified residues one token per atom (AlphaFold 3); [1]: one token (Boltz-2).
+    let mut layouts = [(0usize, Vec::new()), (0usize, Vec::new())];
+    for residue in pdb.chains().flat_map(|c| c.residues()) {
+        let name = residue.name().unwrap_or("").trim();
+        if matches!(name, "HOH" | "WAT" | "DOD") {
+            continue;
+        }
+        let heavy: Vec<&pdbtbx::Atom> = residue
+            .conformers()
+            .next()
+            .into_iter()
+            .flat_map(|c| c.atoms())
+            .filter(|a| !is_hydrogen(a))
+            .collect();
+        if heavy.is_empty() {
+            continue;
+        }
+        let protein = is_protein_residue(residue);
+        let standard = is_standard_amino_acid(name) || NUCLEOTIDES.contains(&name);
+        for (k, (next, rows)) in layouts.iter_mut().enumerate() {
+            if standard || (protein && k == 1) {
+                if protein {
+                    rows.push(*next);
+                }
+                *next += 1;
+            } else {
+                if protein {
+                    let ca = heavy
+                        .iter()
+                        .position(|a| a.name().trim() == "CA")
+                        .unwrap_or(0);
+                    rows.push(*next + ca);
+                }
+                *next += heavy.len();
+            }
+        }
+    }
+    layouts
+}
+
 fn parse_err(msg: impl Into<String>) -> CoreError {
     CoreError::ParseError(msg.into())
 }
@@ -170,7 +265,7 @@ pub fn read_pae(path: &Path) -> Result<PredictedAlignedError, CoreError> {
                 .ok_or_else(|| {
                     parse_err(format!(
                         "{}: no PAE matrix found (looked for predicted_aligned_error, pae, \
-                         residue1/residue2/distance)",
+                         token_pair_pae, residue1/residue2/distance)",
                         path.display()
                     ))
                 })?
@@ -220,6 +315,19 @@ fn pae_from_npz(bytes: &[u8]) -> Result<PredictedAlignedError, CoreError> {
         .map_err(|e| parse_err(format!("{name}: {e}")))?;
     let (shape, values) = parse_npy(&raw)?;
     square(shape, values, None)
+}
+
+/// IEEE 754 half precision to single, subnormals included.
+fn f16_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
+    let exp = i32::from((h >> 10) & 0x1f);
+    let frac = f32::from(h & 0x3ff);
+    sign * match exp {
+        0 => frac * 2f32.powi(-24),
+        31 if frac == 0.0 => f32::INFINITY,
+        31 => f32::NAN,
+        e => (1.0 + frac / 1024.0) * 2f32.powi(e - 15),
+    }
 }
 
 /// A little-endian float `.npy` array: shape and values in C order.
@@ -275,10 +383,19 @@ pub fn parse_npy(b: &[u8]) -> Result<(Vec<usize>, Vec<f32>), CoreError> {
             .iter()
             .map(|c| f64::from_le_bytes(*c) as f32)
             .collect(),
-        "<f4" | "|f4" | "<f8" => return Err(parse_err(".npy data is shorter than its shape")),
+        // OpenFold3 writes its `.npz` confidences as float16 by default.
+        "<f2" if data.len() >= count * 2 => data[..count * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| f16_to_f32(u16::from_le_bytes(*c)))
+            .collect(),
+        "<f2" | "<f4" | "|f4" | "<f8" => {
+            return Err(parse_err(".npy data is shorter than its shape"))
+        }
         other => {
             return Err(parse_err(format!(
-                ".npy dtype {other} is not supported (little-endian float32 or float64)"
+                ".npy dtype {other} is not supported (little-endian float16, float32 or float64)"
             )))
         }
     };
@@ -312,7 +429,7 @@ fn pae_from_json(v: &Value) -> Option<Result<PredictedAlignedError, CoreError>> 
     let stated_max = ["max_predicted_aligned_error", "max_pae"]
         .iter()
         .find_map(|k| obj.get(*k).and_then(number));
-    if let Some(rows) = ["predicted_aligned_error", "pae"]
+    if let Some(rows) = ["predicted_aligned_error", "pae", "token_pair_pae"]
         .iter()
         .find_map(|k| obj.get(*k).and_then(Value::as_array))
     {
@@ -366,6 +483,27 @@ fn pae_from_json(v: &Value) -> Option<Result<PredictedAlignedError, CoreError>> 
         return Some(PredictedAlignedError::new(n, values, stated_max));
     }
     None
+}
+
+/// pTM and ipTM from Chai-1's `scores.model_idx_N.npz` (one-element arrays `ptm`, `iptm`).
+/// A single chain's ipTM is 0 there, as in Boltz's file, and is dropped the same way.
+fn scores_from_npz(bytes: &[u8]) -> Result<(Option<f64>, Option<f64>), CoreError> {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+        .map_err(|e| parse_err(format!("not an .npz archive: {e}")))?;
+    let mut first = |name: &str| -> Result<Option<f64>, CoreError> {
+        let Ok(mut entry) = zip.by_name(name) else {
+            return Ok(None);
+        };
+        let mut raw = Vec::with_capacity(entry.size() as usize);
+        entry
+            .read_to_end(&mut raw)
+            .map_err(|e| parse_err(format!("{name}: {e}")))?;
+        let (_, v) = parse_npy(&raw)?;
+        Ok(v.first().map(|x| f64::from(*x)).filter(|x| x.is_finite()))
+    };
+    let ptm = first("ptm.npy")?;
+    let iptm = first("iptm.npy")?.filter(|x| *x > 0.0);
+    Ok((ptm, iptm))
 }
 
 /// pTM and ipTM from a scores document (Boltz `confidence_*.json`, ColabFold `*_scores_*.json`,
@@ -459,9 +597,32 @@ pub fn sidecar_files(structure: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     }
     // AlphaFold 3 run locally: name/name_model.cif → name_confidences.json (pae) and
     // name_summary_confidences.json; each sample's seed-1_sample-0/model.cif → confidences.json.
+    // OpenFold3 names a sample the same way (q_seed_42_sample_1_model.cif), with its PAE in
+    // `_confidences.json` or `.npz` and its pTM/ipTM in `_confidences_aggregated.json`.
     if let Some(head) = stem.strip_suffix("_model") {
-        pae = pae.or_else(|| exists(dir.join(format!("{head}_confidences.json"))));
-        scores = scores.or_else(|| exists(dir.join(format!("{head}_summary_confidences.json"))));
+        pae = pae
+            .or_else(|| exists(dir.join(format!("{head}_confidences.json"))))
+            .or_else(|| exists(dir.join(format!("{head}_confidences.npz"))));
+        scores = scores
+            .or_else(|| exists(dir.join(format!("{head}_summary_confidences.json"))))
+            .or_else(|| exists(dir.join(format!("{head}_confidences_aggregated.json"))));
+    }
+    // Protenix: job_sample_0.cif → job_full_data_sample_0.json (`token_pair_pae`, written only
+    // with --need_atom_confidence) and job_summary_confidence_sample_0.json.
+    if let Some((head, k)) = stem.rsplit_once("_sample_") {
+        if k.chars().all(|c| c.is_ascii_digit()) && !k.is_empty() {
+            pae = pae.or_else(|| exists(dir.join(format!("{head}_full_data_sample_{k}.json"))));
+            scores = scores
+                .or_else(|| exists(dir.join(format!("{head}_summary_confidence_sample_{k}.json"))));
+        }
+    }
+    // Chai-1: pred.model_idx_0.cif → scores.model_idx_0.npz. Chai-1 writes no PAE file; one
+    // saved from its API as pae.model_idx_0.npy (or .npz) is picked up.
+    if let Some(k) = stem.strip_prefix("pred.model_idx_") {
+        pae = pae
+            .or_else(|| exists(dir.join(format!("pae.model_idx_{k}.npy"))))
+            .or_else(|| exists(dir.join(format!("pae.model_idx_{k}.npz"))));
+        scores = scores.or_else(|| exists(dir.join(format!("scores.model_idx_{k}.npz"))));
     }
     if stem == "model" {
         pae = pae.or_else(|| exists(dir.join("confidences.json")));
@@ -494,6 +655,16 @@ pub fn read_confidence(
     for p in score_paths {
         let bytes = std::fs::read(&p)
             .map_err(|e| parse_err(format!("cannot read {}: {e}", p.display())))?;
+        if p.extension().is_some_and(|e| e == "npz") {
+            let (ptm, iptm) =
+                scores_from_npz(&bytes).map_err(|e| parse_err(format!("{}: {e}", p.display())))?;
+            if ptm.is_some() || iptm.is_some() {
+                out.ptm = out.ptm.or(ptm);
+                out.iptm = out.iptm.or(iptm);
+                out.sources.push(p);
+            }
+            continue;
+        }
         let v: Value = serde_json::from_slice(&bytes)
             .map_err(|e| parse_err(format!("{}: not JSON: {e}", p.display())))?;
         let (ptm, iptm) = scores_from_json(&v);
@@ -608,6 +779,83 @@ mod tests {
         assert!(pae_from_json(&serde_json::json!({"plddt": [90]})).is_none());
     }
 
+    /// Names as each predictor's own writer makes them (checked against the sources on
+    /// 2026-09-27): Protenix `runner/dumper.py`, OpenFold3 `core/runners/writer.py`, Chai-1
+    /// `chai1.py` (which writes no PAE; `pae.model_idx_N.npy` is what a user saves from its API).
+    #[test]
+    fn protenix_openfold3_and_chai1_names_map_to_their_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        for f in [
+            "job_sample_0.cif",
+            "job_full_data_sample_0.json",
+            "job_summary_confidence_sample_0.json",
+            "q_seed_42_sample_1_model.cif",
+            "q_seed_42_sample_1_confidences.npz",
+            "q_seed_42_sample_1_confidences_aggregated.json",
+            "pred.model_idx_2.cif",
+            "scores.model_idx_2.npz",
+            "pae.model_idx_2.npy",
+        ] {
+            std::fs::write(d.join(f), "").unwrap();
+        }
+        let (pae, scores) = sidecar_files(&d.join("job_sample_0.cif"));
+        assert_eq!(pae.unwrap(), d.join("job_full_data_sample_0.json"));
+        assert_eq!(
+            scores.unwrap(),
+            d.join("job_summary_confidence_sample_0.json")
+        );
+        let (pae, scores) = sidecar_files(&d.join("q_seed_42_sample_1_model.cif"));
+        assert_eq!(pae.unwrap(), d.join("q_seed_42_sample_1_confidences.npz"));
+        assert_eq!(
+            scores.unwrap(),
+            d.join("q_seed_42_sample_1_confidences_aggregated.json")
+        );
+        let (pae, scores) = sidecar_files(&d.join("pred.model_idx_2.cif"));
+        assert_eq!(pae.unwrap(), d.join("pae.model_idx_2.npy"));
+        assert_eq!(scores.unwrap(), d.join("scores.model_idx_2.npz"));
+    }
+
+    #[test]
+    fn protenix_token_pair_pae_and_float16_npy_are_read() {
+        let v = serde_json::json!({"token_pair_pae": [[0.5, 3.0], [4.0, 0.5]]});
+        let p = pae_from_json(&v).unwrap().unwrap();
+        assert_eq!((p.n, p.get(0, 1), p.get(1, 0)), (2, 3.0, 4.0));
+        // float16 bit patterns of 0.5, 1.0, 2.0 and 30.0.
+        let halves: [u16; 4] = [0x3800, 0x3c00, 0x4000, 0x4f80];
+        let header = "{'descr': '<f2', 'fortran_order': False, 'shape': (2, 2), }";
+        let mut b = b"\x93NUMPY\x01\x00".to_vec();
+        b.extend_from_slice(&(header.len() as u16).to_le_bytes());
+        b.extend_from_slice(header.as_bytes());
+        for h in halves {
+            b.extend_from_slice(&h.to_le_bytes());
+        }
+        let (shape, values) = parse_npy(&b).unwrap();
+        assert_eq!(shape, vec![2, 2]);
+        assert_eq!(values, vec![0.5, 1.0, 2.0, 30.0]);
+    }
+
+    /// Chai-1's `scores.model_idx_N.npz` holds pTM and ipTM as one-element arrays.
+    #[test]
+    fn chai1_scores_npz_gives_ptm_and_iptm() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::write(d.join("pred.model_idx_0.cif"), "").unwrap();
+        std::fs::write(
+            d.join("scores.model_idx_0.npz"),
+            npz(&[
+                ("ptm.npy", npy_f32(&[1], &[0.81])),
+                ("iptm.npy", npy_f32(&[1], &[0.62])),
+                ("aggregate_score.npy", npy_f32(&[1], &[0.7])),
+            ]),
+        )
+        .unwrap();
+        let c = read_confidence(&d.join("pred.model_idx_0.cif"), None).unwrap();
+        assert!(c.pae.is_none());
+        assert!((c.ptm.unwrap() - 0.81).abs() < 1e-6);
+        assert!((c.iptm.unwrap() - 0.62).abs() < 1e-6);
+    }
+
     #[test]
     fn boltz_sidecars_are_found_and_single_chain_iptm_is_dropped() {
         let dir = tempfile::tempdir().unwrap();
@@ -698,6 +946,19 @@ mod tests {
         assert_eq!(c.get(0, 0), 0.0);
         assert_eq!(c.get(2, 2), 1.0);
         assert!(p.collapse(&[vec![0], vec![9]]).is_none());
+    }
+
+    /// AlphaFold 3 / Boltz tokens in file order: GLY (1 token), SEP, a modified residue, one per
+    /// heavy atom (N, CA, C, O, P: tokens 1–5, its row the CA's, 2), ALA (6), a three-atom
+    /// ligand between chains (7–9), then chain B's ALA (10) and a water, which predictors do
+    /// not tokenise.
+    #[test]
+    fn token_rows_follow_the_file_order() {
+        let pdb = crate::io::open_structure_bytes(TOKEN_TEST_PDB, Some("x.pdb")).unwrap();
+        let [af3, boltz2] = protein_token_rows(&pdb);
+        assert_eq!(af3, (11, vec![0, 2, 6, 10]));
+        // Boltz-2: the SEP is one token.
+        assert_eq!(boltz2, (7, vec![0, 1, 2, 6]));
     }
 
     #[test]

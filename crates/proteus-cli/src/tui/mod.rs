@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 const JOB_LIMIT: i64 = 500;
 const REFRESH_EVERY: Duration = Duration::from_secs(2);
 /// How long a structure file must stay selected before it is measured.
-const SETTLE: Duration = Duration::from_millis(300);
+const SETTLE: Duration = Duration::from_millis(150);
 
 /// Whether bare `proteus` should open the home screen: only when a person is at a terminal on
 /// both ends. In a pipe, a script or CI it keeps printing the usage error, as before.
@@ -75,6 +75,10 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
     launch(&mut terminal, &app.look)?;
     let started = Instant::now();
 
+    // Measuring ahead uses up to four threads, leaving one for everything else.
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |n| n.get().saturating_sub(1))
+        .clamp(1, 4);
     let mut last_refresh: Option<Instant> = None;
     loop {
         if let n @ 1.. = signal.load(Ordering::SeqCst) {
@@ -95,13 +99,26 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
             if rendering.as_ref() == Some(&key) {
                 rendering = None;
             }
-            app.preview = Some((key, preview));
+            app.keep_preview(key, preview);
         }
         // The pane the last frame drew asks for a still of its size; render it off the loop.
+        // With nothing asked for, the neighbouring jobs are rendered at the same size, so the
+        // next key press finds its picture ready.
         let want = app.preview_want.borrow().as_ref().map(|(k, _)| k.clone());
-        if let Some(key) = want {
-            let have = app.preview.as_ref().is_some_and(|(k, _)| *k == key);
-            if !have && rendering.as_ref() != Some(&key) {
+        if rendering.is_none() {
+            let mut next = want.clone().filter(|k| !app.previews.contains_key(k));
+            if next.is_none() && app.tab == app::Tab::Jobs {
+                if let Some(k) = &want {
+                    next = app
+                        .neighbour_models()
+                        .into_iter()
+                        .map(|path| app::PreviewKey { path, ..k.clone() })
+                        .find(|k| {
+                            !app.previews.contains_key(k) && app.scenes.contains_key(&k.path)
+                        });
+                }
+            }
+            if let Some(key) = next {
                 if let Some(scene) = app.scenes.get(&key.path).cloned() {
                     rendering = Some(key.clone());
                     let (ptx, cell) = (ptx.clone(), app.cell_pixels);
@@ -112,19 +129,45 @@ pub async fn run(db_path: &Path, data_dir: &Path) -> Result<()> {
                 }
             }
         }
+        // What the screen shows is measured at once, a file in the browser once the selection
+        // rests (scrolling past a 5 MB file should not wait on it). Jobs' models are measured
+        // ahead, a few at a time, nearest the selection first.
         let wanted = app.wanted_analysis();
         if wanted != resting.0 {
-            resting = (wanted, Instant::now());
-        } else if let Some(path) = wanted {
-            if resting.1.elapsed() >= SETTLE {
-                app.analyses.insert(path.clone(), Analysis::Pending);
-                app.stamps.insert(path.clone(), app::file_stamp(&path));
-                let tx = tx.clone();
-                tokio::task::spawn_blocking(move || {
-                    let (result, scene) = analyse(&path);
-                    let _ = tx.send((path, result, scene));
-                });
+            resting = (wanted.clone(), Instant::now());
+        }
+        let settle = if app.tab == app::Tab::Structures {
+            SETTLE
+        } else {
+            Duration::ZERO
+        };
+        let mut starts: Vec<PathBuf> = Vec::new();
+        if let Some(path) = wanted.filter(|_| resting.1.elapsed() >= settle) {
+            starts.push(path);
+        }
+        let busy = app
+            .analyses
+            .values()
+            .filter(|a| matches!(a, Analysis::Pending))
+            .count();
+        if busy + starts.len() < workers {
+            starts.extend(
+                app.prefetch()
+                    .into_iter()
+                    .take(workers - busy - starts.len()),
+            );
+        }
+        for path in starts {
+            if matches!(app.analyses.get(&path), Some(Analysis::Pending)) {
+                continue;
             }
+            app.analyses.insert(path.clone(), Analysis::Pending);
+            app.stamps.insert(path.clone(), app::file_stamp(&path));
+            let tx = tx.clone();
+            tokio::task::spawn_blocking(move || {
+                let (result, scene) = analyse(&path);
+                let _ = tx.send((path, result, scene));
+            });
         }
 
         app.tick = (started.elapsed().as_millis() / 500) as u64;
@@ -207,8 +250,9 @@ fn launch(terminal: &mut ratatui::DefaultTerminal, look: &style::Look) -> Result
     if !look.motion {
         return Ok(());
     }
-    let fold = Duration::from_secs_f32(proteus_render::brand::mark::FOLD_SECONDS);
-    let hold = Duration::from_millis(450);
+    // Quicker than the mark's own fold: this plays on every start, and a tool opens fast.
+    let fold = Duration::from_secs_f32(proteus_render::brand::mark::FOLD_SECONDS * 0.6);
+    let hold = Duration::from_millis(150);
     let start = Instant::now();
     loop {
         let t = start.elapsed().as_secs_f32() / fold.as_secs_f32();
@@ -325,11 +369,17 @@ fn analyse(path: &Path) -> (Analysis, Option<Arc<proteus_render::StructureRender
                     interface.push([
                         "contacts".into(),
                         format!(
-                            "{} + {} residues · {} H-bonds · {} salt bridges",
+                            "{} + {} residues · {} H-bond{} · {} salt bridge{}",
                             m.binder_interface_residues,
                             m.target_interface_residues,
                             m.interface_hbonds,
-                            m.interface_salt_bridges
+                            if m.interface_hbonds == 1 { "" } else { "s" },
+                            m.interface_salt_bridges,
+                            if m.interface_salt_bridges == 1 {
+                                ""
+                            } else {
+                                "s"
+                            },
                         ),
                     ]);
                 }
@@ -407,10 +457,9 @@ fn place_picture(app: &App, placed: &mut Option<(app::PreviewKey, Rect)>) {
     use std::io::Write;
     const ID: u32 = 0x5068; // "Ph"
     let want = app.preview_want.borrow().clone().filter(|(k, _)| k.pixels);
-    let ready = match (&want, &app.preview) {
-        (Some((k, r)), Some((pk, p))) if k == pk => Some((k.clone(), *r, p)),
-        _ => None,
-    };
+    let ready = want
+        .as_ref()
+        .and_then(|(k, r)| app.previews.get(k).map(|p| (k.clone(), *r, p)));
     let mut out = String::new();
     match ready {
         Some((k, r, p)) => {

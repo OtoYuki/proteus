@@ -1,0 +1,23 @@
+Real predictor outputs for the same complex, made on 2026-09-27 to test that Proteus reads each
+predictor's files as written: chain A MKTAYIAKQRQISFVKSHFSRQLEERLGLS with a phosphoserine (SEP)
+at position 14, chain B ubiquitin 1-56 (MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTL),
+and one ATP. No MSA, one sample. Structures are gzipped; confidence files are cut to the keys
+Proteus reads, values unchanged.
+
+boltz2/    Boltz 2.2.1 (ghcr.io/jwohlwend/boltz), msa: empty, one sample, mmCIF. 117 tokens: the SEP
+           is one token (Boltz-2's convention). ipSAE 0.253391 / 0.063016 and LIS 0.3937 are what
+           DunbrackLab ipsae.py (6174cf9) gives on this model with the ATP removed, the SEP read as
+           SER and the PAE cut to its first 86 rows; on the files as they are it reports
+           0.619150 / 0.264946 (DunbrackLab/IPSAE#28). Boltz is MIT.
+
+protenix/  Protenix 2.0.0, model protenix_mini_default_v0.5.0, seed 101, --need_atom_confidence.
+           126 tokens: the SEP is one token per heavy atom (AlphaFold 3's convention).
+           The expected values in tests/interface.rs were computed by hand from Protenix's own
+           atom_to_token_idx map, independently of Proteus. Protenix is Apache-2.0.
+
+openfold3_json/  OpenFold3 0.5.0 (OpenBind-0 parameters, of3-ob-2025-06-30-174k), seed 2746317213,
+openfold3_npz/   --use_msa_server=False; the second run with full_confidence_output_format: npz
+                 (float16, OpenFold3's default dtype for it). ATP was given as SMILES and is written
+                 as LIG0. 126 tokens: AlphaFold 3's convention; Boltz-2's would give 117. Confidence
+                 files are cut to `pae`. Expected values were computed by hand from the model and
+                 the matrix with that token rule, independently of Proteus. OpenFold3 is Apache-2.0.

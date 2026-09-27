@@ -214,6 +214,8 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         )?;
     }
     let target_path = PathBuf::from(&target);
+    // A job's chains by the names its input gave them, for the viewers' interface labels.
+    let mut chain_names: Vec<(String, String)> = Vec::new();
     let (pdb_content, title, structure_path) = if target_path.exists() {
         let content = proteus_core::io::read_structure_text(&target_path)
             .with_context(|| format!("Failed to read structure file at {:?}", target_path))?;
@@ -253,16 +255,14 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         // The title is the only provenance the viewers show, so say what the file is.
         let engine = proteus_engine::engine_name(pred.metadata.as_ref());
         // Named as the jobs list names it: the sequence's header and the short id.
-        let name = match repo.get_job(job_id).await {
-            Ok(Some(j)) => repo
-                .get_sequence(j.sequence_id)
-                .await
-                .ok()
-                .flatten()
-                .map(|s| s.header)
-                .filter(|h| !h.trim().is_empty()),
+        let sequence = match repo.get_job(job_id).await {
+            Ok(Some(j)) => repo.get_sequence(j.sequence_id).await.ok().flatten(),
             _ => None,
         };
+        if let Some(s) = &sequence {
+            chain_names = proteus_storage::repository::chain_names(&s.fasta);
+        }
+        let name = sequence.map(|s| s.header).filter(|h| !h.trim().is_empty());
         let short = job_ref::short(job_id);
         let who = match name {
             Some(n) => format!("{n} · {short}"),
@@ -273,7 +273,10 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         } else if let Some(d) = proteus_engine::tier_downgrade(pred.metadata.as_ref()) {
             format!("{who} ({engine}; tier '{}' not honoured)", d.requested)
         } else {
-            format!("{who} ({engine})")
+            format!(
+                "{who} ({})",
+                proteus_engine::model_name(pred.metadata.as_ref())
+            )
         };
         (content, title, PathBuf::from(&pred.pdb_path))
     };
@@ -350,6 +353,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     };
     let attach = |s: &mut proteus_render::StructureRenderData| -> Result<()> {
         s.models = models.clone();
+        s.chain_names = chain_names.clone();
         if let Some(c) = confidence.clone() {
             if let Some(note) = s.attach_confidence(c) {
                 eprintln!("{note}");
@@ -405,6 +409,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
             scheme,
             scheme_chosen: color.is_some() || scores_scheme,
             source: Some((&source_name, &pdb_content)),
+            chain_names: &chain_names,
         }
         .render();
 
@@ -590,7 +595,18 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let score_colors = proteus_render::tui::ScoreColors::of(&structure_data);
         let interface_colors = proteus_render::tui::InterfaceColors::of(&structure_data);
         let findings = proteus_render::tui::TerminalFinding::of(&structure_data);
+        // Consecutive runs of one chain along the ribbon, for the panel's chain rulers.
+        let mut chains: Vec<(String, usize)> = Vec::new();
+        for l in &structure_data.residue_labels {
+            match chains.last_mut() {
+                Some((id, k)) if *id == l.chain => *k += 1,
+                _ => chains.push((l.chain.clone(), 1)),
+            }
+        }
         let dashboard_data = Some(proteus_render::tui::DashboardData {
+            chains,
+            dssp: structure_data.dssp.clone(),
+            chain_names: chain_names.clone(),
             title: title.clone(),
             num_residues: structure_data.num_residues,
             num_disulfides: structure_data.num_disulfides,

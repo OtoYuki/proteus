@@ -216,3 +216,106 @@ fn a_dataset_design_reproduces_the_dataset_values() {
     near(i.ipae, 3.91, 0.0006);
     near(i.iptm, 0.891, 0.0006);
 }
+
+/// Unpack a directory of predictor outputs into a temporary one, un-gzipping `*.gz`.
+fn unpack(src: &std::path::Path) -> tempfile::TempDir {
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(src).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let bytes = std::fs::read(e.path()).unwrap();
+        match name.strip_suffix(".gz") {
+            Some(plain) => {
+                let mut out = Vec::new();
+                flate2::read::GzDecoder::new(&bytes[..])
+                    .read_to_end(&mut out)
+                    .unwrap();
+                std::fs::write(dir.path().join(plain), out).unwrap();
+            }
+            None => std::fs::write(dir.path().join(name), bytes).unwrap(),
+        }
+    }
+    dir
+}
+
+/// Protenix output as written (tests/data/predictors/NOTICE): the files are found beside the
+/// model, the SEP's per-atom tokens and the ATP's are skipped, and the values equal those
+/// computed from Protenix's own atom-to-token map.
+#[test]
+fn protenix_output_with_a_modified_residue_and_a_ligand() {
+    let dir = unpack(&data("predictors/protenix"));
+    let spec = InterfaceSpec::parse("A:B").unwrap();
+    let qc = proteus_core::qc::structure_qc_with(
+        &dir.path().join("sepatp_sample_0.cif"),
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let i = &qc.interface;
+    assert_eq!(i.interface_note, None);
+    let near = |ours: Option<f64>, theirs: f64| {
+        let v = ours.unwrap();
+        assert!((v - theirs).abs() < 1e-6, "{v} vs {theirs}");
+    };
+    near(i.ipsae_max, 0.016426);
+    near(i.ipsae_min, 0.013679);
+    near(i.lis, 0.168540);
+    near(i.ipae, 15.095940);
+    near(i.iptm, 0.265748);
+}
+
+fn interface_of(dir: &std::path::Path, model: &str) -> proteus_core::qc::InterfaceColumns {
+    let spec = InterfaceSpec::parse("A:B").unwrap();
+    proteus_core::qc::structure_qc_with(
+        &dir.join(model),
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .interface
+}
+
+fn near(ours: Option<f64>, theirs: f64) {
+    let v = ours.unwrap();
+    assert!((v - theirs).abs() < 1e-6, "{v} vs {theirs}");
+}
+
+/// OpenFold3 output as written, with its PAE in `_confidences.json` and, from a second run, in a
+/// float16 `_confidences.npz`; ipTM from `_confidences_aggregated.json`.
+#[test]
+fn openfold3_output_in_both_confidence_formats() {
+    let model = "sepatp_seed_2746317213_sample_1_model.cif";
+    let dir = unpack(&data("predictors/openfold3_json"));
+    let i = interface_of(dir.path(), model);
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.012872);
+    near(i.ipsae_min, 0.010942);
+    near(i.lis, 0.105125);
+    near(i.ipae, 15.979549);
+    near(i.iptm, 0.27203);
+
+    let dir = unpack(&data("predictors/openfold3_npz"));
+    let i = interface_of(dir.path(), model);
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.012945);
+    near(i.ipsae_min, 0.011067);
+    near(i.iptm, 0.269767);
+}
+
+/// Boltz-2 output as written (tests/data/predictors/NOTICE): the SEP is one token, the ATP one per
+/// atom. `ipsae.py` reads this model 9 rows out of step and reports 0.619 / 0.265.
+#[test]
+fn boltz2_output_with_a_modified_residue_and_a_ligand() {
+    let dir = unpack(&data("predictors/boltz2"));
+    let i = interface_of(dir.path(), "input_model_0.cif");
+    assert_eq!(i.interface_note, None);
+    near(i.ipsae_max, 0.253391);
+    near(i.ipsae_min, 0.063016);
+    assert!((i.lis.unwrap() - 0.3937).abs() < 5e-5);
+    near(i.ipae, 7.295911);
+    near(i.iptm, 0.745699);
+}

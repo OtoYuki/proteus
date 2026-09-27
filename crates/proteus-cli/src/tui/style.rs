@@ -14,6 +14,8 @@ pub struct Look {
     pub theme: Theme,
     /// Motion at meaningful moments (the launch, a running job). `NO_MOTION` turns it off.
     pub motion: bool,
+    /// Icons beside the tab names (see `proteus_render::brand::icons`).
+    pub icons: bool,
 }
 
 impl Look {
@@ -22,6 +24,7 @@ impl Look {
             depth: ColorDepth::detect(),
             theme: brand::DARK,
             motion: std::env::var_os("NO_MOTION").is_none_or(|v| v.is_empty()),
+            icons: proteus_render::brand::icons::available(),
         }
     }
 
@@ -30,6 +33,7 @@ impl Look {
             depth,
             theme: brand::DARK,
             motion: true,
+            icons: false,
         }
     }
 

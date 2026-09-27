@@ -455,6 +455,7 @@ pub async fn view_structure(State(state): State<AppState>, Path(job_id): Path<Uu
                 scheme,
                 scheme_chosen: false,
                 source: Some((&name, &text)),
+                chain_names: &[],
             }
             .render()
         })

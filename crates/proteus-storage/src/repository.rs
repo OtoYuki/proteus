@@ -261,7 +261,7 @@ impl ProteusRepository {
         let rows = sqlx::query(
             "SELECT j.id, j.sequence_id, j.tier, j.status, j.priority, j.created_at, \
                     j.started_at, j.completed_at, j.error_log, \
-                    s.header, s.length, p.pdb_path, p.plddt, p.metadata \
+                    s.header, s.length, s.fasta, p.pdb_path, p.plddt, p.metadata \
              FROM jobs j \
              LEFT JOIN sequences s ON s.id = j.sequence_id \
              LEFT JOIN predictions p ON p.rowid = \
@@ -282,6 +282,11 @@ impl ProteusRepository {
                     pdb_path: r.get("pdb_path"),
                     plddt: r.get("plddt"),
                     metadata: metadata.and_then(|m| serde_json::from_str(&m).ok()),
+                    chain_names: r
+                        .get::<Option<String>, _>("fasta")
+                        .as_deref()
+                        .map(chain_names)
+                        .unwrap_or_default(),
                 })
             })
             .collect()
@@ -829,6 +834,25 @@ pub struct JobSummary {
     pub pdb_path: Option<String>,
     pub plddt: Option<f64>,
     pub metadata: Option<serde_json::Value>,
+    /// Chain ID and name of each named chain of a complex (`A`, `PD-L1`); empty for a monomer
+    /// or a complex stored before names were.
+    pub chain_names: Vec<(String, String)>,
+}
+
+/// The named chains of a stored sequence.
+pub fn chain_names(fasta: &str) -> Vec<(String, String)> {
+    use proteus_core::complex::ComplexSpec;
+    if !ComplexSpec::is_spec(fasta) {
+        return Vec::new();
+    }
+    ComplexSpec::from_stored(fasta)
+        .map(|s| {
+            s.chains
+                .into_iter()
+                .filter_map(|c| c.name.map(|n| (c.id, n)))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A `jobs` row (columns as selected by `get_job` and `list_jobs`) as a [`PipelineJob`].

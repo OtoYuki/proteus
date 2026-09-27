@@ -113,6 +113,9 @@ pub struct InterfaceColumns {
     pub ipsae_max: Option<f64>,
     /// LIS (12 Å PAE cutoff), mean of the two directions.
     pub lis: Option<f64>,
+    /// Why the PAE columns are empty although a PAE file was found beside the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_note: Option<String>,
 }
 
 /// What [`structure_qc_with`] measures beyond the defaults.
@@ -386,7 +389,27 @@ fn interface_columns(
     pdb: &pdbtbx::PDB,
     spec: &crate::interface::InterfaceSpec,
 ) -> Result<InterfaceColumns, CoreError> {
-    let confidence = crate::pae::read_confidence(path, None)?;
+    // A confidence file that is there but unreadable (an OpenFold3 file holding only PDE, a
+    // truncated download) costs the PAE columns, not the model's other measurements.
+    // If only the scores file is at fault, the PAE is still read on its own.
+    let (confidence, unreadable) = match crate::pae::read_confidence(path, None) {
+        Ok(c) => (c, None),
+        Err(e) => {
+            let pae = crate::pae::sidecar_files(path)
+                .0
+                .and_then(|p| crate::pae::read_pae(&p).ok());
+            let note = if pae.is_some() {
+                format!("ipTM not read: {e}")
+            } else {
+                format!("no PAE metrics: {e}")
+            };
+            let c = crate::pae::PredictionConfidence {
+                pae,
+                ..Default::default()
+            };
+            (c, Some(note))
+        }
+    };
     let i = crate::interface::interface_metrics(pdb, spec, confidence.pae.as_ref())?;
     Ok(InterfaceColumns {
         interface_binder: Some(i.binder_chains),
@@ -402,6 +425,10 @@ fn interface_columns(
         ipsae_min: i.ipsae_min,
         ipsae_max: i.ipsae_max,
         lis: i.lis,
+        interface_note: i
+            .pae_note
+            .map(|n| format!("no PAE metrics: {n}"))
+            .or(unreadable),
     })
 }
 
@@ -528,6 +555,42 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data")
             .join(name)
+    }
+
+    /// A truncated scores file beside a good PAE costs ipTM, not the PAE metrics.
+    #[test]
+    fn a_broken_scores_file_keeps_the_pae_metrics() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("x_model.pdb");
+        std::fs::write(&model, crate::pae::TOKEN_TEST_PDB).unwrap();
+        // 11 tokens (the modified residue per atom), all confidently placed at 2 Å.
+        let row = format!("[{}]", ["2.0"; 11].join(","));
+        std::fs::write(
+            dir.path().join("x_confidences.json"),
+            format!("{{\"pae\": [{}]}}", vec![row; 11].join(",")),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("x_summary_confidences.json"),
+            "{\"iptm\": 0.",
+        )
+        .unwrap();
+        let spec = crate::interface::InterfaceSpec::parse("A:B").unwrap();
+        let qc = structure_qc_with(
+            &model,
+            &QcOptions {
+                interface: Some(&spec),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(qc.interface.ipsae_min.is_some());
+        assert_eq!(qc.interface.iptm, None);
+        assert!(qc
+            .interface
+            .interface_note
+            .unwrap()
+            .starts_with("ipTM not read:"));
     }
 
     #[test]

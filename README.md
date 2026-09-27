@@ -64,7 +64,8 @@ chain A against every other chain. For every model it adds two groups of columns
   cutoff), buried surface (dSASA), shape complementarity (Sc, Lawrence & Colman 1993), and
   hydrogen bonds and salt bridges across the interface.
 - **From the predictor's own files beside the model:** ipTM, ipAE, ipSAE and LIS. Proteus reads
-  Boltz, ColabFold, AlphaFold 3 (local runs and the AlphaFold Server) and AlphaFold DB files. ipSAE
+  Boltz, AlphaFold 3 (local runs and the AlphaFold Server), Protenix, OpenFold3, ColabFold and
+  AlphaFold DB files, and Chai-1's scores (below). ipSAE
   (Dunbrack 2025) is the pTM-style score over only the residue pairs the predictor is confident
   about. It is reported both ways round, binder→target and target→binder, and `ipsae_min` is the
   smaller of the two.
@@ -80,20 +81,37 @@ the chips in the panel) hands the binder role to another chain. The terminal vie
 shows the same three lines.
 
 **What these numbers are worth**, measured on the 3 669 designs in the Overath et al. 2025
-meta-analysis whose binding was tested in the lab (394 bound). Scores are average precision
-over the AlphaFold 3 models (`make validate-binders`); a random ranking scores 0.107.
+meta-analysis whose binding was tested in the lab (394 bound, 15 targets), using the AlphaFold 3
+models (`make validate-binders`). A campaign ranks its own designs against one target, so the
+score is average precision (AP) per target, averaged over the 15. A random ranking scores the
+binder rate, 0.131 on average.
 
-| ranked by | AP | |
-|---|---|---|
-| `ipsae_min` | **0.358** | the dataset's own ipSAE_min: 0.350 |
-| `lis` | 0.313 | |
-| `ipae` (lower first) | 0.298 | |
-| `interface_sc` | 0.267 | the dataset's Rosetta Sc: 0.178 |
-| `iptm` | 0.236 | |
-| `plddt_mean` | 0.208 | |
+| ranked by | AP per target | AUROC | |
+|---|---|---|---|
+| `ipsae_min` | **0.513** | 0.803 | 3.9× random; the dataset's own ipSAE_min: 0.513 |
+| `lis` | 0.477 | 0.808 | |
+| `ipae` (lower first) | 0.444 | 0.791 | |
+| `iptm` | 0.425 | 0.791 | pDockQ2 (dataset): 0.436 |
+| `plddt_mean` | 0.409 | 0.730 | |
+| `interface_sc` | 0.381 | 0.714 | the dataset's Rosetta Sc: 0.267, Rosetta ΔG: 0.332 |
+
+It beats every other score in the dataset, pDockQ2, ColabFold's actifpTM (0.346) and Rosetta's
+interface ΔG included. It is an enrichment filter, not a predictor: most top-ranked designs still
+fail in the lab, and targets with one to three binders give noisy numbers. Ranking all
+designs together instead (AP 0.358 against 0.107) mixes targets whose binder rates run from 2 % to
+57 %, and mostly measures which targets are easy. The per-target table is in
+[`last_run.md`](validate/binders/last_run.md).
 
 Keeping `ipsae_min > 0.61`, the paper's threshold, keeps 509 of the 3 669 designs. 203 of those
 bound: 40 % of what you would send to the lab, against 11 % unfiltered, and half of all the binders.
+
+**A second, harder check**: the 1 196 designs of Adaptyv's Nipah binder competition (111 bound),
+on the Boltz-2 models and PAE that ProteinBase publishes (`make validate-nipah`). ipSAE_min scores
+AP 0.191 against a random 0.093 (AUROC 0.658). Boltz's interface pLDDT ties it on AP and does
+better on AUROC (0.707), and Sc is close (0.179).
+The margin is smaller because ipSAE had already chosen which designs were tested. The binder
+rate still climbs steadily with the score, from 2.7 % below 0.2 to 38 % above 0.8
+([`last_run.md`](validate/nipah/last_run.md)).
 
 ```sql
 -- duckdb: the confident interfaces, chemically sound, best first
@@ -643,9 +661,20 @@ takes the first chain against the rest. The PAE and scores files are found besid
 - AlphaFold 3 run locally: `<name>_confidences.json` and `<name>_summary_confidences.json`
   beside `<name>_model.cif`, or `confidences.json` beside a sample's `model.cif`.
 - AlphaFold Server: `<name>_full_data_<k>.json`.
+- Protenix: `<job>_full_data_sample_<k>.json` (written with `--need_atom_confidence`) and
+  `<job>_summary_confidence_sample_<k>.json` beside `<job>_sample_<k>.cif`.
+- OpenFold3: `…_confidences.json` or `.npz` and `…_confidences_aggregated.json` beside
+  `…_model.cif`.
+- Chai-1: `scores.model_idx_<k>.npz` (pTM, ipTM) beside `pred.model_idx_<k>.cif`. Chai-1's
+  command line writes no PAE; a `pae.model_idx_<k>.npy` saved from its Python API is read. This
+  is checked against Chai-1's source, not on its output: it needs more than a 6 GB GPU.
 
-The PAE metrics need one PAE row per protein residue in file order. When a matrix does not fit
-the model, for example because it has ligand tokens, those columns stay empty.
+AlphaFold 3-style predictors write one PAE row per token: one per standard residue, one per
+heavy atom of a ligand, and for a modified residue one per atom (AlphaFold 3, Boltz-1,
+Protenix, OpenFold3) or one (Boltz-2). The protein residues' rows are picked out under whichever
+convention accounts for every row, so complexes with ligands and modified residues are scored.
+Real Boltz-2, Protenix and OpenFold3 output of such a complex is checked in the tests. When a
+matrix fits the model under neither, the PAE columns stay empty and `analyze` says why.
 
 1CRN (crambin). It is an X-ray structure, so no pLDDT is reported — the B-factor column is not
 a confidence and Proteus will not pretend it is. The ten worst covalent-geometry outliers follow

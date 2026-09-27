@@ -61,24 +61,25 @@ pub fn draw(f: &mut Frame, app: &App) {
 // ---------------------------------------------------------------------------------------------
 // Header, key hints, status line
 
-/// The tabs as one segmented control: the showing tab filled in the accent, the others quiet,
-/// each with its number key.
+/// The tabs as one segmented control: the showing tab filled in the accent, the others quiet.
+/// Icons where the terminal draws them; the number keys are in the key strip.
 fn tab_spans(app: &App) -> Vec<Span<'static>> {
     let look = &app.look;
     let mut spans = Vec::new();
-    for (i, t) in Tab::ALL.iter().enumerate() {
+    for t in Tab::ALL.iter() {
         let name = t.title().to_lowercase();
-        let icon = t.icon();
-        if *t == app.tab {
-            spans.push(Span::styled(
-                format!(" {icon} {name} {} ", i + 1),
-                look.tab_on(),
-            ));
+        // A Nerd Font glyph is drawn a little wider than a cell: two spaces after it.
+        let label = if look.icons {
+            format!("  {}  {name}  ", t.icon())
         } else {
-            spans.push(Span::styled(format!(" {icon} "), look.muted()));
-            spans.push(Span::styled(format!("{name} "), look.muted()));
-            spans.push(Span::styled(format!("{} ", i + 1), look.dim()));
-        }
+            format!("  {name}  ")
+        };
+        let style = if *t == app.tab {
+            look.tab_on()
+        } else {
+            look.muted()
+        };
+        spans.push(Span::styled(label, style));
         spans.push(Span::raw(" "));
     }
     spans
@@ -162,6 +163,7 @@ fn key_hints(app: &App, width: usize) -> Line<'static> {
                 ("s", "sort"),
                 ("n", "rename"),
                 ("x", "delete"),
+                ("1 2 3", "tabs"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -171,7 +173,9 @@ fn key_hints(app: &App, width: usize) -> Line<'static> {
                 ("←", "up"),
                 ("w", "in browser"),
                 ("a", "report"),
-                ("tab", "next"),
+                ("f", "find below"),
+                ("~", "home"),
+                ("1 2 3", "tabs"),
                 ("?", "keys"),
                 ("q", "quit"),
             ],
@@ -180,7 +184,8 @@ fn key_hints(app: &App, width: usize) -> Line<'static> {
                 ("⏎", "edit · run"),
                 ("←→", "choose"),
                 ("f", "other form"),
-                ("1-3", "tabs"),
+                ("ctrl-e", "example"),
+                ("1 2 3", "tabs"),
                 ("F1", "keys"),
                 ("q", "quit"),
             ],
@@ -442,14 +447,28 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
     // Wide: the list on the left, the selected job inspected on the right. Narrow: the list
     // takes what it needs and the inspector the rest.
     let wide = area.width >= 120 && area.height >= 16;
+    let mut overview = Rect::default();
     let [list, detail] = if wide {
         let [l, _, d] = Layout::horizontal([
-            Constraint::Percentage(46),
-            Constraint::Length(3),
+            Constraint::Percentage(44),
+            Constraint::Length(4),
             Constraint::Min(0),
         ])
         .areas(area);
-        [l, d]
+        // The list takes what its rows need; the overview of all jobs fills below it.
+        let want = visible.len() as u16 + 3;
+        if l.height >= want + 14 {
+            let [top, _, bottom] = Layout::vertical([
+                Constraint::Length(want),
+                Constraint::Length(2),
+                Constraint::Min(0),
+            ])
+            .areas(l);
+            overview = bottom;
+            [top, d]
+        } else {
+            [l, d]
+        }
     } else if area.height >= 16 {
         let want = (visible.len() as u16 + 3).max(6);
         Layout::vertical([Constraint::Max(want), Constraint::Min(8)])
@@ -459,6 +478,12 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         [area, Rect::default()]
     };
 
+    // The model column only where the names keep room (at least 22 characters); names cut
+    // with an ellipsis, never mid-word without a mark.
+    let show_model = list.width >= 22 + 10 + 4 + 5 + 10 + 4 + 5 * 2 + 3;
+    let name_w = (list.width as usize)
+        .saturating_sub(10 + 4 + 5 + 4 + 3 + if show_model { 10 + 2 } else { 0 } + 4 * 2)
+        .max(8);
     let rows = visible.iter().map(|j| {
         let eng = model(j);
         let eng_style = if engine(j) == proteus_engine::ENGINE_SIMULATED {
@@ -470,7 +495,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
         Row::new(vec![
             Cell::from(state(look, &j.job.status, app.tick)),
             Cell::from(Span::styled(
-                display_name(&j.header),
+                elide_end(&display_name(&j.header), name_w),
                 if failed { look.muted() } else { look.text() },
             )),
             Cell::from(
@@ -486,7 +511,10 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
                 })
                 .right_aligned(),
             ),
-            Cell::from(Span::styled(eng.to_string(), eng_style)),
+            Cell::from(Span::styled(
+                if show_model { eng } else { String::new() },
+                eng_style,
+            )),
             Cell::from(Line::from(Span::styled(age(j.job.created_at), look.dim())).right_aligned()),
         ])
     });
@@ -497,7 +525,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Fill(1),
             Constraint::Length(4),
             Constraint::Length(5),
-            Constraint::Length(10),
+            Constraint::Length(if show_model { 10 } else { 0 }),
             Constraint::Length(4),
         ],
     )
@@ -507,7 +535,7 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             Cell::from("name"),
             Cell::from(Line::from("len").right_aligned()),
             Cell::from(Line::from("pLDDT").right_aligned()),
-            Cell::from("model"),
+            Cell::from(if show_model { "model" } else { "" }),
             Cell::from(Line::from("age").right_aligned()),
         ])
         .style(look.dim())
@@ -525,6 +553,167 @@ fn draw_jobs(f: &mut Frame, area: Rect, app: &App) {
             draw_job_detail(f, detail, app, j);
         }
     }
+    if overview.height > 0 {
+        draw_overview(f, overview, app);
+    }
+}
+
+/// All jobs at a glance: states, how confident the models are, how the complexes' interfaces
+/// came out, and which models folded them.
+fn draw_overview(f: &mut Frame, area: Rect, app: &App) {
+    let look = &app.look;
+    let jobs = &app.jobs.all;
+    let w = area.width as usize;
+    let mut out = vec![heading(look, "overview", w), Line::from("")];
+    let count = |s: JobStatus| jobs.iter().filter(|j| j.job.status == s).count();
+    let mut states = vec![Span::styled(format!("{:<14}", "jobs"), look.dim())];
+    for (n, s, glyph, style) in [
+        (count(JobStatus::Completed), "done", "✓", look.accent()),
+        (count(JobStatus::Running), "running", "●", look.warm()),
+        (
+            count(JobStatus::Queued) + count(JobStatus::Pending),
+            "queued",
+            "○",
+            look.muted(),
+        ),
+        (count(JobStatus::Failed), "failed", "✗", look.bad()),
+    ] {
+        if n > 0 {
+            states.push(Span::styled(format!("{glyph} "), style));
+            states.push(Span::styled(
+                n.to_string(),
+                look.text().add_modifier(Modifier::BOLD),
+            ));
+            states.push(Span::styled(format!(" {s}    "), look.muted()));
+        }
+    }
+    out.push(Line::from(states));
+    out.push(Line::from(""));
+
+    // pLDDT in AlphaFold's bands, one bar per band scaled to the fullest.
+    let bands: [(&str, f64, f64, f32); 4] = [
+        ("≥ 90", 90.0, 101.0, 95.0),
+        ("70–90", 70.0, 90.0, 80.0),
+        ("50–70", 50.0, 70.0, 60.0),
+        ("< 50", f64::NEG_INFINITY, 50.0, 40.0),
+    ];
+    let with_plddt: Vec<f64> = jobs.iter().filter_map(|j| j.plddt).collect();
+    if !with_plddt.is_empty() {
+        out.push(Line::from(Span::styled("confidence (pLDDT)", look.dim())));
+        let most = bands
+            .iter()
+            .map(|(_, lo, hi, _)| {
+                with_plddt
+                    .iter()
+                    .filter(|p| **p >= *lo && **p < *hi)
+                    .count()
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let bar_w = w.saturating_sub(14 + 6).min(28);
+        for (name, lo, hi, mid) in bands {
+            let n = with_plddt.iter().filter(|p| **p >= lo && **p < hi).count();
+            let c = proteus_render::rasterizer::shader::plddt_to_color(mid);
+            let mut l = vec![Span::styled(format!("  {name:<12}"), look.muted())];
+            l.extend(gauge(look, n as f64 / most as f64, bar_w, look.data(c)));
+            l.push(Span::styled(
+                format!(" {n}"),
+                if n > 0 {
+                    look.text().add_modifier(Modifier::BOLD)
+                } else {
+                    look.dim()
+                },
+            ));
+            out.push(Line::from(l));
+        }
+        out.push(Line::from(""));
+    }
+
+    // Complexes: how many interfaces pass the ipSAE_min line, of those measured so far.
+    // The measured chain count once a model is analysed; until then, the job's name.
+    let complexes: Vec<_> = jobs
+        .iter()
+        .filter(|j| {
+            let measured = j
+                .pdb_path
+                .as_ref()
+                .and_then(|p| app.analyses.get(Path::new(p)))
+                .and_then(|a| match a {
+                    Analysis::Done { facts: Some(f), .. } => Some(f.chains),
+                    _ => None,
+                });
+            // Names `submit` gives complexes: "2 chains", "2 chains A:B", "PD-1 ×2", "A + B".
+            let named = [" chains", " ×", " + "]
+                .iter()
+                .any(|t| j.header.contains(t));
+            measured.map_or(j.chain_names.len() > 1 || named, |n| n > 1)
+        })
+        .collect();
+    if !complexes.is_empty() {
+        let (mut measured, mut confident, mut waiting) = (0, 0, 0);
+        for j in &complexes {
+            match j
+                .pdb_path
+                .as_ref()
+                .and_then(|p| app.analyses.get(Path::new(p)))
+            {
+                Some(Analysis::Done {
+                    verdict: Some((ok, _)),
+                    ..
+                }) => {
+                    measured += 1;
+                    confident += usize::from(*ok);
+                }
+                // No PAE to judge an interface by: not counted either way.
+                Some(Analysis::Done { .. }) | Some(Analysis::Failed(_)) => {}
+                _ if j.pdb_path.is_some() => waiting += 1,
+                _ => {}
+            }
+        }
+        let mut l = vec![
+            Span::styled(format!("{:<14}", "interfaces"), look.dim()),
+            Span::styled(
+                format!("{confident}"),
+                look.accent().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" of {measured} confident",), look.muted()),
+        ];
+        if waiting > 0 {
+            l.push(Span::styled(
+                format!("  · {waiting} measuring…"),
+                look.dim(),
+            ));
+        }
+        out.push(Line::from(l));
+        out.push(Line::from(Span::styled(
+            format!("{:<14}ipSAE_min above 0.61", ""),
+            look.dim(),
+        )));
+        out.push(Line::from(""));
+    }
+
+    // Which models folded them.
+    let mut models: Vec<(String, usize)> = Vec::new();
+    for j in jobs.iter().filter(|j| j.pdb_path.is_some()) {
+        let m = model(j);
+        match models.iter_mut().find(|(k, _)| *k == m) {
+            Some((_, n)) => *n += 1,
+            None => models.push((m, 1)),
+        }
+    }
+    models.sort_by_key(|m| std::cmp::Reverse(m.1));
+    for (i, (m, n)) in models.iter().take(4).enumerate() {
+        out.push(Line::from(vec![
+            Span::styled(
+                format!("{:<14}", if i == 0 { "models" } else { "" }),
+                look.dim(),
+            ),
+            Span::styled(format!("{n:>3} "), look.text().add_modifier(Modifier::BOLD)),
+            Span::styled(m.clone(), look.muted()),
+        ]));
+    }
+    f.render_widget(Paragraph::new(out), area);
 }
 
 /// The selected job, inspected: its name and state, how it ran, why it failed if it did, and
@@ -555,8 +744,14 @@ fn draw_job_detail(
             sub.push(Span::styled(engine(j).to_string(), look.text()));
         }
     }
+    // The date only where the line has room for it (the list's age column has it roughly).
+    let date = if area.width >= 110 {
+        format!("  ·  {}", when(j.job.created_at))
+    } else {
+        String::new()
+    };
     sub.push(Span::styled(
-        format!("  ·  {} residues  ·  {}", j.length, when(j.job.created_at)),
+        format!("  ·  {} residues{date}", j.length),
         look.dim(),
     ));
     if let Some(done) = j.job.completed_at {
@@ -601,6 +796,7 @@ fn draw_job_detail(
             sub,
             notes,
             path: path.as_deref(),
+            chain_names: &j.chain_names,
             empty: match j.job.status {
                 JobStatus::Completed => None,
                 JobStatus::Failed => Some("This job left no model."),
@@ -619,6 +815,28 @@ struct Inspect<'a> {
     path: Option<&'a Path>,
     /// Said where the preview and measurements would be, when there is no structure.
     empty: Option<&'static str>,
+    /// Chain ID → name, to name the binder and target (a job's complex).
+    chain_names: &'a [(String, String)],
+}
+
+/// `A → B` as `PD-L1 (A) → PD-1 (B)`, for each chain the input named. Several chains on a side
+/// (`A,C`) are named one by one.
+pub fn name_chains(value: &str, names: &[(String, String)]) -> String {
+    if names.is_empty() {
+        return value.to_string();
+    }
+    let one = |id: &str| {
+        let id = id.trim();
+        names
+            .iter()
+            .find(|(c, _)| c == id)
+            .map_or(id.to_string(), |(_, n)| format!("{n} ({id})"))
+    };
+    value
+        .split(" → ")
+        .map(|side| side.split(',').map(one).collect::<Vec<_>>().join(", "))
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 /// The inspector: title and badge, an identity line, notes; then the structure's preview beside
@@ -628,15 +846,24 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
     if area.width < 20 || area.height < 4 {
         return;
     }
-    // Title line: the name in bold, the badge right-aligned.
-    let [title, sub, notes_area, _, body] = Layout::vertical([
+    // Title line: the name in bold, the badge right-aligned; the identity line and notes under
+    // it; a hairline closes the header off from the numbers.
+    // A short pane gives the numbers every row: no rule, no gaps.
+    let roomy = u16::from(area.height >= 20);
+    let [title, sub, notes_area, _, rule, _, body] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(it.notes.len() as u16),
-        Constraint::Length(1),
+        Constraint::Length(roomy),
+        Constraint::Length(roomy),
+        Constraint::Length(roomy),
         Constraint::Min(0),
     ])
     .areas(area);
+    f.render_widget(
+        Paragraph::new(Span::styled("─".repeat(rule.width as usize), look.line())),
+        rule,
+    );
     f.render_widget(
         Paragraph::new(Span::styled(
             it.title.clone(),
@@ -692,15 +919,27 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
     else {
         return;
     };
+    // The binder and target by the names the input gave them.
+    let named: Vec<[String; 2]> = interface
+        .iter()
+        .map(|[k, v]| {
+            if k == "binder → target" {
+                [k.clone(), name_chains(v, it.chain_names)]
+            } else {
+                [k.clone(), v.clone()]
+            }
+        })
+        .collect();
+    let interface = &named;
 
     // Preview and card share a band as tall as the preview wants to be (about square in
     // pixels: a cell is twice as tall as wide), capped at half the body.
     // Numbers first: the preview only where it leaves room for them, and only when there is a
     // structure to draw.
     let has_pic = body.height >= 16
-        && it.path.is_some_and(|p| {
-            app.scenes.contains_key(p) || app.preview.as_ref().is_some_and(|(k, _)| k.path == p)
-        });
+        && it
+            .path
+            .is_some_and(|p| app.scenes.contains_key(p) || app.any_preview(p).is_some());
     let side = body.width >= 70;
     let card_w = if side && has_pic {
         body.width * 48 / 100 - 2
@@ -716,18 +955,23 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
         card_w,
     );
     if !has_pic {
-        let mut lines = card_lines;
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(grouped_details(look, rows, interface, body.width));
-        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body);
+        let h = (card_lines.len() as u16).min(body.height);
+        let [c, _, d] = Layout::vertical([
+            Constraint::Length(h),
+            Constraint::Length(u16::from(h > 0)),
+            Constraint::Min(0),
+        ])
+        .areas(body);
+        f.render_widget(Paragraph::new(card_lines), c);
+        draw_details(f, d, look, rows, interface);
         return;
     }
+    // The picture about square in pixels (a cell is about twice as tall as wide), the card
+    // beside it; the band no taller than half the body, so the measurements keep their room.
     let band_h = if side {
-        ((body.width as f32 * 0.5 / 2.1) as u16)
-            .max(card_lines.len() as u16)
-            .min(body.height / 2 + 2)
+        ((body.width as f32 * 0.48 / 2.2) as u16)
+            .max(card_lines.len() as u16 + 2)
+            .min(body.height / 2 + 1)
             .max(8.min(body.height))
     } else {
         (body.height / 3).clamp(6.min(body.height), 14)
@@ -740,8 +984,8 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
     .areas(body);
     let (pic, card) = if side {
         let [p, _, c] = Layout::horizontal([
-            Constraint::Percentage(52),
-            Constraint::Length(2),
+            Constraint::Percentage(48),
+            Constraint::Length(4),
             Constraint::Min(0),
         ])
         .areas(band);
@@ -752,16 +996,30 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
     if let Some(path) = it.path {
         draw_preview_pane(f, pic, app, path);
     }
-    let mut detail_lines = Vec::new();
     match card {
-        Some(c) => f.render_widget(Paragraph::new(card_lines).wrap(Wrap { trim: false }), c),
-        None => detail_lines.extend(card_lines),
+        Some(c) => {
+            // The card sits in the middle of the band's height, beside the picture's middle.
+            let top = c.height.saturating_sub(card_lines.len() as u16) / 2;
+            let c = Rect {
+                y: c.y + top.min(2),
+                height: c.height - top.min(2),
+                ..c
+            };
+            f.render_widget(Paragraph::new(card_lines), c);
+            draw_details(f, details, look, rows, interface);
+        }
+        None => {
+            let h = (card_lines.len() as u16).min(details.height);
+            let [c, _, d] = Layout::vertical([
+                Constraint::Length(h),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .areas(details);
+            f.render_widget(Paragraph::new(card_lines), c);
+            draw_details(f, d, look, rows, interface);
+        }
     }
-    detail_lines.extend(grouped_details(look, rows, interface, details.width));
-    f.render_widget(
-        Paragraph::new(detail_lines).wrap(Wrap { trim: false }),
-        details,
-    );
 }
 
 /// The inspector's headline: the interface verdict for a complex, then gauges for confidence,
@@ -829,7 +1087,10 @@ fn headline_card(
             let c = proteus_render::rasterizer::shader::plddt_to_color(p as f32);
             let mut l = vec![label("pLDDT")];
             l.extend(gauge(look, p / 100.0, W, look.data(c)));
-            l.push(Span::styled(format!(" {p:.1}"), look.text()));
+            l.push(Span::styled(
+                format!(" {p:.1}"),
+                look.data(c).add_modifier(Modifier::BOLD),
+            ));
             out.push(Line::from(l));
         }
         _ => out.push(Line::from(vec![
@@ -841,9 +1102,13 @@ fn headline_card(
         let n = |v: Option<f64>| v.map_or("–".into(), |v| format!("{v:.2}"));
         out.push(Line::from(vec![
             label("pTM · ipTM"),
-            Span::styled(format!("{} · {}", n(fx.ptm), n(fx.iptm)), look.text()),
+            Span::styled(n(fx.ptm), look.text().add_modifier(Modifier::BOLD)),
+            Span::styled(" · ", look.dim()),
+            Span::styled(n(fx.iptm), look.text().add_modifier(Modifier::BOLD)),
         ]));
     }
+    // Confidence above, the model's quality below.
+    out.push(Line::from(""));
     let mut rama = vec![label("backbone")];
     let rama_style = if fx.rama_outliers == 0 {
         look.accent()
@@ -852,7 +1117,7 @@ fn headline_card(
     };
     rama.extend(gauge(look, fx.rama_favored / 100.0, W, rama_style));
     let (value, flag) = rama_text.split_at(rama_text.find(" · ").unwrap_or(rama_text.len()));
-    rama.push(Span::styled(value.to_string(), look.text()));
+    rama.extend(value_spans(look, value));
     if !flag.is_empty() {
         rama.push(Span::styled(flag.to_string(), look.warm()));
     }
@@ -878,11 +1143,14 @@ fn headline_card(
         used += n;
         ss.push(Span::styled("█".repeat(n), look.data(c)));
     }
-    ss.push(Span::styled(fold_text, look.text()));
+    ss.extend(value_spans(look, &fold_text));
     out.push(Line::from(ss));
     let mut tri = vec![label("triage")];
     tri.extend(gauge(look, fx.triage / 100.0, W, look.accent()));
-    tri.push(Span::styled(format!(" {:.0}", fx.triage), look.text()));
+    tri.push(Span::styled(
+        format!(" {:.0}", fx.triage),
+        look.text().add_modifier(Modifier::BOLD),
+    ));
     out.push(Line::from(tri));
     // The Rg ratio only when it fits on the line: wrapped, it strands under the labels (the
     // measurements below give it in full either way).
@@ -897,10 +1165,9 @@ fn headline_card(
     } else if 11 + size.chars().count() > width as usize {
         size = format!("{residues} res · {} ch", fx.chains);
     }
-    out.push(Line::from(vec![
-        label("size"),
-        Span::styled(size, look.text()),
-    ]));
+    let mut l = vec![label("size")];
+    l.extend(value_spans(look, &size));
+    out.push(Line::from(l));
     out
 }
 
@@ -930,55 +1197,262 @@ fn gauge(look: &Look, frac: f64, width: usize, fill: Style) -> Vec<Span<'static>
     ]
 }
 
-/// Every measurement, grouped under a quiet heading: interface (for a complex), then what the
-/// `analyze` report says, in its order.
-fn grouped_details(
-    look: &Look,
-    rows: &[[String; 2]],
-    interface: &[[String; 2]],
-    width: u16,
-) -> Vec<Line<'static>> {
-    let label_w = 22usize;
-    let side = width as usize >= label_w + 30;
+/// A value as spans: numbers bold (they are what is read), words quiet, a note in brackets dim,
+/// `·` separators dimmer still.
+pub fn value_spans(look: &Look, v: &str) -> Vec<Span<'static>> {
     let mut out = Vec::new();
-    let group = |name: &str, items: &[[String; 2]], out: &mut Vec<Line<'static>>| {
-        if items.is_empty() {
-            return;
+    let mut depth = 0i32;
+    for (i, tok) in v.split(' ').enumerate() {
+        if i > 0 {
+            out.push(Span::raw(" "));
         }
-        out.push(Line::from(vec![
-            Span::styled(format!("({name}) "), look.muted()),
-            Span::styled(
-                "─".repeat((width as usize).saturating_sub(name.len() + 3)),
-                look.line(),
-            ),
-        ]));
-        for [k, v] in items {
-            if side {
-                out.push(Line::from(vec![
-                    Span::styled(format!("{k:<label_w$}"), look.dim()),
-                    Span::styled(v.clone(), look.text()),
-                ]));
-            } else {
-                out.push(Line::from(Span::styled(k.clone(), look.dim())));
-                out.push(Line::from(Span::styled(format!("  {v}"), look.text())));
+        let opens = tok.matches('(').count() as i32;
+        let closes = tok.matches(')').count() as i32;
+        let inside = depth > 0 || opens > 0;
+        depth += opens - closes;
+        let style = if inside || tok == "·" || tok == "/" || tok == "→" {
+            look.dim()
+        } else if tok.chars().any(|c| c.is_ascii_digit()) {
+            look.text().add_modifier(Modifier::BOLD)
+        } else {
+            look.muted()
+        };
+        out.push(Span::styled(tok.to_string(), style));
+    }
+    out
+}
+
+/// A section heading: `(name)` and a hairline to `width`.
+fn heading(look: &Look, name: &str, width: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("({name}) "),
+            look.muted().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "─".repeat(width.saturating_sub(name.chars().count() + 3)),
+            look.line(),
+        ),
+    ])
+}
+
+/// One group of label/value rows under a heading, labels in a column as wide as the longest
+/// (at most 22), or stacked when the width cannot hold both.
+fn kv_block(look: &Look, name: &str, items: &[[String; 2]], width: u16) -> Vec<Line<'static>> {
+    let width = width as usize;
+    // Short labels: the value gets the width (a wrapped value reads worse than a terse label).
+    let items: Vec<[String; 2]> = items
+        .iter()
+        .map(|[k, v]| [short_label(k).to_string(), v.clone()])
+        .collect();
+    let items = &items;
+    let label_w = items
+        .iter()
+        .map(|[k, _]| k.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(22)
+        + 3;
+    let side = width >= label_w + 24;
+    let mut out = vec![heading(look, name, width)];
+    for [k, v] in items {
+        if side {
+            // A long value breaks at its own seams (` · `, a bracketed note), each piece
+            // continuing under the value column, never back under the labels.
+            for (i, piece) in wrap_value(v, width - label_w).into_iter().enumerate() {
+                let lead = if i == 0 {
+                    format!("{k:<label_w$}")
+                } else {
+                    " ".repeat(label_w)
+                };
+                let mut l = vec![Span::styled(lead, look.dim())];
+                l.extend(value_spans(look, &piece));
+                out.push(Line::from(l));
+            }
+        } else {
+            out.push(Line::from(Span::styled(k.clone(), look.dim())));
+            let mut l = vec![Span::raw("  ")];
+            l.extend(value_spans(look, v));
+            out.push(Line::from(l));
+        }
+    }
+    out
+}
+
+/// A report row's label as the inspector shows it, where the full one is long.
+fn short_label(k: &str) -> &str {
+    match k {
+        "Radius of gyration" => "Rg",
+        "Heavy-atom overlaps" => "Overlaps",
+        "Covalent geometry" => "Covalent",
+        "Stereochemistry" => "Stereo",
+        "binder → target" => "binder → target",
+        other => other,
+    }
+}
+
+/// `v` in lines of at most `width` characters, broken at ` · ` or before ` (`; a piece longer
+/// than the width on its own is left whole (the paragraph wraps it).
+pub fn wrap_value(v: &str, width: usize) -> Vec<String> {
+    if v.chars().count() <= width {
+        return vec![v.to_string()];
+    }
+    // Pieces, each keeping the separator that starts it.
+    let mut pieces: Vec<String> = Vec::new();
+    let mut rest = v;
+    while !rest.is_empty() {
+        let cut = [" · ", " ("]
+            .iter()
+            .filter_map(|sep| {
+                // Skip the first character, whatever its width: a value can start with a
+                // chain name in any script.
+                let first = rest.chars().next().map_or(0, char::len_utf8);
+                rest[first..].find(sep).map(|i| i + first)
+            })
+            .min();
+        match cut {
+            Some(i) => {
+                pieces.push(rest[..i].to_string());
+                rest = &rest[i..];
+            }
+            None => {
+                pieces.push(rest.to_string());
+                rest = "";
             }
         }
-        out.push(Line::from(""));
-    };
-    group("interface", interface, &mut out);
-    // The card's gauges already show these; the rest is what they do not.
+    }
+    let mut lines: Vec<String> = Vec::new();
+    for p in pieces {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + p.chars().count() <= width => l.push_str(&p),
+            _ => {
+                let p = p
+                    .strip_prefix(" · ")
+                    .map_or(p.trim_start().to_string(), |t| format!("· {t}"));
+                lines.push(p);
+            }
+        }
+    }
+    lines
+}
+
+/// The measurements the card does not already show, in groups a reader looks for: shape,
+/// geometry, contacts; anything else under its own heading.
+pub fn measurement_groups(rows: &[[String; 2]]) -> Vec<(&'static str, Vec<[String; 2]>)> {
+    // The card's gauges already show these.
     let shown = [
         "pLDDT",
         "Secondary structure",
         "Ramachandran",
         "Triage score",
     ];
-    let rest: Vec<[String; 2]> = rows
-        .iter()
-        .filter(|[k, _]| !shown.contains(&k.as_str()))
-        .cloned()
+    let group_of = |k: &str| {
+        let k = k.to_lowercase();
+        if k.contains("gyration")
+            || k.contains("sasa")
+            || k.contains("surface")
+            || k.contains("density")
+        {
+            "shape"
+        } else if k.contains("overlap")
+            || k.contains("geometry")
+            || k.contains("stereo")
+            || k.contains("rotamer")
+            || k.contains("disulfide")
+            || k.contains("clash")
+        {
+            "geometry"
+        } else if k.contains("interaction") || k.contains("bond") || k.contains("bridge") {
+            "contacts"
+        } else {
+            "other"
+        }
+    };
+    let mut out: Vec<(&'static str, Vec<[String; 2]>)> = ["shape", "geometry", "contacts", "other"]
+        .into_iter()
+        .map(|g| (g, Vec::new()))
         .collect();
-    group("measurements", &rest, &mut out);
+    for r in rows.iter().filter(|[k, _]| !shown.contains(&k.as_str())) {
+        let g = group_of(&r[0]);
+        if let Some((_, v)) = out.iter_mut().find(|(n, _)| *n == g) {
+            v.push(r.clone());
+        }
+    }
+    out.retain(|(_, v)| !v.is_empty());
+    out
+}
+
+/// Every measurement in its group; on a wide pane in two columns, balanced by height.
+fn draw_details(
+    f: &mut Frame,
+    area: Rect,
+    look: &Look,
+    rows: &[[String; 2]],
+    interface: &[[String; 2]],
+) {
+    let mut groups: Vec<(&str, Vec<[String; 2]>)> = Vec::new();
+    if !interface.is_empty() {
+        groups.push(("interface", interface.to_vec()));
+    }
+    groups.extend(measurement_groups(rows));
+    let two = area.width >= 100 && groups.len() > 1;
+    let cols: Vec<Rect> = if two {
+        let [l, _, r] = Layout::horizontal([
+            Constraint::Percentage(50),
+            Constraint::Length(4),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        vec![l, r]
+    } else {
+        vec![area]
+    };
+    // Greedy: each group to the shorter column, in order.
+    let mut lines: Vec<Vec<Line<'static>>> = vec![Vec::new(); cols.len()];
+    for (name, items) in &groups {
+        let i = (0..cols.len()).min_by_key(|i| lines[*i].len()).unwrap_or(0);
+        if !lines[i].is_empty() {
+            lines[i].push(Line::from(""));
+        }
+        lines[i].extend(kv_block(look, name, items, cols[i].width));
+    }
+    for (c, mut l) in cols.into_iter().zip(lines) {
+        // Cut short, say so rather than let a group vanish off the bottom.
+        if l.len() > c.height as usize && c.height >= 2 {
+            let keep = c.height as usize - 1;
+            let hidden = l[keep..]
+                .iter()
+                .filter(|line| line.spans.iter().any(|s| s.content.starts_with('(')))
+                .count();
+            l.truncate(keep);
+            l.push(Line::from(Span::styled(
+                if hidden > 0 {
+                    format!(
+                        "⋯ {hidden} more group{} · i for the full report",
+                        if hidden == 1 { "" } else { "s" }
+                    )
+                } else {
+                    "⋯ more · i for the full report".to_string()
+                },
+                look.dim(),
+            )));
+        }
+        f.render_widget(Paragraph::new(l), c);
+    }
+}
+
+/// `text` in lines of at most `width` characters, broken at spaces.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(' ') {
+        match out.last_mut() {
+            Some(l) if l.chars().count() + 1 + word.chars().count() <= width => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => out.push(word.to_string()),
+        }
+    }
     out
 }
 
@@ -999,8 +1473,12 @@ fn draw_preview_pane(f: &mut Frame, area: Rect, app: &App, path: &Path) {
     if key.pixels {
         return;
     }
-    match &app.preview {
-        Some((k, p)) if k.path == key.path => draw_preview(f, area, p, &app.look),
+    match app
+        .previews
+        .get(&key)
+        .or_else(|| app.any_preview(&key.path))
+    {
+        Some(p) => draw_preview(f, area, p, &app.look),
         _ => f.render_widget(
             Paragraph::new(Span::styled("rendering…", app.look.dim())),
             area,
@@ -1082,51 +1560,96 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
     let wide = area.width >= 100;
     let [list_area, detail_area] = if wide {
         let [l, _, d] = Layout::horizontal([
-            Constraint::Percentage(34),
-            Constraint::Length(3),
+            Constraint::Percentage(36),
+            Constraint::Length(4),
             Constraint::Min(0),
         ])
         .areas(area);
         [l, d]
     } else {
-        Layout::vertical([Constraint::Percentage(45), Constraint::Min(8)]).areas(area)
+        Layout::vertical([Constraint::Percentage(45), Constraint::Min(8)])
+            .spacing(1)
+            .areas(area)
     };
 
+    // Icons where the terminal draws them: a folder, a molecule for a structure file.
+    let (dir_icon, up_icon, file_icon) = if look.icons {
+        ("\u{F024B} ", "\u{F005D} ", "\u{F0BAC} ")
+    } else {
+        ("▸ ", "↑ ", "· ")
+    };
     let inner_w = list_area.width.saturating_sub(4) as usize;
     let items: Vec<ListItem> = files
         .entries
         .iter()
         .map(|e| {
-            if e.is_dir {
+            if e.name == ".." {
                 ListItem::new(Line::from(vec![
-                    Span::styled("▸ ", look.sea()),
-                    Span::styled(format!("{}/", e.name), look.sea()),
+                    Span::styled(format!(" {up_icon}"), look.dim()),
+                    Span::styled(
+                        if files.flat {
+                            "back to the folder"
+                        } else {
+                            "up a folder"
+                        },
+                        look.muted(),
+                    ),
+                ]))
+            } else if e.is_dir {
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!(" {dir_icon}"), look.sea()),
+                    Span::styled(e.name.clone(), look.sea()),
                 ]))
             } else {
                 let size = human_size(e.size);
-                let name_w = inner_w.saturating_sub(size.len() + 3);
+                let name_w = inner_w.saturating_sub(size.len() + 6);
                 let name = elide_middle(&e.name, name_w.max(8));
+                // In the flat list the folder part is quiet and the file name reads.
+                let (folder, file) = match name.rsplit_once('/') {
+                    Some((d, f)) => (format!("{d}/"), f.to_string()),
+                    None => (String::new(), name.clone()),
+                };
+                let pad = name_w.saturating_sub(name.chars().count());
                 ListItem::new(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(format!("{name:<name_w$}"), look.text()),
-                    Span::styled(format!(" {size:>w$}", w = size.len()), look.dim()),
+                    Span::styled(format!(" {file_icon}"), look.accent()),
+                    Span::styled(folder, look.dim()),
+                    Span::styled(file, look.text()),
+                    Span::raw(" ".repeat(pad)),
+                    Span::styled(format!(" {size:>8}"), look.dim()),
                 ]))
             }
         })
         .collect();
     let n_files = files.entries.iter().filter(|e| !e.is_dir).count();
+    let n_dirs = files
+        .entries
+        .iter()
+        .filter(|e| e.is_dir && e.name != "..")
+        .count();
+    let where_ = elide_middle(
+        &tilde(&files.dir.to_string_lossy()),
+        inner_w.saturating_sub(24).max(12),
+    );
+    let (title, extra) = if files.flat {
+        (
+            "found",
+            format!(
+                "{n_files} structure file{} below {where_} · f for folders",
+                if n_files == 1 { "" } else { "s" }
+            ),
+        )
+    } else {
+        (
+            "files",
+            format!(
+                "{where_} · {n_files} structure{} · {n_dirs} folder{}",
+                if n_files == 1 { "" } else { "s" },
+                if n_dirs == 1 { "" } else { "s" }
+            ),
+        )
+    };
     let list = List::new(items)
-        .block(section(
-            look,
-            "structures",
-            Some(format!(
-                "{n_files} in {}",
-                elide_middle(
-                    &tilde(&files.dir.to_string_lossy()),
-                    inner_w.saturating_sub(20).max(12)
-                )
-            )),
-        ))
+        .block(section(look, title, Some(extra)))
         .highlight_style(look.selected())
         .highlight_symbol(Line::from(Span::styled("▌", look.accent())));
     let mut state_ = ListState::default().with_selected(Some(files.selected));
@@ -1137,33 +1660,22 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
             Paragraph::new(Span::styled(format!("✗ {e}"), look.bad())).wrap(Wrap { trim: false }),
             detail_area,
         ),
-        (None, Some(e)) if e.is_dir => f.render_widget(
-            Paragraph::new(Text::from(vec![
-            Line::from(Span::styled("⏎ opens the folder.", look.muted())),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Structure files are .pdb, .ent, .cif and .mmcif, also gzipped. A table over a whole folder:",
-                look.dim(),
-            )),
-            Line::from(vec![
-                Span::styled("~ $ ", look.dim()),
-                Span::styled(
-                    format!(
-                        "proteus analyze {} --export qc.parquet",
-                        shell_path(&e.path.to_string_lossy())
-                    ),
-                    look.accent(),
-                ),
-            ]),
-            ]))
-            .wrap(Wrap { trim: false }),
-            detail_area,
-        ),
+        (None, Some(e)) if e.is_dir => draw_folder_card(f, detail_area, app, e, file_icon),
         (None, Some(e)) => {
             let mut sub = vec![Span::styled(human_size(e.size), look.dim())];
-            if let Some(Analysis::Done { residues, predicted, facts, .. }) = app.analyses.get(&e.path) {
+            if let Some(Analysis::Done {
+                residues,
+                predicted,
+                facts,
+                ..
+            }) = app.analyses.get(&e.path)
+            {
                 let chains = match facts {
-                    Some(f) => format!("  ·  {} chain{}  ·  ", f.chains, if f.chains == 1 { "" } else { "s" }),
+                    Some(f) => format!(
+                        "  ·  {} chain{}  ·  ",
+                        f.chains,
+                        if f.chains == 1 { "" } else { "s" }
+                    ),
                     None => "  ·  ".into(),
                 };
                 sub = vec![
@@ -1185,9 +1697,16 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
                     title: e.name.clone(),
                     badge: None,
                     sub,
-                    notes: Vec::new(),
+                    notes: vec![Line::from(Span::styled(
+                        elide_middle(
+                            &tilde(&e.path.to_string_lossy()),
+                            detail_area.width as usize,
+                        ),
+                        look.dim(),
+                    ))],
                     path: Some(&e.path),
                     empty: Some("Rest on a file to measure it."),
+                    chain_names: &[],
                 },
             );
         }
@@ -1199,6 +1718,152 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
             detail_area,
         ),
     }
+}
+
+/// A folder, before opening it: what it holds (its structure files by name and size), the
+/// command that measures all of them, and where else to look when it holds none.
+fn draw_folder_card(f: &mut Frame, area: Rect, app: &App, e: &super::app::Entry, file_icon: &str) {
+    let look = &app.look;
+    let w = area.width as usize;
+    let up = e.name == "..";
+    let peek = app.files.peek(&e.path);
+    let title = if up {
+        tilde(&e.path.to_string_lossy())
+    } else {
+        format!("{}/", e.name)
+    };
+    let mut out = vec![
+        Line::from(Span::styled(
+            title,
+            look.text().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(
+                peek.n_structures.to_string(),
+                look.text().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(
+                    " structure file{}  ·  ",
+                    if peek.n_structures == 1 { "" } else { "s" }
+                ),
+                look.muted(),
+            ),
+            Span::styled(
+                peek.n_dirs.to_string(),
+                look.text().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" folder{}", if peek.n_dirs == 1 { "" } else { "s" }),
+                look.muted(),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("─".repeat(w), look.line())),
+        Line::from(""),
+    ];
+    if peek.n_structures > 0 {
+        out.push(heading(look, "inside", w));
+        let name_w = w.saturating_sub(14).min(60);
+        for (name, size) in &peek.structures {
+            out.push(Line::from(vec![
+                Span::styled(format!(" {file_icon}"), look.accent()),
+                Span::styled(
+                    format!("{:<name_w$}", elide_middle(name, name_w)),
+                    look.text(),
+                ),
+                Span::styled(format!("{:>9}", human_size(*size)), look.dim()),
+            ]));
+        }
+        if peek.n_structures > peek.structures.len() {
+            out.push(Line::from(Span::styled(
+                format!("   and {} more", peek.n_structures - peek.structures.len()),
+                look.dim(),
+            )));
+        }
+        out.push(Line::from(""));
+        out.push(heading(look, "measure them all", w));
+        out.push(Line::from(vec![
+            Span::styled("~ $ ", look.dim()),
+            Span::styled(
+                format!(
+                    "proteus analyze {} --export qc.parquet",
+                    shell_path(&e.path.to_string_lossy())
+                ),
+                look.accent(),
+            ),
+        ]));
+        out.push(Line::from(Span::styled(
+            "One row per structure: confidence, geometry, interfaces; sortable in any notebook.",
+            look.dim(),
+        )));
+    } else {
+        out.push(Line::from(Span::styled(
+            "No structure files directly in here.",
+            look.muted(),
+        )));
+        out.push(Line::from(Span::styled(
+            "Proteus reads .pdb, .ent, .cif and .mmcif files, gzipped or not.",
+            look.dim(),
+        )));
+        if !peek.below.is_empty() {
+            out.push(Line::from(""));
+            out.push(heading(look, "further down", w));
+            for rel in &peek.below {
+                let (folder, file) = rel.rsplit_once('/').unwrap_or(("", rel.as_str()));
+                out.push(Line::from(vec![
+                    Span::styled(format!(" {file_icon}"), look.accent()),
+                    Span::styled(format!("{folder}/"), look.dim()),
+                    Span::styled(file.to_string(), look.text()),
+                ]));
+            }
+            if peek.n_below > peek.below.len() {
+                out.push(Line::from(Span::styled(
+                    format!("   and {} more", peek.n_below - peek.below.len()),
+                    look.dim(),
+                )));
+            }
+            out.push(Line::from(vec![
+                Span::styled("⏎ then f ", look.accent()),
+                Span::styled("lists them all, to open or measure", look.muted()),
+            ]));
+            out.push(Line::from(vec![
+                Span::styled("~ $ ", look.dim()),
+                Span::styled(
+                    format!(
+                        "proteus analyze {} --export qc.parquet",
+                        shell_path(&e.path.to_string_lossy())
+                    ),
+                    look.accent(),
+                ),
+            ]));
+        }
+        out.push(Line::from(""));
+        out.push(heading(look, "elsewhere", w));
+        let jobs_n = app.jobs.all.iter().filter(|j| j.pdb_path.is_some()).count();
+        let mut places = vec![
+            ("1", format!("your {jobs_n} job models, measured, in jobs")),
+            ("~", "your home folder".to_string()),
+        ];
+        if app.files.start != app.files.dir {
+            places.push((
+                ".",
+                format!("back to {}", tilde(&app.files.start.to_string_lossy())),
+            ));
+        }
+        for (k, what) in places {
+            out.push(Line::from(vec![
+                Span::styled(format!("  {k:<4}"), look.accent()),
+                Span::styled(what, look.text()),
+            ]));
+        }
+    }
+    out.push(Line::from(""));
+    out.push(Line::from(vec![
+        Span::styled("⏎ ", look.accent()),
+        Span::styled(if up { "goes up" } else { "opens it" }, look.muted()),
+    ]));
+    f.render_widget(Paragraph::new(out).wrap(Wrap { trim: false }), area);
 }
 
 /// `s` cut to `max` characters by replacing its middle with "…", keeping the end (a file name)
@@ -1356,7 +2021,14 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
         let label_style = if focused { look.accent() } else { look.muted() };
         let value = match &field.kind {
             FieldKind::Text(s) => {
-                let shown = s.replace('\n', " ⏎ ");
+                // A FASTA record reads as its name and length, not a wrapped wall of letters.
+                let shown = match s.split_once('\n') {
+                    Some((head, seq)) if head.starts_with('>') && !(focused && run.editing) => {
+                        let seq: String = seq.split_whitespace().collect();
+                        format!("{head}  ·  {} residues", seq.chars().count())
+                    }
+                    _ => s.replace('\n', " ⏎ "),
+                };
                 let editing = focused && run.editing;
                 if shown.is_empty() && !editing {
                     vec![Span::styled("—", look.dim())]
@@ -1403,25 +2075,34 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
             FieldKind::Text(_) if focused => field.hint,
             FieldKind::Text(_) => "",
         };
-        lines.push(Line::from(vec![
-            Span::raw(" ".repeat(label_w + 2)),
-            Span::styled(
-                note.to_string(),
-                if focused { look.muted() } else { look.dim() },
-            ),
-        ]));
+        // The note under its value, wrapped there rather than back under the labels.
+        let room = (form.width as usize).saturating_sub(label_w + 2).max(20);
+        for piece in wrap_words(note, room) {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(label_w + 2)),
+                Span::styled(piece, if focused { look.muted() } else { look.dim() }),
+            ]));
+        }
         lines.push(Line::from(""));
     }
     let run_focused = run.focus == fields.len();
     let ready = run.command().is_ok();
+    // Filled when it would run: the one action on this tab should look like one.
     let button = match (run_focused, ready) {
-        (true, true) => look.tab_on(),
-        (false, true) => look.accent().add_modifier(Modifier::BOLD),
-        (_, false) => look.dim(),
+        (_, true) => look.tab_on(),
+        (true, false) => look.selected(),
+        (false, false) => look.dim(),
     };
     lines.push(Line::from(vec![
         Span::styled(if run_focused { "▌ " } else { "  " }, look.accent()),
-        Span::styled(" run ▸ ", button),
+        Span::styled(
+            if look.icons {
+                "  \u{F040A}  run  "
+            } else {
+                "  run ▸  "
+            },
+            button,
+        ),
         Span::styled(
             if ready {
                 "  ⏎ runs it"
@@ -1431,26 +2112,66 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
             look.dim(),
         ),
     ]));
-    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), form);
+    // Under the form: the latest jobs, so a run's result is one glance away.
+    let form_h = (lines.len() as u16).min(form.height);
+    let [form_top, _, recent_area] = Layout::vertical([
+        Constraint::Length(form_h),
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .areas(form);
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), form_top);
+    if recent_area.height >= 4 && !app.jobs.all.is_empty() {
+        let w = recent_area.width as usize;
+        let mut out = vec![heading(look, "latest jobs", w)];
+        let n = (recent_area.height as usize).saturating_sub(2).min(6);
+        for j in app.jobs.all.iter().take(n) {
+            let p = match j.plddt {
+                Some(p) => Span::styled(
+                    format!("{p:>6.1}"),
+                    look.data(proteus_render::rasterizer::shader::plddt_to_color(p as f32)),
+                ),
+                None => Span::styled(format!("{:>6}", "–"), look.dim()),
+            };
+            let name_w = w.saturating_sub(10 + 6 + 6).max(8);
+            out.push(Line::from(vec![
+                Span::raw(" "),
+                state(look, &j.job.status, app.tick),
+                Span::raw("   "),
+                Span::styled(
+                    format!("{:<name_w$}", elide_end(&display_name(&j.header), name_w)),
+                    look.text(),
+                ),
+                p,
+                Span::styled(format!("{:>5}", age(j.job.created_at)), look.dim()),
+            ]));
+        }
+        out.push(Line::from(Span::styled(
+            " 1 shows them all, with every measurement",
+            look.dim(),
+        )));
+        f.render_widget(Paragraph::new(out), recent_area);
+    }
 
-    // What happens: in words, then the exact command, then where to look afterwards.
+    // The right side: what happens (the command first: it is what a short terminal must still
+    // show), then the tiers side by side, then where the result goes.
     let (what, after) = match run.form {
         FormKind::Fold => (
             "Folds one sequence and keeps the model as a job, with every measurement.",
-            "It appears in (jobs): ⏎ opens the 3-D viewer, w the browser page.",
+            "It appears at the top of jobs (1): ⏎ opens the 3-D viewer, w the browser page.",
         ),
         FormKind::Scan => (
             "Writes the variants of the wild type, folds each and ranks them.",
             "The leaderboard prints when the last variant is folded; each is also a job.",
         ),
     };
-    // The command (or what is missing) first: it is what a short terminal must still show.
-    let mut info = Vec::new();
+    let w = card.width as usize;
+    let mut info = vec![heading(look, "what happens", w), Line::from("")];
     match run.command() {
         Ok(spec) => {
             info.push(Line::from(vec![
                 Span::styled("~ $ ", look.dim()),
-                Span::styled(spec.display(), look.accent()),
+                Span::styled(spec.display(), look.accent().add_modifier(Modifier::BOLD)),
             ]));
             info.push(Line::from(""));
             info.push(Line::from(Span::styled(what, look.text())));
@@ -1467,23 +2188,74 @@ fn draw_run(f: &mut Frame, area: Rect, app: &App) {
             ]));
             info.push(Line::from(""));
             info.push(Line::from(Span::styled(what, look.text())));
-            info.push(Line::from(""));
-            info.push(Line::from(Span::styled(
-                "For example, human ubiquitin:",
-                look.dim(),
-            )));
-            info.push(Line::from(Span::styled(
-                "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
-                look.muted(),
-            )));
+            info.push(Line::from(vec![
+                Span::styled("ctrl-e ", look.accent()),
+                Span::styled(
+                    "puts in an example: ubiquitin, protein G B1, Trp-cage.",
+                    look.muted(),
+                ),
+            ]));
         }
     }
-    f.render_widget(
-        Paragraph::new(info)
-            .wrap(Wrap { trim: false })
-            .block(section(look, "what happens", None)),
-        card,
-    );
+    if run.form == FormKind::Fold {
+        info.push(Line::from(""));
+        info.push(heading(look, "tiers", w));
+        let tier = fields
+            .iter()
+            .find(|f| f.label == "Tier")
+            .map(|f| f.value())
+            .unwrap_or("");
+        for (name, engine, good, takes) in [
+            ("fast", "ESMFold", "one chain", "seconds"),
+            (
+                "sota",
+                "Boltz-2",
+                "complexes, ligands, MSAs",
+                "about a minute on a GPU",
+            ),
+            ("full", "sota + relax", "not in this release", "–"),
+        ] {
+            let on = name == tier;
+            let mark = if on { "▌ " } else { "  " };
+            info.push(Line::from(vec![
+                Span::styled(mark, look.accent()),
+                Span::styled(
+                    format!("{name:<6}"),
+                    if on {
+                        look.accent().add_modifier(Modifier::BOLD)
+                    } else {
+                        look.muted()
+                    },
+                ),
+                Span::styled(
+                    format!("{engine:<14}"),
+                    if on {
+                        look.text().add_modifier(Modifier::BOLD)
+                    } else {
+                        look.text()
+                    },
+                ),
+                Span::styled(format!("{good:<27}"), look.muted()),
+                Span::styled(if w >= 75 { takes } else { "" }, look.dim()),
+            ]));
+        }
+    }
+    info.push(Line::from(""));
+    info.push(heading(look, "input", w));
+    for l in [
+        "A bare sequence, a FASTA record, or the path of a FASTA file.",
+        "For a complex, use the shell: one record per chain, e.g.",
+    ] {
+        info.push(Line::from(Span::styled(l, look.muted())));
+    }
+    info.push(Line::from(vec![
+        Span::styled("~ $ ", look.dim()),
+        Span::styled(
+            "proteus submit --file pair.fasta --tier sota --msa server",
+            look.accent(),
+        ),
+    ]));
+    f.render_widget(Paragraph::new(info).wrap(Wrap { trim: false }), card);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1517,11 +2289,14 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         row("⏎ → l", "open a folder, or the 3-D viewer"),
         row("← h ⌫", "up a folder"),
         row("w · a", "browser page · full report (analyze)"),
+        row("f", "every structure file below, in one list"),
+        row("~ · .", "home folder · the folder proteus started in"),
         Line::from(""),
         head("(run)"),
         row("↑↓ · ⏎", "field · edit it, or run"),
         row("←→ · f", "change a choice · the other form"),
         row("esc", "stop typing; digits switch tabs again"),
+        row("ctrl-e", "put in an example sequence"),
         Line::from(""),
         Line::from(Span::styled(
             "  Every action runs a proteus command and shows it first:",
@@ -1532,11 +2307,12 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
             look.dim(),
         )),
     ];
-    let w = area.width.min(80);
-    // Rows as wrapped at the box's inner width, so the last line is never cut off.
-    let inner = w.saturating_sub(2).max(1) as usize;
+    let w = area.width.min(84);
+    // Rows as wrapped at the box's inner width (border and padding off), so the last line is
+    // never cut off.
+    let inner = w.saturating_sub(2 + 6).max(1) as usize;
     let rows: usize = text.iter().map(|l| l.width().max(1).div_ceil(inner)).sum();
-    let h = area.height.min(rows as u16 + 2);
+    let h = area.height.min(rows as u16 + 2 + 2);
     let r = Rect {
         x: area.x + (area.width - w) / 2,
         y: area.y + (area.height - h) / 2,
@@ -1549,6 +2325,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
             Block::bordered()
                 .border_style(look.line())
                 .title(Line::from(Span::styled(" (keys) ", look.muted())))
+                .padding(ratatui::widgets::Padding::new(3, 3, 1, 1))
                 .style(look.base().patch(look.surface())),
         ),
         r,

@@ -67,6 +67,8 @@ pub enum Entity {
 pub struct Chain {
     pub id: String,
     pub entity: Entity,
+    /// What the input called it (`PD-L1`), for people: never used to fold.
+    pub name: Option<String>,
 }
 
 /// A prediction input: chains and ligands, plus job options.
@@ -75,6 +77,26 @@ pub struct ComplexSpec {
     pub chains: Vec<Chain>,
     /// Structures to sample (Boltz `--diffusion_samples`), ranked by confidence; 1 by default.
     pub samples: usize,
+}
+
+/// A name as a header field: no `|`, no control characters, at most 40 characters.
+fn clean_name(n: &str) -> String {
+    n.chars()
+        .map(|c| if c == '|' || c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(40)
+        .collect()
+}
+
+/// `|name` for a stored header, or nothing.
+fn name_field(c: &Chain) -> String {
+    c.name
+        .as_deref()
+        .map_or(String::new(), |n| format!("|{}", clean_name(n)))
 }
 
 fn err(msg: impl Into<String>) -> CoreError {
@@ -92,6 +114,7 @@ impl ComplexSpec {
     pub fn monomer(sequence: &str) -> Self {
         Self {
             chains: vec![Chain {
+                name: None,
                 id: "A".into(),
                 entity: Entity::Protein {
                     sequence: sequence.to_string(),
@@ -165,6 +188,22 @@ impl ComplexSpec {
             let kind = parts.get(1).map(|k| k.to_ascii_lowercase());
             let boltz_style = matches!(kind.as_deref(), Some("protein" | "ccd" | "smiles"))
                 || matches!(kind.as_deref(), Some("dna" | "rna"));
+            // The record's name: the 4th field of a Boltz-style protein header
+            // (`>A|protein|empty|PD-L1`, as stored) or the 3rd of a ligand's, else a plain
+            // header's first field, or the entry name of a UniProt one (`sp|P69905|HBA_HUMAN`).
+            let name = if boltz_style {
+                parts.get(if kind.as_deref() == Some("protein") {
+                    3
+                } else {
+                    2
+                })
+            } else if matches!(parts.first().copied(), Some("sp" | "tr")) {
+                parts.get(2)
+            } else {
+                parts.first()
+            }
+            .map(|n| clean_name(n))
+            .filter(|n| !n.is_empty());
             let (id, entity) = if boltz_style {
                 let id = parts[0].to_string();
                 let entity = match kind.as_deref() {
@@ -213,7 +252,7 @@ impl ComplexSpec {
                 return Err(err(format!("chain ID '{id}' is used twice")));
             }
             used.push(id.clone());
-            spec.chains.push(Chain { id, entity });
+            spec.chains.push(Chain { id, entity, name });
         }
         if !spec
             .chains
@@ -248,13 +287,18 @@ impl ComplexSpec {
         for c in &self.chains {
             match &c.entity {
                 Entity::Protein { sequence, msa } => out.push_str(&format!(
-                    ">{}|protein|{}\n{}\n",
+                    ">{}|protein|{}{}\n{}\n",
                     c.id,
                     msa.field(),
+                    name_field(c),
                     sequence
                 )),
-                Entity::Ccd(code) => out.push_str(&format!(">{}|ccd\n{}\n", c.id, code)),
-                Entity::Smiles(s) => out.push_str(&format!(">{}|smiles\n{}\n", c.id, s)),
+                Entity::Ccd(code) => {
+                    out.push_str(&format!(">{}|ccd{}\n{}\n", c.id, name_field(c), code))
+                }
+                Entity::Smiles(s) => {
+                    out.push_str(&format!(">{}|smiles{}\n{}\n", c.id, name_field(c), s))
+                }
             }
         }
         out
@@ -327,6 +371,27 @@ fn protein(body: &str, msa: &str) -> Result<Entity, CoreError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chain_names_survive_storage_and_old_records_still_parse() {
+        let spec = ComplexSpec::parse(">PD-L1\nAFTVTV\n>PD-1\nNPPTFS\n").unwrap();
+        let names: Vec<_> = spec.chains.iter().map(|c| c.name.as_deref()).collect();
+        assert_eq!(names, [Some("PD-L1"), Some("PD-1")]);
+        let stored = spec.to_stored();
+        assert!(stored.starts_with(">A|protein|empty|PD-L1\n"), "{stored}");
+        let back = ComplexSpec::from_stored(&stored).unwrap();
+        assert_eq!(back, spec);
+        // Stored before names: no name, same chains.
+        let old = ComplexSpec::from_stored(">A|protein|empty\nAFTVTV\n>B|protein|empty\nNPPTFS\n")
+            .unwrap();
+        assert!(old.chains.iter().all(|c| c.name.is_none()));
+        // UniProt headers give the entry name; a ligand keeps its name too.
+        let u = ComplexSpec::parse(">sp|P69905|HBA_HUMAN Hemoglobin\nMVLS\n>B|ccd|heme\nHEM\n")
+            .unwrap();
+        assert_eq!(u.chains[0].name.as_deref(), Some("HBA_HUMAN Hemoglobin"));
+        assert_eq!(u.chains[1].name.as_deref(), Some("heme"));
+        assert_eq!(ComplexSpec::from_stored(&u.to_stored()).unwrap(), u);
+    }
+
     use super::*;
 
     #[test]

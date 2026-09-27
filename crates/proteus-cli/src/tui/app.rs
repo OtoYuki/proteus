@@ -25,15 +25,15 @@ impl Tab {
         }
     }
 
-    /// The tab's icon: the identity's dot-matrix drawing, two braille cells.
-    pub fn icon(self) -> String {
+    /// The tab's icon glyph.
+    pub fn icon(self) -> char {
         use proteus_render::brand::icons::Icon;
         match self {
             Tab::Jobs => Icon::Jobs,
             Tab::Structures => Icon::Structures,
             Tab::Run => Icon::Run,
         }
-        .braille()
+        .glyph()
     }
 
     fn index(self) -> usize {
@@ -277,37 +277,12 @@ pub fn engine(j: &JobSummary) -> &str {
     proteus_engine::engine_name(j.metadata.as_ref())
 }
 
-/// The model that folded a job, for the list: the engine, except that a container run names
-/// its image (`boltz`), with `+msa` when it had an alignment, which explains most of the
-/// difference in confidence between two runs of one protein.
+/// The model that folded a job, for the list (`boltz+msa`); see `proteus_engine::model_name`.
 pub fn model(j: &JobSummary) -> String {
-    let eng = engine(j);
-    let Some(m) = j.metadata.as_ref() else {
-        return eng.to_string();
-    };
-    let base = match eng {
-        proteus_engine::ENGINE_OCI => {
-            let image = m.get("image").and_then(|v| v.as_str()).unwrap_or("");
-            let name = image.rsplit('/').next().unwrap_or(image);
-            let name = name.split([':', '@']).next().unwrap_or(name);
-            if name.is_empty() {
-                eng.to_string()
-            } else {
-                name.to_string()
-            }
-        }
-        proteus_engine::ENGINE_ESMFOLD_API => "esmfold".to_string(),
-        other => other.to_string(),
-    };
-    let msa = m
-        .get("msa")
-        .and_then(|v| v.as_str())
-        .is_some_and(|v| !v.is_empty() && v != "none");
-    if msa {
-        format!("{base}+msa")
-    } else {
-        base
+    if j.pdb_path.is_none() {
+        return String::new();
     }
+    proteus_engine::model_name(j.metadata.as_ref())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -326,6 +301,71 @@ pub struct FilesView {
     pub entries: Vec<Entry>,
     pub selected: usize,
     pub error: Option<String>,
+    /// The folder proteus started in (`.` goes back to it).
+    pub start: PathBuf,
+    /// Every structure file below the folder in one list (`f`), rather than the folder.
+    pub flat: bool,
+    /// What each folder looked at holds, read once.
+    peeks: std::cell::RefCell<HashMap<PathBuf, std::rc::Rc<DirPeek>>>,
+}
+
+/// What a folder holds, for the folder card: its structure files (the first few) and counts.
+#[derive(Debug, Default)]
+pub struct DirPeek {
+    pub structures: Vec<(String, u64)>,
+    pub n_structures: usize,
+    pub n_dirs: usize,
+    /// Structure files further down (up to 4 folders deep, at most 3 000 entries looked at),
+    /// by path relative to the folder: the first 10, and how many there are.
+    pub below: Vec<String>,
+    pub n_below: usize,
+}
+
+/// Structure files under `dir`, breadth first, skipping hidden folders and build output: the
+/// first `keep` by relative path and size, and how many there are. `top` counts the folder's
+/// own files too.
+fn find_below(dir: &Path, keep: usize, top: bool) -> (Vec<(String, u64)>, usize) {
+    const SKIP: [&str; 4] = ["target", "node_modules", "__pycache__", "venv"];
+    let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), 0usize)]);
+    let (mut found, mut n, mut seen) = (Vec::new(), 0usize, 0usize);
+    while let Some((d, depth)) = queue.pop_front() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > 3000 {
+                return (found, n);
+            }
+            // As `rescan` does: names that are not UTF-8 are skipped, symlinks are followed
+            // (the depth and entry caps bound a symlink loop).
+            let name = e.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with('.') || SKIP.contains(&name) {
+                continue;
+            }
+            let path = e.path();
+            match std::fs::metadata(&path) {
+                Ok(t) if t.is_dir() && depth < 4 => queue.push_back((path, depth + 1)),
+                Ok(t)
+                    if t.is_file()
+                        && (depth > 0 || top)
+                        && proteus_core::qc::is_structure_file_name(&path) =>
+                {
+                    n += 1;
+                    if found.len() < keep {
+                        if let Ok(rel) = path.strip_prefix(dir) {
+                            found.push((rel.to_string_lossy().into_owned(), t.len()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (found, n)
 }
 
 impl FilesView {
@@ -335,6 +375,9 @@ impl FilesView {
             entries: Vec::new(),
             selected: 0,
             error: None,
+            start: dir.to_path_buf(),
+            flat: false,
+            peeks: Default::default(),
         };
         view.rescan();
         view
@@ -343,6 +386,26 @@ impl FilesView {
     /// Folders (not hidden) and structure files of `dir`, folders first, each sorted by name.
     /// Names that are not UTF-8 are skipped: they could not be passed on as arguments intact.
     pub fn rescan(&mut self) {
+        self.peeks.borrow_mut().clear();
+        if self.flat {
+            let (found, _) = find_below(&self.dir, 500, true);
+            self.error = None;
+            self.entries = vec![Entry {
+                name: "..".into(),
+                path: self.dir.clone(),
+                is_dir: true,
+                size: 0,
+            }];
+            self.entries
+                .extend(found.into_iter().map(|(rel, size)| Entry {
+                    path: self.dir.join(&rel),
+                    name: rel,
+                    is_dir: false,
+                    size,
+                }));
+            self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+            return;
+        }
         let mut dirs = Vec::new();
         let mut files = Vec::new();
         match std::fs::read_dir(&self.dir) {
@@ -398,7 +461,51 @@ impl FilesView {
         self.entries.get(self.selected)
     }
 
+    /// What folder `dir` holds: read on first look (at most 5 000 entries), then remembered
+    /// until a rescan.
+    pub fn peek(&self, dir: &Path) -> std::rc::Rc<DirPeek> {
+        if let Some(p) = self.peeks.borrow().get(dir) {
+            return p.clone();
+        }
+        let mut p = DirPeek::default();
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten().take(5000) {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                match e.file_type() {
+                    Ok(t) if t.is_dir() => p.n_dirs += 1,
+                    Ok(_) if proteus_core::qc::is_structure_file_name(&e.path()) => {
+                        p.n_structures += 1;
+                        let size = e.metadata().map_or(0, |m| m.len());
+                        p.structures.push((name, size));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        p.structures.sort();
+        p.structures.truncate(12);
+        if p.n_structures == 0 {
+            let (below, n) = find_below(dir, 10, false);
+            p.below = below.into_iter().map(|(rel, _)| rel).collect();
+            p.n_below = n;
+        }
+        let p = std::rc::Rc::new(p);
+        self.peeks.borrow_mut().insert(dir.to_path_buf(), p.clone());
+        p
+    }
+
     fn enter(&mut self, dir: PathBuf) {
+        // Out of the flat list: ".." there goes back to the folder itself.
+        if self.flat {
+            self.flat = false;
+            self.selected = 0;
+            self.dir = dir;
+            self.rescan();
+            return;
+        }
         let came_from = self.dir.clone();
         self.dir = dir;
         self.selected = 0;
@@ -553,7 +660,22 @@ pub struct RunView {
     pub editing: bool,
     pub fold: Vec<Field>,
     pub scan: Vec<Field>,
+    /// The example ctrl-e put in last (it cycles).
+    pub example: Option<usize>,
 }
+
+/// Sequences to try, as FASTA records (name, sequence): small, well known, and quick to fold.
+pub const EXAMPLES: [(&str, &str); 3] = [
+    (
+        "ubiquitin",
+        "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG",
+    ),
+    (
+        "protein G B1",
+        "MTYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+    ),
+    ("Trp-cage", "NLYIQWLKDGGPSSGRPPPS"),
+];
 
 impl Default for RunView {
     fn default() -> Self {
@@ -561,6 +683,7 @@ impl Default for RunView {
             form: FormKind::Fold,
             focus: 0,
             editing: false,
+            example: None,
             fold: vec![
                 Field::text(
                     "Sequence",
@@ -781,7 +904,7 @@ pub struct App {
     /// The preview the last frame drew a pane for (set while drawing, read by the loop).
     pub preview_want: std::cell::RefCell<Option<(PreviewKey, ratatui::layout::Rect)>>,
     /// The latest rendered preview.
-    pub preview: Option<(PreviewKey, Preview)>,
+    pub previews: HashMap<PreviewKey, Preview>,
     /// Pixels per cell when the terminal draws kitty graphics, else `None`.
     pub cell_pixels: Option<(f32, f32)>,
 }
@@ -797,7 +920,7 @@ impl App {
             run: RunView::default(),
             scenes: HashMap::new(),
             preview_want: std::cell::RefCell::new(None),
-            preview: None,
+            previews: HashMap::new(),
             cell_pixels: None,
             help: false,
             status: None,
@@ -808,12 +931,82 @@ impl App {
         }
     }
 
+    /// Show tab `t`. A passing note in the status bar belongs to the tab it was said on; the
+    /// result of a command (✓ or ✗) stays until the next one.
+    fn switch_tab(&mut self, t: Tab) {
+        if t != self.tab
+            && self
+                .status
+                .as_deref()
+                .is_some_and(|s| !s.starts_with('✓') && !s.starts_with('✗'))
+        {
+            self.status = None;
+        }
+        self.tab = t;
+    }
+
     /// The name of job `id` as the list shows it.
     fn job_name(&self, id: uuid::Uuid) -> String {
         self.jobs.all.iter().find(|j| j.job.id == id).map_or_else(
             || id.to_string()[..8].to_string(),
             |j| display_name(&j.header),
         )
+    }
+
+    /// A still of `path` at any size: shown (in half-block cells) while the right size renders.
+    pub fn any_preview(&self, path: &Path) -> Option<&Preview> {
+        self.previews
+            .iter()
+            .find(|(k, _)| k.path == path)
+            .map(|(_, p)| p)
+    }
+
+    /// Keep a rendered still, forgetting the others when there are many (each is a few MB of
+    /// pixels at kitty resolution).
+    pub fn keep_preview(&mut self, key: PreviewKey, p: Preview) {
+        if self.previews.len() >= 40 {
+            // Make room, but never drop the picture on screen.
+            let shown = self.preview_want.borrow().as_ref().map(|(k, _)| k.clone());
+            self.previews.retain(|k, _| Some(k) == shown.as_ref());
+        }
+        self.previews.insert(key, p);
+    }
+
+    /// Structure files worth measuring before they are asked for: the models of the jobs
+    /// around the selected one, nearest first, within [`PREFETCH_REACH`] on either side.
+    /// Skips what is measured or under way.
+    pub fn prefetch(&self) -> Vec<PathBuf> {
+        let jobs = self.jobs.visible();
+        let sel = self.jobs.selected;
+        let mut order: Vec<usize> = Vec::new();
+        for d in 1..=jobs.len().min(PREFETCH_REACH) {
+            if let Some(i) = sel.checked_add(d).filter(|i| *i < jobs.len()) {
+                order.push(i);
+            }
+            if let Some(i) = sel.checked_sub(d) {
+                order.push(i);
+            }
+        }
+        order
+            .into_iter()
+            .filter_map(|i| jobs[i].pdb_path.as_ref().map(PathBuf::from))
+            .filter(|p| !self.analyses.contains_key(p))
+            .collect()
+    }
+
+    /// The jobs next to the selected one (for previews rendered ahead of a key press).
+    pub fn neighbour_models(&self) -> Vec<PathBuf> {
+        let jobs = self.jobs.visible();
+        let sel = self.jobs.selected;
+        [sel.checked_add(1), sel.checked_sub(1), sel.checked_add(2)]
+            .into_iter()
+            .flatten()
+            .filter_map(|i| {
+                jobs.get(i)
+                    .and_then(|j| j.pdb_path.as_ref())
+                    .map(PathBuf::from)
+            })
+            .collect()
     }
 
     /// Whether keys are going into a text box rather than being commands.
@@ -869,13 +1062,28 @@ impl App {
             self.help = true;
             return Action::None;
         }
+        // Ctrl-e in the Run tab puts the next example into the sequence field.
+        // Not while a field is being typed in, where ctrl-e is "end of line" to many hands.
+        if ctrl && key.code == KeyCode::Char('e') && self.tab == Tab::Run && !self.run.editing {
+            let i = self.run.example.map_or(0, |i| (i + 1) % EXAMPLES.len());
+            self.run.example = Some(i);
+            let (name, seq) = EXAMPLES[i];
+            let fields = match self.run.form {
+                FormKind::Fold => &mut self.run.fold,
+                FormKind::Scan => &mut self.run.scan,
+            };
+            fields[0].kind = FieldKind::Text(format!(">{name}\n{seq}"));
+            self.run.editing = false;
+            self.status = Some(format!("example: {name}; ctrl-e for another"));
+            return Action::None;
+        }
         // Alt+1..3 switches tabs from anywhere, even mid-edit; the edit is kept.
         if let KeyCode::Char(c @ '1'..='3') = key.code {
             if key.modifiers.contains(KeyModifiers::ALT) {
                 self.jobs.filtering = false;
                 self.jobs.renaming = None;
                 self.run.editing = false;
-                self.tab = Tab::ALL[(c as u8 - b'1') as usize];
+                self.switch_tab(Tab::ALL[(c as u8 - b'1') as usize]);
                 return Action::None;
             }
         }
@@ -914,15 +1122,15 @@ impl App {
                 return Action::None;
             }
             KeyCode::Tab => {
-                self.tab = Tab::ALL[(self.tab.index() + 1) % Tab::ALL.len()];
+                self.switch_tab(Tab::ALL[(self.tab.index() + 1) % Tab::ALL.len()]);
                 return Action::None;
             }
             KeyCode::BackTab => {
-                self.tab = Tab::ALL[(self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()];
+                self.switch_tab(Tab::ALL[(self.tab.index() + Tab::ALL.len() - 1) % Tab::ALL.len()]);
                 return Action::None;
             }
             KeyCode::Char(c @ '1'..='3') => {
-                self.tab = Tab::ALL[(c as u8 - b'1') as usize];
+                self.switch_tab(Tab::ALL[(c as u8 - b'1') as usize]);
                 return Action::None;
             }
             _ => {}
@@ -1103,9 +1311,28 @@ impl App {
                 self.analyses.clear();
             }
             KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(parent) = self.files.dir.parent().map(Path::to_path_buf) {
+                if self.files.flat {
+                    let dir = self.files.dir.clone();
+                    self.files.enter(dir);
+                } else if let Some(parent) = self.files.dir.parent().map(Path::to_path_buf) {
                     self.files.enter(parent);
                 }
+            }
+            KeyCode::Char('f') => {
+                self.files.flat = !self.files.flat;
+                self.files.selected = 0;
+                self.files.rescan();
+            }
+            KeyCode::Char('~') => {
+                if let Some(home) = std::env::var_os("HOME") {
+                    self.files.enter(PathBuf::from(home));
+                    self.files.selected = 0;
+                }
+            }
+            KeyCode::Char('.') => {
+                let start = self.files.start.clone();
+                self.files.enter(start);
+                self.files.selected = 0;
             }
             KeyCode::Enter
             | KeyCode::Right
@@ -1231,6 +1458,33 @@ pub fn display_name(header: &str) -> String {
     }
 }
 
+/// How many jobs on each side of the selection are measured ahead: enough to scroll through
+/// without waiting, few enough that a store of hundreds of complexes is not all measured and
+/// held in memory at once.
+pub const PREFETCH_REACH: usize = 12;
+
 pub fn short_id(id: &str) -> &str {
     &id[..id.len().min(8)]
+}
+
+#[cfg(test)]
+mod find_below_tests {
+    use super::find_below;
+
+    /// Symlinked structure files and folders are listed, as the folder view lists them.
+    #[test]
+    fn symlinks_are_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        std::fs::create_dir(d.join("real")).unwrap();
+        std::fs::write(d.join("real/a.pdb"), "ATOM").unwrap();
+        std::os::unix::fs::symlink(d.join("real"), d.join("linked")).unwrap();
+        std::os::unix::fs::symlink(d.join("real/a.pdb"), d.join("b.pdb")).unwrap();
+        let (mut found, n) = find_below(d, 10, true);
+        found.sort();
+        let names: Vec<&str> = found.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(names, ["b.pdb", "linked/a.pdb", "real/a.pdb"]);
+        assert_eq!(n, 3);
+        assert!(found.iter().all(|(_, size)| *size == 4));
+    }
 }
