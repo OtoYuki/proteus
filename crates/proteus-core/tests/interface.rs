@@ -216,3 +216,52 @@ fn a_dataset_design_reproduces_the_dataset_values() {
     near(i.ipae, 3.91, 0.0006);
     near(i.iptm, 0.891, 0.0006);
 }
+
+/// Unpack a directory of predictor outputs into a temporary one, un-gzipping `*.gz`.
+fn unpack(src: &std::path::Path) -> tempfile::TempDir {
+    use std::io::Read;
+    let dir = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(src).unwrap().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let bytes = std::fs::read(e.path()).unwrap();
+        match name.strip_suffix(".gz") {
+            Some(plain) => {
+                let mut out = Vec::new();
+                flate2::read::GzDecoder::new(&bytes[..])
+                    .read_to_end(&mut out)
+                    .unwrap();
+                std::fs::write(dir.path().join(plain), out).unwrap();
+            }
+            None => std::fs::write(dir.path().join(name), bytes).unwrap(),
+        }
+    }
+    dir
+}
+
+/// Protenix output as written (tests/data/predictors/NOTICE): the files are found beside the
+/// model, the SEP's per-atom tokens and the ATP's are skipped, and the values equal those
+/// computed from Protenix's own atom-to-token map.
+#[test]
+fn protenix_output_with_a_modified_residue_and_a_ligand() {
+    let dir = unpack(&data("predictors/protenix"));
+    let spec = InterfaceSpec::parse("A:B").unwrap();
+    let qc = proteus_core::qc::structure_qc_with(
+        &dir.path().join("sepatp_sample_0.cif"),
+        &proteus_core::qc::QcOptions {
+            interface: Some(&spec),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let i = &qc.interface;
+    assert_eq!(i.interface_note, None);
+    let near = |ours: Option<f64>, theirs: f64| {
+        let v = ours.unwrap();
+        assert!((v - theirs).abs() < 1e-6, "{v} vs {theirs}");
+    };
+    near(i.ipsae_max, 0.016426);
+    near(i.ipsae_min, 0.013679);
+    near(i.lis, 0.168540);
+    near(i.ipae, 15.095940);
+    near(i.iptm, 0.265748);
+}

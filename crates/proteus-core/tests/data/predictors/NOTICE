@@ -1,0 +1,10 @@
+Real predictor outputs for the same complex, made on 2026-09-27 to test that Proteus reads each
+predictor's files as written: chain A MKTAYIAKQRQISFVKSHFSRQLEERLGLS with a phosphoserine (SEP)
+at position 14, chain B ubiquitin 1-56 (MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTL),
+and one ATP. No MSA, one sample. Structures are gzipped; confidence files are cut to the keys
+Proteus reads, values unchanged.
+
+protenix/  Protenix 2.0.0, model protenix_mini_default_v0.5.0, seed 101, --need_atom_confidence.
+           126 tokens: the SEP is one token per heavy atom (AlphaFold 3's convention).
+           The expected values in tests/interface.rs were computed by hand from Protenix's own
+           atom_to_token_idx map, independently of Proteus. Protenix is Apache-2.0.
