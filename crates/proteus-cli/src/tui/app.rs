@@ -328,6 +328,8 @@ pub struct FilesView {
     pub error: Option<String>,
     /// The folder proteus started in (`.` goes back to it).
     pub start: PathBuf,
+    /// Every structure file below the folder in one list (`f`), rather than the folder.
+    pub flat: bool,
     /// What each folder looked at holds, read once.
     peeks: std::cell::RefCell<HashMap<PathBuf, std::rc::Rc<DirPeek>>>,
 }
@@ -344,8 +346,10 @@ pub struct DirPeek {
     pub n_below: usize,
 }
 
-/// Structure files under `dir`, breadth first, skipping hidden folders and build output.
-fn find_below(dir: &Path) -> (Vec<String>, usize) {
+/// Structure files under `dir`, breadth first, skipping hidden folders and build output: the
+/// first `keep` by relative path and size, and how many there are. `top` counts the folder's
+/// own files too.
+fn find_below(dir: &Path, keep: usize, top: bool) -> (Vec<(String, u64)>, usize) {
     const SKIP: [&str; 4] = ["target", "node_modules", "__pycache__", "venv"];
     let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), 0usize)]);
     let (mut found, mut n, mut seen) = (Vec::new(), 0usize, 0usize);
@@ -368,13 +372,14 @@ fn find_below(dir: &Path) -> (Vec<String>, usize) {
                 Ok(t) if t.is_dir() && depth < 4 => queue.push_back((path, depth + 1)),
                 Ok(t)
                     if t.is_file()
-                        && depth > 0
+                        && (depth > 0 || top)
                         && proteus_core::qc::is_structure_file_name(&path) =>
                 {
                     n += 1;
-                    if found.len() < 10 {
+                    if found.len() < keep {
                         if let Ok(rel) = path.strip_prefix(dir) {
-                            found.push(rel.to_string_lossy().into_owned());
+                            let size = e.metadata().map_or(0, |m| m.len());
+                            found.push((rel.to_string_lossy().into_owned(), size));
                         }
                     }
                 }
@@ -393,6 +398,7 @@ impl FilesView {
             selected: 0,
             error: None,
             start: dir.to_path_buf(),
+            flat: false,
             peeks: Default::default(),
         };
         view.rescan();
@@ -403,6 +409,25 @@ impl FilesView {
     /// Names that are not UTF-8 are skipped: they could not be passed on as arguments intact.
     pub fn rescan(&mut self) {
         self.peeks.borrow_mut().clear();
+        if self.flat {
+            let (found, _) = find_below(&self.dir, 500, true);
+            self.error = None;
+            self.entries = vec![Entry {
+                name: "..".into(),
+                path: self.dir.clone(),
+                is_dir: true,
+                size: 0,
+            }];
+            self.entries
+                .extend(found.into_iter().map(|(rel, size)| Entry {
+                    path: self.dir.join(&rel),
+                    name: rel,
+                    is_dir: false,
+                    size,
+                }));
+            self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+            return;
+        }
         let mut dirs = Vec::new();
         let mut files = Vec::new();
         match std::fs::read_dir(&self.dir) {
@@ -485,7 +510,9 @@ impl FilesView {
         p.structures.sort();
         p.structures.truncate(12);
         if p.n_structures == 0 {
-            (p.below, p.n_below) = find_below(dir);
+            let (below, n) = find_below(dir, 10, false);
+            p.below = below.into_iter().map(|(rel, _)| rel).collect();
+            p.n_below = n;
         }
         let p = std::rc::Rc::new(p);
         self.peeks.borrow_mut().insert(dir.to_path_buf(), p.clone());
@@ -493,6 +520,14 @@ impl FilesView {
     }
 
     fn enter(&mut self, dir: PathBuf) {
+        // Out of the flat list: ".." there goes back to the folder itself.
+        if self.flat {
+            self.flat = false;
+            self.selected = 0;
+            self.dir = dir;
+            self.rescan();
+            return;
+        }
         let came_from = self.dir.clone();
         self.dir = dir;
         self.selected = 0;
@@ -1294,9 +1329,17 @@ impl App {
                 self.analyses.clear();
             }
             KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
-                if let Some(parent) = self.files.dir.parent().map(Path::to_path_buf) {
+                if self.files.flat {
+                    let dir = self.files.dir.clone();
+                    self.files.enter(dir);
+                } else if let Some(parent) = self.files.dir.parent().map(Path::to_path_buf) {
                     self.files.enter(parent);
                 }
+            }
+            KeyCode::Char('f') => {
+                self.files.flat = !self.files.flat;
+                self.files.selected = 0;
+                self.files.rescan();
             }
             KeyCode::Char('~') => {
                 if let Some(home) = std::env::var_os("HOME") {

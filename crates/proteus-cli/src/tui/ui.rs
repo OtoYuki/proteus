@@ -173,6 +173,7 @@ fn key_hints(app: &App, width: usize) -> Line<'static> {
                 ("←", "up"),
                 ("w", "in browser"),
                 ("a", "report"),
+                ("f", "find below"),
                 ("~", "home"),
                 ("1 2 3", "tabs"),
                 ("?", "keys"),
@@ -1565,7 +1566,14 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
             if e.name == ".." {
                 ListItem::new(Line::from(vec![
                     Span::styled(format!(" {up_icon}"), look.dim()),
-                    Span::styled("up a folder", look.muted()),
+                    Span::styled(
+                        if files.flat {
+                            "back to the folder"
+                        } else {
+                            "up a folder"
+                        },
+                        look.muted(),
+                    ),
                 ]))
             } else if e.is_dir {
                 ListItem::new(Line::from(vec![
@@ -1576,9 +1584,17 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
                 let size = human_size(e.size);
                 let name_w = inner_w.saturating_sub(size.len() + 6);
                 let name = elide_middle(&e.name, name_w.max(8));
+                // In the flat list the folder part is quiet and the file name reads.
+                let (folder, file) = match name.rsplit_once('/') {
+                    Some((d, f)) => (format!("{d}/"), f.to_string()),
+                    None => (String::new(), name.clone()),
+                };
+                let pad = name_w.saturating_sub(name.chars().count());
                 ListItem::new(Line::from(vec![
                     Span::styled(format!(" {file_icon}"), look.accent()),
-                    Span::styled(format!("{name:<name_w$}"), look.text()),
+                    Span::styled(folder, look.dim()),
+                    Span::styled(file, look.text()),
+                    Span::raw(" ".repeat(pad)),
                     Span::styled(format!(" {size:>8}"), look.dim()),
                 ]))
             }
@@ -1594,16 +1610,26 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
         &tilde(&files.dir.to_string_lossy()),
         inner_w.saturating_sub(24).max(12),
     );
-    let list = List::new(items)
-        .block(section(
-            look,
+    let (title, extra) = if files.flat {
+        (
+            "found",
+            format!(
+                "{n_files} structure file{} below {where_} · f for folders",
+                if n_files == 1 { "" } else { "s" }
+            ),
+        )
+    } else {
+        (
             "files",
-            Some(format!(
+            format!(
                 "{where_} · {n_files} structure{} · {n_dirs} folder{}",
                 if n_files == 1 { "" } else { "s" },
                 if n_dirs == 1 { "" } else { "s" }
-            )),
-        ))
+            ),
+        )
+    };
+    let list = List::new(items)
+        .block(section(look, title, Some(extra)))
         .highlight_style(look.selected())
         .highlight_symbol(Line::from(Span::styled("▌", look.accent())));
     let mut state_ = ListState::default().with_selected(Some(files.selected));
@@ -1777,6 +1803,10 @@ fn draw_folder_card(f: &mut Frame, area: Rect, app: &App, e: &super::app::Entry,
                     look.dim(),
                 )));
             }
+            out.push(Line::from(vec![
+                Span::styled("⏎ then f ", look.accent()),
+                Span::styled("lists them all, to open or measure", look.muted()),
+            ]));
             out.push(Line::from(vec![
                 Span::styled("~ $ ", look.dim()),
                 Span::styled(
@@ -2239,6 +2269,7 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         row("⏎ → l", "open a folder, or the 3-D viewer"),
         row("← h ⌫", "up a folder"),
         row("w · a", "browser page · full report (analyze)"),
+        row("f", "every structure file below, in one list"),
         row("~ · .", "home folder · the folder proteus started in"),
         Line::from(""),
         head("(run)"),
