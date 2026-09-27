@@ -406,8 +406,8 @@ impl InterfaceColors {
     pub fn of(s: &crate::StructureRenderData) -> Option<Self> {
         let v = s.default_interface()?;
         Some(Self {
-            binder: v.metrics.binder_chains.clone(),
-            target: v.metrics.target_chains.clone(),
+            binder: s.name_chains(&v.metrics.binder_chains),
+            target: s.name_chains(&v.metrics.target_chains),
             residue_colors: v.residue_colors(&s.residue_labels),
         })
     }

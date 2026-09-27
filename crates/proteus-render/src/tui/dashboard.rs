@@ -27,6 +27,24 @@ pub struct DashboardData {
     pub chains: Vec<(String, usize)>,
     /// Eight-state DSSP, one character per ribbon residue; empty when unknown.
     pub dssp: String,
+    /// Chain ID → the name the input gave it, for the interface labels.
+    pub chain_names: Vec<(String, String)>,
+}
+
+impl DashboardData {
+    /// Chain IDs (`A` or `A,C`) as `PD-L1 (A)`, bare where there is no name.
+    pub fn name_chains(&self, ids: &str) -> String {
+        ids.split(',')
+            .map(|id| {
+                let id = id.trim();
+                self.chain_names
+                    .iter()
+                    .find(|(c, _)| c == id)
+                    .map_or(id.to_string(), |(_, n)| format!("{n} ({id})"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 /// The dashboard's pages, in selector order; keys `1`–`4` pick them.
@@ -819,7 +837,11 @@ impl DashboardRenderer {
             section(
                 &mut out,
                 "interface",
-                &format!("{} → {}", im.binder_chains, im.target_chains),
+                &format!(
+                    "{} → {}",
+                    data.name_chains(&im.binder_chains),
+                    data.name_chains(&im.target_chains)
+                ),
             );
             match im.ipsae_min {
                 Some(x) if x > 0.61 => {
@@ -842,7 +864,7 @@ impl DashboardRenderer {
                 "binder",
                 &format!(
                     "{}  {}",
-                    a.bold(&im.binder_chains),
+                    a.bold(&data.name_chains(&im.binder_chains)),
                     a.paint(
                         Role::Dim,
                         &format!(
@@ -857,7 +879,7 @@ impl DashboardRenderer {
                 "target",
                 &format!(
                     "{}  {}",
-                    a.bold(&im.target_chains),
+                    a.bold(&data.name_chains(&im.target_chains)),
                     a.paint(
                         Role::Dim,
                         &format!(
@@ -1705,7 +1727,11 @@ impl DashboardRenderer {
             let n = |x: Option<f64>, d: usize| x.map_or("–".to_string(), |v| format!("{v:.d$}"));
             let mut g = Group::new(
                 "interface",
-                &format!("{} → {}", im.binder_chains, im.target_chains),
+                &format!(
+                    "{} → {}",
+                    data.name_chains(&im.binder_chains),
+                    data.name_chains(&im.target_chains)
+                ),
             );
             g.row("ipSAE min", self.num(&n(im.ipsae_min, 3), ""));
             g.row("ipSAE max", self.num(&n(im.ipsae_max, 3), ""));
@@ -1925,6 +1951,7 @@ mod tests {
             ],
             chains: vec![("A".into(), 46)],
             dssp: "HHHHHHHHHHEEEEE----".repeat(3)[..46].to_string(),
+            chain_names: Vec::new(),
             ..Default::default()
         }
     }
