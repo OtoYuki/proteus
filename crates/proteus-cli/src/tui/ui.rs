@@ -2140,11 +2140,13 @@ fn draw_help(f: &mut Frame, area: Rect, look: &Look) {
         row("⏎ → l", "open a folder, or the 3-D viewer"),
         row("← h ⌫", "up a folder"),
         row("w · a", "browser page · full report (analyze)"),
+        row("~ · .", "home folder · the folder proteus started in"),
         Line::from(""),
         head("(run)"),
         row("↑↓ · ⏎", "field · edit it, or run"),
         row("←→ · f", "change a choice · the other form"),
         row("esc", "stop typing; digits switch tabs again"),
+        row("ctrl-e", "put in an example sequence"),
         Line::from(""),
         Line::from(Span::styled(
             "  Every action runs a proteus command and shows it first:",
