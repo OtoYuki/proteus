@@ -1,3 +1,7 @@
 corpus
 .venv
 last_run.md
+# The two binder reports are kept: they need local downloads to regenerate, the README links
+# to them, and brand::figures draws the README charts from them.
+!binders/last_run.md
+!nipah/last_run.md
