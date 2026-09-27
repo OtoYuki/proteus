@@ -601,6 +601,7 @@ fn draw_job_detail(
             sub,
             notes,
             path: path.as_deref(),
+            chain_names: &j.chain_names,
             empty: match j.job.status {
                 JobStatus::Completed => None,
                 JobStatus::Failed => Some("This job left no model."),
@@ -619,6 +620,28 @@ struct Inspect<'a> {
     path: Option<&'a Path>,
     /// Said where the preview and measurements would be, when there is no structure.
     empty: Option<&'static str>,
+    /// Chain ID → name, to name the binder and target (a job's complex).
+    chain_names: &'a [(String, String)],
+}
+
+/// `A → B` as `PD-L1 (A) → PD-1 (B)`, for each chain the input named. Several chains on a side
+/// (`A,C`) are named one by one.
+pub fn name_chains(value: &str, names: &[(String, String)]) -> String {
+    if names.is_empty() {
+        return value.to_string();
+    }
+    let one = |id: &str| {
+        let id = id.trim();
+        names
+            .iter()
+            .find(|(c, _)| c == id)
+            .map_or(id.to_string(), |(_, n)| format!("{n} ({id})"))
+    };
+    value
+        .split(" → ")
+        .map(|side| side.split(',').map(one).collect::<Vec<_>>().join(", "))
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 /// The inspector: title and badge, an identity line, notes; then the structure's preview beside
@@ -692,6 +715,18 @@ fn draw_inspector(f: &mut Frame, area: Rect, app: &App, it: Inspect) {
     else {
         return;
     };
+    // The binder and target by the names the input gave them.
+    let named: Vec<[String; 2]> = interface
+        .iter()
+        .map(|[k, v]| {
+            if k == "binder → target" {
+                [k.clone(), name_chains(v, it.chain_names)]
+            } else {
+                [k.clone(), v.clone()]
+            }
+        })
+        .collect();
+    let interface = &named;
 
     // Preview and card share a band as tall as the preview wants to be (about square in
     // pixels: a cell is twice as tall as wide), capped at half the body.
@@ -1188,6 +1223,7 @@ fn draw_structures(f: &mut Frame, area: Rect, app: &App) {
                     notes: Vec::new(),
                     path: Some(&e.path),
                     empty: Some("Rest on a file to measure it."),
+                    chain_names: &[],
                 },
             );
         }

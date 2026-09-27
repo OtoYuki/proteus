@@ -39,6 +39,7 @@ fn job(header: &str, status: JobStatus, with_structure: bool) -> JobSummary {
         pdb_path: with_structure.then(|| "/data/x.pdb".into()),
         plddt: with_structure.then_some(84.2),
         metadata: with_structure.then(|| serde_json::json!({ "engine": "esmfold-api" })),
+        chain_names: Vec::new(),
     }
 }
 
@@ -609,6 +610,7 @@ fn the_jobs_tab_shows_the_selected_jobs_findings() {
             pdb_path: Some(model.to_string_lossy().into_owned()),
             plddt: Some(91.0),
             metadata: None,
+            chain_names: Vec::new(),
         }]);
     assert_eq!(app.wanted_analysis(), Some(model.clone()));
     app.analyses.insert(
@@ -906,4 +908,18 @@ fn the_card_fits_its_lines_instead_of_wrapping_them() {
             "{text}"
         );
     }
+}
+
+#[test]
+fn the_interface_names_its_chains() {
+    let names = vec![
+        ("A".to_string(), "PD-L1".to_string()),
+        ("B".to_string(), "PD-1".to_string()),
+    ];
+    assert_eq!(ui::name_chains("A → B", &names), "PD-L1 (A) → PD-1 (B)");
+    assert_eq!(
+        ui::name_chains("A,C → B", &names),
+        "PD-L1 (A), C → PD-1 (B)"
+    );
+    assert_eq!(ui::name_chains("A → B", &[]), "A → B");
 }

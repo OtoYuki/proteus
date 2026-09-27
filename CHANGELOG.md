@@ -108,6 +108,9 @@ Covalent geometry and rotamers: MolProbity's model-validation checks, reproduced
   show them.
 
 ### Changed
+- A complex keeps its chains' names (`>PD-L1`, `>PD-1`, or a UniProt entry name), stored as a
+  fourth header field (`>A|protein|empty|PD-L1`); older records still parse. The home screen's
+  interface panel names binder and target: `PD-L1 (A) → PD-1 (B)`.
 - When Boltz runs the GPU out of memory on a run with an alignment, the error suggests a
   shallower one (`PROTEUS_BOLTZ_MAX_MSA_SEQS=256`) first: on a 6 GB GPU trypsin + BPTI (281
   residues) failed at the default 1 024 sequences and folded at 256.
