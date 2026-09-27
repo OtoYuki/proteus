@@ -1,5 +1,5 @@
 {% set version = "0.9.0" %}
-{% set sha256 = "REPLACE_AT_RELEASE" %}
+{% set sha256 = "9ee93258218808cd5573c877f8ee33e70c03d793346e48a16bac55af3d9b98fc" %}
 
 package:
   name: proteus
