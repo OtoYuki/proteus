@@ -27,11 +27,12 @@ pub struct Args {
     #[arg(long, conflicts_with_all = ["color", "dashboard"])]
     compare: Option<PathBuf>,
 
-    /// Run the interactive TUI viewer with orbit camera controls
+    /// Run the interactive TUI viewer with orbit camera controls (needs a terminal)
     #[arg(short, long)]
     interactive: bool,
 
-    /// Enable side-by-side live biophysical telemetry dashboard (Ramachandran, pLDDT, SASA)
+    /// Enable side-by-side live biophysical telemetry dashboard (Ramachandran, pLDDT, SASA;
+    /// needs a terminal)
     #[arg(long)]
     dashboard: bool,
 
@@ -204,6 +205,13 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         lower_is_worse,
         model,
     } = args;
+    if interactive || dashboard {
+        use std::io::IsTerminal;
+        require_terminal(
+            std::io::stdin().is_terminal(),
+            std::io::stdout().is_terminal(),
+        )?;
+    }
     let target_path = PathBuf::from(&target);
     let (pdb_content, title, structure_path) = if target_path.exists() {
         let content = proteus_core::io::read_structure_text(&target_path)
@@ -645,8 +653,15 @@ fn superposition_warning(s: &proteus_render::SuperpositionStats) -> Option<Strin
             s.mismatched_names
         ));
     }
+    // Every paired residue agrees: the files cover different residues (a missing chain or
+    // terminus), which is not the same claim as "the sequences differ".
+    let headline = if s.mismatched_names == 0 {
+        "the structures cover different residues"
+    } else {
+        "the sequences differ"
+    };
     Some(format!(
-        "warning: the sequences differ: {}; the RMSD covers the {} paired Cα only",
+        "warning: {headline}: {}; the RMSD covers the {} paired Cα only",
         parts.join(", and "),
         s.paired
     ))
@@ -682,6 +697,20 @@ fn create_web_page_file(dir: &Path, title: &str) -> Result<(std::fs::File, PathB
         .keep()
         .with_context(|| format!("Failed to keep the HTML file in {}", dir.display()))?;
     Ok((file, path))
+}
+
+/// The live viewer reads keys and redraws a screen. Without a terminal on both ends the raw-mode
+/// setup fails with a bare OS error (`No such device or address`), so say what is wrong and
+/// what to use instead.
+fn require_terminal(stdin_tty: bool, stdout_tty: bool) -> Result<()> {
+    if stdin_tty && stdout_tty {
+        return Ok(());
+    }
+    bail!(
+        "--interactive and --dashboard need a terminal on stdin and stdout; for a still picture \
+         in a pipe or a log drop them (`proteus view FILE --backend sixel`), or write a browser \
+         page with --web / --html"
+    )
 }
 
 /// Run the interactive viewer with SIGTERM, SIGHUP and SIGINT turned into a clean exit.
@@ -763,9 +792,19 @@ fn watch_termination_signals(
 
 #[cfg(test)]
 mod tests {
-    use super::Args;
+    use super::{require_terminal, Args};
     use crate::cli::{Cli, CliColorScheme, Commands};
     use clap::Parser;
+
+    #[test]
+    fn the_live_viewer_names_the_missing_terminal() {
+        assert!(require_terminal(true, true).is_ok());
+        for (i, o) in [(false, true), (true, false), (false, false)] {
+            let err = require_terminal(i, o).unwrap_err().to_string();
+            assert!(err.contains("need a terminal"), "{err}");
+            assert!(err.contains("--web"), "{err}");
+        }
+    }
 
     /// `--color` is optional: without it the scheme follows the structure's provenance, so a
     /// crystal structure is not painted "very low confidence" from small B-factors.
@@ -922,14 +961,17 @@ mod tests {
         assert!(line.contains("reference 45/46"), "{line}");
         let warning = super::superposition_warning(&shorter).unwrap();
         assert!(warning.contains("0 target and 1 reference"), "{warning}");
+        // Nothing paired disagrees: extra residues or chains are not a different sequence.
+        assert!(warning.contains("cover different residues"), "{warning}");
+        assert!(!warning.contains("sequences differ"), "{warning}");
 
         let mutant = proteus_render::SuperpositionStats {
             mismatched_names: 2,
             ..same
         };
-        assert!(super::superposition_warning(&mutant)
-            .unwrap()
-            .contains("2 paired residue(s) have a different amino acid"));
+        let warning = super::superposition_warning(&mutant).unwrap();
+        assert!(warning.contains("2 paired residue(s) have a different amino acid"));
+        assert!(warning.contains("the sequences differ"), "{warning}");
     }
 
     /// A viewport the renderer cannot allocate is refused at the argument parser, with the

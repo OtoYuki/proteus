@@ -12,7 +12,7 @@ GitHub Actions job runs it on every push and pull request and uploads the table.
 | Ramachandran Favored/Allowed/Outlier | cctbx `mmtbx.validation.ramalyze` (MolProbity Top8000) | per-residue label agreement | ≥ 99.5 % |
 | SASA (Shrake–Rupley, 960 pts, Bondi radii) | `mdtraj.shrake_rupley` (same algorithm and radii) | relative | 1 % |
 | SASA | FreeSASA Lee–Richards, ProtOr radii | relative | 4 % — different algorithm **and** radius set; an independent sanity check, not a tight bound (observed 0.2–3.4 %) |
-| hydrogen-bond network | `mdtraj.baker_hubbard` on all six structures with explicit H | **recall** of mdtraj's non-local bonds; **precision** of Proteus' bonds | recall ≥ 85 % (observed 85.7–100 %); precision ≥ 50 % (observed 58–76 %) |
+| hydrogen-bond network | `mdtraj.baker_hubbard` on all six structures with explicit H | **recall** of mdtraj's non-local bonds; **precision** of Proteus' bonds | recall ≥ 85 % (observed 85.7–100 %); precision ≥ 50 % (observed 58–79 %) |
 | salt bridges | PLIP, intra-chain, 15 structures | recall and precision by residue pair | recall ≥ 65 % (observed 72.0 %); precision ≥ 90 % (observed **97.7 %**) |
 | π–π stacking | PLIP, intra-chain | recall and precision by residue pair | both ≥ 70 % (observed 81.8 % / 81.8 %) |
 | cation–π | PLIP, intra-chain | recall and precision by residue pair | recall ≥ 55 % (observed 65.4 %); precision ≥ 60 % (observed 73.9 %) |
@@ -24,7 +24,7 @@ angles — because predicted models never ship hydrogens. mdtraj's `baker_hubbar
 explicit H (D–H···A distance and angle). The criteria are related but not the same, so the test
 measures **recall** (how many of mdtraj's bonds Proteus also finds) and reports **precision**
 (how many of Proteus' bonds mdtraj confirms), not set equality. Without hydrogens Proteus
-reports 1.3–1.7× as many bonds as Baker–Hubbard — precision 58–76 % on the corpus — so treat
+reports 1.3–1.7× as many bonds as Baker–Hubbard — precision 58–79 % on the corpus — so treat
 its H-bond counts as an upper bound with the ranking-relevant bonds inside it, not as a
 Baker–Hubbard equivalent. A precision floor of 50 % is enforced so this cannot silently drift.
 
@@ -78,8 +78,8 @@ re-implementation of Proteus's own rule would only be a regression test.
 
 ## Corpus
 
-`corpus.toml` lists 53 entries (~65 MB): 20 X-ray PDB files, 5 of them also as mmCIF, 5 NMR
-ensembles (first model), 4 cryo-EM mmCIF, 9 AlphaFold-DB v6 mmCIF models. Files are
+`corpus.toml` lists 53 files of 48 structures (~65 MB): 27 X-ray PDB files, 5 of them also as
+mmCIF, 8 NMR ensembles (first model), 4 cryo-EM mmCIF, 9 AlphaFold-DB v6 mmCIF models. Files are
 downloaded into `corpus/` (git-ignored) and verified by sha256. Add a structure by appending a
 `[[structure]]` block, running `make fetch`, pasting the printed sha256, and `make reference`.
 
