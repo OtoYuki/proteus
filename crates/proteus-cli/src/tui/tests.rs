@@ -666,7 +666,7 @@ fn the_home_screen_shows_tabs_gauges_and_guidance() {
         },
     );
     let screen = rendered(&app, 160, 40);
-    assert!(screen.contains("⡮⠕ structures 2"), "{screen}");
+    assert!(screen.contains("(files)"), "{screen}");
     assert!(screen.contains("98 % favoured"), "{screen}");
     assert!(screen.contains("α30 β40 coil 30 %"), "{screen}");
     assert!(screen.contains("11.8 Å"), "{screen}");
@@ -676,7 +676,7 @@ fn the_home_screen_shows_tabs_gauges_and_guidance() {
     let screen = rendered(&app, 160, 40);
     assert!(screen.contains("ESMFold: one chain"), "{screen}");
     assert!(screen.contains("what happens"), "{screen}");
-    assert!(screen.contains("human ubiquitin"), "{screen}");
+    assert!(screen.contains("ctrl-e puts in an example"), "{screen}");
 }
 
 // ---- tabs from the Run form, sorting, renaming, deleting ----------------------------------
@@ -922,4 +922,18 @@ fn the_interface_names_its_chains() {
         "PD-L1 (A), C → PD-1 (B)"
     );
     assert_eq!(ui::name_chains("A → B", &[]), "A → B");
+}
+
+#[test]
+fn long_values_break_at_their_seams() {
+    let v = "bond RMSZ 0.49 (2 > 4σ) · angle RMSZ 0.46 (1 > 4σ)";
+    assert_eq!(
+        ui::wrap_value(v, 30),
+        ["bond RMSZ 0.49 (2 > 4σ)", "· angle RMSZ 0.46 (1 > 4σ)"]
+    );
+    assert_eq!(
+        ui::wrap_value("18.91 Å (×1.08 of a compact fold)", 20),
+        ["18.91 Å", "(×1.08 of a compact fold)"]
+    );
+    assert_eq!(ui::wrap_value("short", 20), ["short"]);
 }
