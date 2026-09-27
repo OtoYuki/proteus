@@ -5,7 +5,7 @@ $(VENV):
 	uv venv --python 3.12 $(VENV)
 	uv pip install --python $(PY) -r validate/requirements.txt
 
-.PHONY: fetch reference geometry-reference validate validate-binders
+.PHONY: fetch reference geometry-reference validate validate-binders validate-nipah
 fetch: $(VENV)
 	$(PY) validate/fetch.py
 reference: fetch
@@ -32,3 +32,13 @@ validate-binders:
 	cargo build --release -p proteus-cli
 	target/release/proteus analyze $(BINDERS)/af3/AF3_outputs --interface A --json > $(BINDERS)/af3.jsonl
 	python3 validate/binders/compare.py $(BINDERS)/af3.jsonl $(BINDERS)/final_dataset.csv --report validate/binders/last_run.md
+
+# Binder triage against the Adaptyv Nipah competition (1 200 designs, one lab, Boltz-2 models with
+# full PAE). Downloads ~11 GB into ~/.cache/proteus-validate/nipah once; not part of CI. Writes
+# validate/nipah/last_run.md.
+NIPAH ?= $(HOME)/.cache/proteus-validate/nipah
+validate-nipah:
+	PROTEUS_NIPAH=$(NIPAH) validate/nipah/fetch.sh
+	cargo build --release -p proteus-cli
+	target/release/proteus analyze $(NIPAH)/models --interface B --json > $(NIPAH)/boltz2.jsonl
+	python3 validate/nipah/compare.py $(NIPAH)/boltz2.jsonl $(NIPAH)/collection.csv --report validate/nipah/last_run.md

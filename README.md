@@ -104,6 +104,14 @@ designs together instead (AP 0.358 against 0.107) mixes targets whose binder rat
 Keeping `ipsae_min > 0.61`, the paper's threshold, keeps 509 of the 3 669 designs. 203 of those
 bound: 40 % of what you would send to the lab, against 11 % unfiltered, and half of all the binders.
 
+**A second, harder check**: the 1 196 designs of Adaptyv's Nipah binder competition (111 bound),
+on the Boltz-2 models and PAE that ProteinBase publishes (`make validate-nipah`). ipSAE_min scores
+AP 0.191 against a random 0.093 (AUROC 0.658). Boltz's interface pLDDT ties it on AP and does
+better on AUROC (0.707), and Sc is close (0.179).
+The margin is smaller because ipSAE had already chosen which designs were tested. The binder
+rate still climbs steadily with the score, from 2.7 % below 0.2 to 38 % above 0.8
+([`last_run.md`](validate/nipah/last_run.md)).
+
 ```sql
 -- duckdb: the confident interfaces, chemically sound, best first
 SELECT model, ipsae_min, iptm, interface_sc, interface_dsasa, bond_outliers

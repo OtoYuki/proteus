@@ -182,6 +182,20 @@ Known differences, each explained in `binders/tolerances.toml`:
 - the dataset's LIS comes from an older version;
 - multi-chain targets aggregate differently, and the paper does not say how it did it.
 
+## Binder triage, second dataset (`make validate-nipah`)
+
+The Adaptyv Nipah binder competition (ProteinBase collection `nipah-binder-competition-results`,
+ODC-By): 1 196 designs against the Nipah G head with a lab result, 111 of them binders, each with
+the Boltz-2 complex and full PAE ProteinBase publishes. A different predictor, lab and assay from
+the Overath set. `make validate-nipah` downloads ~10 GB into `~/.cache/proteus-validate/nipah` and
+writes `nipah/last_run.md`.
+
+ipSAE_min: AP 0.191 against a random 0.093, AUROC 0.658. Boltz's interface pLDDT ties it on AP
+(0.190) and does better on AUROC (0.707); Sc is close (0.179). Half the tested designs were chosen by their collection's mean ipSAE, so the set is
+pre-filtered on the score being tested. ProteinBase's own ipSAE used 15 Å cutoffs and a
+`boltz2_min_ipsae` that is one direction, not a minimum; its pDockQ columns are constant. The
+report explains each.
+
 ## Corpus
 
 `corpus.toml` lists 53 files of 48 structures (~65 MB): 27 X-ray PDB files, 5 of them also as
