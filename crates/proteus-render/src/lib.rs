@@ -1292,16 +1292,25 @@ mod tests {
         let complex =
             parse_pdb_structure(include_str!("../../proteus-core/tests/data/2ptc_EI.pdb")).unwrap();
         assert_eq!(complex.default_color_scheme(), ColorScheme::Interface);
-        assert_eq!(complex.default_interface().unwrap().metrics.binder_chains, "I");
+        assert_eq!(
+            complex.default_interface().unwrap().metrics.binder_chains,
+            "I"
+        );
         let mut single =
             parse_pdb_structure(include_str!("../../proteus-core/tests/data/1crn.pdb")).unwrap();
-        assert_eq!(single.default_color_scheme(), ColorScheme::SecondaryStructure);
+        assert_eq!(
+            single.default_color_scheme(),
+            ColorScheme::SecondaryStructure
+        );
         if let Some(m) = single.metrics.as_mut() {
             m.confidence_source = proteus_core::confidence::ConfidenceSource::Predicted;
         }
         single.plddts = vec![95.0; single.plddts.len()];
         assert!(single.uniformly_confident());
-        assert_eq!(single.default_color_scheme(), ColorScheme::SecondaryStructure);
+        assert_eq!(
+            single.default_color_scheme(),
+            ColorScheme::SecondaryStructure
+        );
         single.plddts[..10].fill(60.0);
         assert!(!single.uniformly_confident());
         assert_eq!(single.default_color_scheme(), ColorScheme::Plddt);

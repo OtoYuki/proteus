@@ -162,4 +162,3 @@ mod downsample_tests {
         assert_eq!(out.depths[1], 1.0);
     }
 }
-
