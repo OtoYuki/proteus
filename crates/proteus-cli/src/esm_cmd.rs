@@ -331,6 +331,10 @@ fn print_heatmap(rows: &[proteus_esm::ScanRow]) {
     let step = width.div_ceil(max_cols).max(1);
     let (centre, spread) = heat_scale(rows);
     let scale = |s: f32| -> (u8, u8, u8) {
+        // A non-finite score has no place on the scale; NaN would otherwise cast to black.
+        if !s.is_finite() {
+            return (60, 60, 60);
+        }
         let t = ((s - centre) / spread).clamp(-1.0, 1.0);
         if t < 0.0 {
             let k = -t;

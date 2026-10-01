@@ -188,9 +188,10 @@ END
 ///
 /// AlphaFold 3, Boltz, Chai-1, Protenix and OpenFold3 give a standard residue or nucleotide one
 /// token and a ligand one token per heavy atom, in input order, which is file order. Waters are
-/// not tokenised. A modified residue in a protein chain differs by predictor: AlphaFold 3 gives
-/// it one token per heavy atom (the first layout returned; its row is then its CA atom's, as
-/// `ipsae.py` takes it), Boltz-2 one token (the second) (measured: a SEP in a 30 + 56-residue complex gives
+/// not tokenised. A modified residue in a polymer chain (SEP in a protein, PSU in an RNA) differs
+/// by predictor: AlphaFold 3 gives it one token per heavy atom (the first layout returned; a
+/// protein residue's row is then its CA atom's, as `ipsae.py` takes it), Boltz-2 one token (the
+/// second) (measured: a SEP in a 30 + 56-residue complex gives
 /// an 86-row PAE). `ipsae.py`'s `index N is out of bounds` failures on Boltz-2 complexes
 /// (DunbrackLab/IPSAE #20, #28) are a miscount of exactly this.
 pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> [(usize, Vec<usize>); 2] {
@@ -200,7 +201,18 @@ pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> [(usize, Vec<usize>); 2] {
     crate::io::split_merged_residues(&mut pdb);
     // [0]: modified residues one token per atom (AlphaFold 3); [1]: one token (Boltz-2).
     let mut layouts = [(0usize, Vec::new()), (0usize, Vec::new())];
-    for residue in pdb.chains().flat_map(|c| c.residues()) {
+    // A chain with any standard residue is a polymer; Boltz-2 gives each of its non-standard
+    // residues (SEP, PSU, …) one token. A ligand sits in a chain of its own.
+    let polymer = |c: &pdbtbx::Chain| {
+        c.residues().any(|r| {
+            let n = r.name().unwrap_or("").trim();
+            is_standard_amino_acid(n) || NUCLEOTIDES.contains(&n)
+        })
+    };
+    for (residue, in_polymer) in pdb
+        .chains()
+        .flat_map(|c| c.residues().map(move |r| (r, polymer(c))))
+    {
         let name = residue.name().unwrap_or("").trim();
         if matches!(name, "HOH" | "WAT" | "DOD") {
             continue;
@@ -218,7 +230,7 @@ pub fn protein_token_rows(pdb: &pdbtbx::PDB) -> [(usize, Vec<usize>); 2] {
         let protein = is_protein_residue(residue);
         let standard = is_standard_amino_acid(name) || NUCLEOTIDES.contains(&name);
         for (k, (next, rows)) in layouts.iter_mut().enumerate() {
-            if standard || (protein && k == 1) {
+            if standard || ((protein || in_polymer) && k == 1) {
                 if protein {
                     rows.push(*next);
                 }
@@ -477,6 +489,12 @@ fn pae_from_json(v: &Value) -> Option<Result<PredictedAlignedError, CoreError>> 
             };
             if i == 0 || j == 0 {
                 return Some(Err(parse_err("PAE residue numbers start at 1")));
+            }
+            if i as usize > n || j as usize > n {
+                return Some(Err(parse_err(format!(
+                    "PAE residue number {} outside 1..={n}",
+                    i.max(j)
+                ))));
             }
             values[(i as usize - 1) * n + (j as usize - 1)] = x;
         }
@@ -777,6 +795,11 @@ mod tests {
         let negative = serde_json::json!({"pae": [[0, -1], [2, 0]]});
         assert!(pae_from_json(&negative).unwrap().is_err());
         assert!(pae_from_json(&serde_json::json!({"plddt": [90]})).is_none());
+        // residue2 numbered past residue1's range: an error, not an out-of-bounds write.
+        let past = serde_json::json!([{
+            "residue1": [1, 1, 2, 2], "residue2": [1, 2, 1, 3], "distance": [0.0, 3.0, 4.0, 0.0]
+        }]);
+        assert!(pae_from_json(&past).unwrap().is_err());
     }
 
     /// Names as each predictor's own writer makes them (checked against the sources on
@@ -959,6 +982,34 @@ mod tests {
         assert_eq!(af3, (11, vec![0, 2, 6, 10]));
         // Boltz-2: the SEP is one token.
         assert_eq!(boltz2, (7, vec![0, 1, 2, 6]));
+    }
+
+    /// Boltz-2 gives any non-standard residue of a polymer chain one token, nucleic acids
+    /// included (`tokenize/boltz2.py`: "Modified residues in Boltz-2 are tokenized at residue
+    /// level"); AlphaFold 3 one per heavy atom. Protein ALA, then RNA A and PSU (5 heavy atoms),
+    /// then a two-atom ligand.
+    #[test]
+    fn a_modified_nucleotide_is_one_boltz2_token() {
+        let pdb = b"\
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 90.00           N
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00 90.00           C
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00 90.00           C
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00 90.00           O
+ATOM      5  P     A B   1      10.000   0.000   0.000  1.00 90.00           P
+ATOM      6  C1'   A B   1      11.000   0.000   0.000  1.00 90.00           C
+HETATM    7  P   PSU B   2      12.000   0.000   0.000  1.00 90.00           P
+HETATM    8  C1' PSU B   2      13.000   0.000   0.000  1.00 90.00           C
+HETATM    9  C4' PSU B   2      14.000   0.000   0.000  1.00 90.00           C
+HETATM   10  O4' PSU B   2      15.000   0.000   0.000  1.00 90.00           O
+HETATM   11  C5  PSU B   2      16.000   0.000   0.000  1.00 90.00           C
+HETATM   12  C1  LIG C   1      30.000   0.000   0.000  1.00 80.00           C
+HETATM   13  C2  LIG C   1      31.000   0.000   0.000  1.00 80.00           C
+END
+";
+        let pdb = crate::io::open_structure_bytes(pdb, Some("x.pdb")).unwrap();
+        let [af3, boltz2] = protein_token_rows(&pdb);
+        assert_eq!(af3, (1 + 1 + 5 + 2, vec![0]));
+        assert_eq!(boltz2, (1 + 1 + 1 + 2, vec![0]));
     }
 
     #[test]
