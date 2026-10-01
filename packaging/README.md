@@ -17,8 +17,8 @@ It has not been submitted yet. Submission waits for a release tag that contains
 `--interface`. At that release:
 
 ```bash
-git tag v0.9.0 && git push origin v0.9.0     # the release workflow builds binaries and the image
-packaging/bioconda/update.sh 0.9.0          # fills in the version and the tarball's sha256
+git tag v0.9.1 && git push origin v0.9.1     # the release workflow builds binaries and the image
+packaging/bioconda/update.sh 0.9.1          # fills in the version and the tarball's sha256
 # then copy bioconda/proteus-bio/ into recipes/proteus-bio/ of a bioconda-recipes fork and open a PR
 ```
 

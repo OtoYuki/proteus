@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2809,7 +2809,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-dssp"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "pdbtbx",
  "serde",
@@ -2838,7 +2838,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-engine"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "async-trait",
  "bollard",
@@ -2861,7 +2861,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-esm"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2874,7 +2874,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-render"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64 0.23.1",
  "crossterm",
@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-server"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "proteus-storage"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arrow-array",
  "arrow-schema",

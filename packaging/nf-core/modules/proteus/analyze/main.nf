@@ -4,7 +4,7 @@ process PROTEUS_ANALYZE {
 
     conda "${moduleDir}/environment.yml"
     // Until the Bioconda package (and so a BioContainers image) exists, the release image.
-    container "ghcr.io/otoyuki/proteus:0.9.0"
+    container "ghcr.io/otoyuki/proteus:0.9.1"
 
     input:
     // Structure files (.pdb/.cif, optionally .gz) together with whatever the predictor wrote
