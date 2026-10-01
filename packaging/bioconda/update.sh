@@ -7,5 +7,5 @@ v="${1:?usage: update.sh VERSION}"
 here="$(cd "$(dirname "$0")" && pwd)"
 sum="$(curl -fsSL "https://github.com/OtoYuki/proteus/archive/refs/tags/v$v.tar.gz" | sha256sum | cut -d' ' -f1)"
 sed -i -e "s/{% set version = \".*\" %}/{% set version = \"$v\" %}/" \
-       -e "s/{% set sha256 = \".*\" %}/{% set sha256 = \"$sum\" %}/" "$here/proteus/meta.yaml"
-echo "proteus $v sha256 $sum"
+       -e "s/{% set sha256 = \".*\" %}/{% set sha256 = \"$sum\" %}/" "$here/proteus-bio/meta.yaml"
+echo "proteus-bio $v sha256 $sum"
