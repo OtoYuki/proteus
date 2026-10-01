@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `analyze` panicked on a PDB whose chain id or residue number columns hold a multi-byte
+  character (`é` as a chain id); it now reports the file as non-ASCII, as intended.
+- An AlphaFold DB v1/v2 PAE file whose `residue2` numbers run past `residue1`'s range panicked
+  with an out-of-bounds index; it is now a parse error.
+- Boltz-2 PAE for a complex with a modified nucleotide (PSU, 5MC, …) was refused as the wrong
+  size: Boltz-2 gives every non-standard residue of a polymer chain one token, not only those of
+  a protein chain.
+- `proteus delete` could remove a queued job that a worker started between the check and the
+  delete. The check now runs inside the delete's transaction, which holds the write lock.
+- `analyze` aborted a whole batch when one input folder held no structure files; that folder is
+  now reported as a failure, like a missing path, and the rest is analysed.
+- A score table's position on a structure with insertion codes (11, 11A) went to the last
+  residue with that number; it goes to the first.
+- `esm scan`'s heat map drew a non-finite score as black; it is grey.
+
 ## [0.9.0] — 2026-09-27
 
 Binder triage, validated on two lab datasets: `analyze --interface` ranks designed binders by

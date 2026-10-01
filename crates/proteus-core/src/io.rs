@@ -158,7 +158,8 @@ impl ResidueIds {
         }
         let is_atom = line.starts_with("ATOM") || line.starts_with("HETATM");
         let is_anisou = line.starts_with("ANISOU");
-        if !(is_atom || is_anisou) || line.len() < 27 || !line.is_char_boundary(27) {
+        // Every column read below sits in the first 27 bytes and is sliced by byte offset.
+        if !(is_atom || is_anisou) || line.len() < 27 || !line.as_bytes()[..27].is_ascii() {
             return line.to_string();
         }
         let col = |i: usize| line.as_bytes()[i] as char;
@@ -641,6 +642,16 @@ pub fn protein_heavy_atoms(pdb: &pdbtbx::PDB) -> pdbtbx::PDB {
 
 #[cfg(test)]
 mod tests {
+
+    /// A multi-byte character in the fixed columns (here the chain id, byte 21) must not panic
+    /// the residue-id pass; the record goes to pdbtbx untouched and it decides.
+    #[test]
+    fn non_ascii_in_fixed_columns_does_not_panic() {
+        let line =
+            "ATOM      1  CA  ALA \u{e9}   1      11.104   6.134  -6.504  1.00  0.00           C\n";
+        assert!(!line.is_char_boundary(22) && line.is_char_boundary(27));
+        let _ = super::coordinate_records_only(line);
+    }
 
     /// The commonest first-use mistake in both directions. The message has to name what was
     /// handed over and what to run instead; "No Atoms in the given PDB struct while validating"

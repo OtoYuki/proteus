@@ -349,8 +349,12 @@ impl ScoreTable {
         if positions.is_empty() {
             return Err(err("the table has no values"));
         }
-        let by_number: HashMap<isize, usize> =
-            numbers.iter().enumerate().map(|(i, n)| (*n, i)).collect();
+        // Residues sharing a number (insertion codes, 11 and 11A) get the table's value on
+        // the first of them, the one the number names without a code.
+        let mut by_number: HashMap<isize, usize> = HashMap::new();
+        for (i, n) in numbers.iter().enumerate() {
+            by_number.entry(*n).or_insert(i);
+        }
         let by_index = |p: isize| (p >= 1 && (p as usize) <= numbers.len()).then(|| p as usize - 1);
         let score = |map: &dyn Fn(isize) -> Option<usize>| {
             let (mut placed, mut agree, mut checked) = (0usize, 0usize, 0usize);
@@ -513,6 +517,17 @@ mod tests {
         let s = t.place(&[101, 102, 103], &['A', 'C', 'D']).unwrap();
         assert_eq!(s.matched_by, "sequence index");
         assert_eq!(s.values, vec![Some(1.0), Some(2.0), Some(3.0)]);
+    }
+
+    /// Residues 11 and 11A share a number; a table's position 11 is residue 11, the first.
+    #[test]
+    fn a_shared_residue_number_goes_to_the_first_residue() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(&dir, "r.csv", "residue,score\n10,1.0\n11,2.0\n12,3.0\n");
+        let t = read_score_table(&p, None).unwrap();
+        let s = t.place(&[10, 11, 11, 12], &['A', 'C', 'G', 'D']).unwrap();
+        assert_eq!(s.matched_by, "residue number");
+        assert_eq!(s.values, vec![Some(1.0), Some(2.0), None, Some(3.0)]);
     }
 
     #[test]

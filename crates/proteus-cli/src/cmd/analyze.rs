@@ -105,10 +105,10 @@ fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
             let (files, failed) = (out.len(), unreadable.len());
             walk(p, &mut out, &mut unreadable, &mut seen_dirs);
             if out.len() == files && unreadable.len() == failed {
-                bail!(
-                    "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under {}",
-                    p.display()
-                );
+                unreadable.push((
+                    p.clone(),
+                    "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under it".into(),
+                ));
             }
         } else if p.exists() {
             out.push(p.clone());
@@ -784,5 +784,22 @@ mod tests {
         let missing = dir.path().join("typo.pdb");
         let err = collect_inputs(&[missing]).unwrap_err().to_string();
         assert!(err.contains("typo.pdb: no such file or directory"), "{err}");
+    }
+
+    /// An empty folder among other inputs is reported like a missing path; alone, it is still
+    /// an error.
+    #[test]
+    fn an_empty_folder_is_a_failure_not_an_abort() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("a.pdb");
+        std::fs::write(&good, "END\n").unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        let (inputs, failed) = collect_inputs(&[good.clone(), empty.clone()]).unwrap();
+        assert_eq!(inputs, vec![good]);
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].0, empty);
+        let err = collect_inputs(&[empty]).unwrap_err().to_string();
+        assert!(err.contains("no structure files"), "{err}");
     }
 }

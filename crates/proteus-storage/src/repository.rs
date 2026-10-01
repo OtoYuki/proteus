@@ -13,6 +13,15 @@ pub struct ProteusRepository {
     pool: SqlitePool,
 }
 
+/// What [`ProteusRepository::delete_job`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteOutcome {
+    Deleted,
+    NotFound,
+    /// The job is running; nothing was removed.
+    Running,
+}
+
 impl ProteusRepository {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
@@ -205,6 +214,16 @@ impl ProteusRepository {
         row.as_ref().map(job_from_row).transpose()
     }
 
+    /// The name a job is listed under: its sequence's header. `None` when there is no such job.
+    pub async fn job_header(&self, id: Uuid) -> Result<Option<String>, StorageError> {
+        Ok(sqlx::query_scalar(
+            "SELECT s.header FROM jobs j JOIN sequences s ON s.id = j.sequence_id WHERE j.id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     /// Rename a job: its sequence's header, which is the name every list shows. `false` when
     /// there is no such job.
     pub async fn rename_job(&self, id: Uuid, name: &str) -> Result<bool, StorageError> {
@@ -221,16 +240,28 @@ impl ProteusRepository {
     /// Delete a job and everything recorded about it (predictions, their metrics, its log
     /// lines), and its sequence when no other job uses it, in one transaction. `false` when
     /// there is no such job. Files on disk are the caller's to remove.
-    pub async fn delete_job(&self, id: Uuid) -> Result<bool, StorageError> {
+    pub async fn delete_job(&self, id: Uuid) -> Result<DeleteOutcome, StorageError> {
         let id = id.to_string();
         let mut tx = self.pool.begin().await?;
+        // A write first, so the transaction holds SQLite's write lock before it decides: a
+        // worker's `claim_job` then waits for this to commit (and finds no job) instead of
+        // starting a container for a job whose records are being removed.
+        let unclaimed =
+            sqlx::query("UPDATE jobs SET status = status WHERE id = ? AND status != 'Running'")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
         let seq: Option<String> = sqlx::query_scalar("SELECT sequence_id FROM jobs WHERE id = ?")
             .bind(&id)
             .fetch_optional(&mut *tx)
             .await?;
         let Some(seq) = seq else {
-            return Ok(false);
+            return Ok(DeleteOutcome::NotFound);
         };
+        if unclaimed == 0 {
+            return Ok(DeleteOutcome::Running);
+        }
         sqlx::query(
             "DELETE FROM metrics WHERE prediction_id IN (SELECT id FROM predictions WHERE job_id = ?)",
         )
@@ -252,7 +283,7 @@ impl ProteusRepository {
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(true)
+        Ok(DeleteOutcome::Deleted)
     }
 
     /// The newest `limit` jobs, each with its sequence and the newest prediction if there is
@@ -965,9 +996,16 @@ mod tests {
             names.contains(&"hivpr + indinavir".to_string()),
             "{names:?}"
         );
+        assert_eq!(
+            repo.job_header(ids[0].0).await.unwrap().as_deref(),
+            Some("hivpr + indinavir")
+        );
         assert!(!repo.rename_job(Uuid::new_v4(), "x").await.unwrap());
 
-        assert!(repo.delete_job(ids[0].0).await.unwrap());
+        assert_eq!(
+            repo.delete_job(ids[0].0).await.unwrap(),
+            DeleteOutcome::Deleted
+        );
         assert!(repo.get_job(ids[0].0).await.unwrap().is_none());
         assert!(repo
             .get_prediction_by_job(ids[0].0)
@@ -976,7 +1014,49 @@ mod tests {
             .is_none());
         assert!(repo.get_sequence(ids[0].1).await.unwrap().is_none());
         assert!(repo.get_job(ids[1].0).await.unwrap().is_some());
-        assert!(!repo.delete_job(ids[0].0).await.unwrap());
+        assert_eq!(
+            repo.delete_job(ids[0].0).await.unwrap(),
+            DeleteOutcome::NotFound
+        );
+    }
+
+    /// A worker can claim a queued job after `proteus delete` looked at it; the delete itself
+    /// must then refuse, not remove the records of a job whose container is running.
+    #[tokio::test]
+    async fn delete_refuses_a_job_claimed_after_the_check() {
+        let repo = ProteusRepository::new(create_in_memory_pool().await.unwrap());
+        let seq = Sequence {
+            id: Uuid::new_v4(),
+            header: "q".into(),
+            fasta: "ACDEFG".into(),
+            length: 6,
+            created_at: Utc::now(),
+        };
+        repo.insert_sequence(&seq).await.unwrap();
+        let job = PipelineJob {
+            id: Uuid::new_v4(),
+            sequence_id: seq.id,
+            tier: PipelineTier::FastScreening,
+            status: JobStatus::Queued,
+            priority: 0,
+            created_at: Utc::now(),
+            started_at: None,
+            completed_at: None,
+            error_log: None,
+        };
+        repo.insert_job(&job).await.unwrap();
+        // The CLI's look: queued, so deletable.
+        assert_eq!(
+            repo.get_job(job.id).await.unwrap().unwrap().status,
+            JobStatus::Queued
+        );
+        // The worker claims it in between.
+        assert!(repo.claim_job(job.id).await.unwrap());
+        assert_eq!(
+            repo.delete_job(job.id).await.unwrap(),
+            DeleteOutcome::Running
+        );
+        assert!(repo.get_job(job.id).await.unwrap().is_some());
     }
 
     #[tokio::test]
