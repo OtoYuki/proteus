@@ -1,5 +1,6 @@
 mdtraj
 freesasa
 numpy
+scipy
 cctbx-base
 plip

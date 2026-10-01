@@ -55,7 +55,7 @@ def main():
         ev = json.loads(r["evaluations"])
         binding = [e["value"] for e in ev if e["metric"] == "binding"]
         scores = {e["metric"]: e["value"] for e in ev if e["valueType"] == "numeric"}
-        ref[r["id"]] = {"binding": binding, **scores, "method": r["designMethod"]}
+        ref[r["id"]] = {"binding": binding, **scores, "method": r["designMethod"], "author": r["author"]}
 
     rows = [json.loads(l) for l in open(analysis) if l.startswith('{"file"')]
     for o in rows:
@@ -84,8 +84,7 @@ def main():
         "60 collections with the best average ipSAE (600 designs) to the lab (Adaptyv's "
         "`nipah_ipsae_pipeline` README), so the tested set is already filtered on the score being "
         f"evaluated: {above} of {len(rows)} ({above / len(rows):.0%}) have `ipsae_min > 0.61`. "
-        "Ranking within a set that ipSAE has already enriched is a harder test than "
-        "validate/binders, and AP here understates what ipSAE does on unfiltered designs.\n"
+        "Section 3 splits the tested set by how each design got there.\n"
     )
 
     # 1. Agreement ---------------------------------------------------------------------------
@@ -174,6 +173,43 @@ def main():
             f"designs, of which {sum(sel)} bound (precision {sum(sel) / max(1, len(sel)):.3f}, "
             f"recall {sum(sel) / sum(labels):.3f}).\n"
         )
+
+    # 3. Selection --------------------------------------------------------------------------
+    w("## 3. Designs ipSAE selected, against designs it did not\n")
+    # A collection is one author's 10 designs. Adaptyv's rule: "the 60 best collections (600
+    # designs) given the average ipSAE will be considered for wet-lab validation". Rank the full
+    # collections by mean ipsae_min and take 60 (group A); everything else came by other routes.
+    by_author = {}
+    for i, o in enumerate(rows):
+        by_author.setdefault(ref[o["_id"]]["author"], []).append(i)
+    full = [ix for ix in by_author.values() if len(ix) == 10]
+    full.sort(key=lambda ix: -sum(rows[i]["ipsae_min"] or 0 for i in ix) / len(ix))
+    in_a = {i for ix in full[:60] for i in ix}
+    w(
+        f"{len(full)} authors had exactly 10 tested designs; ranking those collections by mean "
+        f"`ipsae_min` and taking 60 gives {len(in_a)} designs (group A; the README says 600). "
+        "Group B is every other tested design: community voting, curation, partial collections. "
+        "B is less selected by ipSAE, not unselected. Enrichment is AP ÷ prevalence, comparable "
+        "across groups whose binder rates differ.\n"
+    )
+    w("| group | designs | binders | prevalence | ipSAE_min AP (enrichment) | interface pLDDT AP (enrichment) |")
+    w("|---|---|---|---|---|---|")
+    ipl = theirs("boltz2_complex_iplddt")
+    for name, keep in (("all", lambda i: True), ("A: ipSAE-selected", lambda i: i in in_a), ("B: other routes", lambda i: i not in in_a)):
+        ix = [i for i in range(len(rows)) if keep(i)]
+        lab = [labels[i] for i in ix]
+        p = sum(lab) / len(lab)
+        a1 = average_precision([rows[i]["ipsae_min"] if rows[i]["ipsae_min"] is not None else -1e18 for i in ix], lab)
+        a2 = average_precision([v if (v := ipl(rows[i], ref[rows[i]["_id"]])) is not None else -1e18 for i in ix], lab)
+        w(f"| {name} | {len(ix)} | {sum(lab)} | {p:.4f} | {a1:.3f} ({a1 / p:.2f}×) | {a2:.3f} ({a2 / p:.2f}×) |")
+    w("")
+    w(
+        "Interface pLDDT is ProteinBase's `boltz2_complex_iplddt`, not computed by Proteus. "
+        "Boltz-2 defines it as a weighted mean over all residues (interface 10, the rest 1); "
+        "Boltz-1 as the mean over interface residues alone. On validate/binders the dataset's "
+        "Boltz-1 interface pLDDT ranks below Boltz-1's ipSAE_min (see its table), so a lead for "
+        "interface pLDDT here does not carry over to that set.\n"
+    )
 
     w("## Result\n")
     w("All gates pass." if not failed else "**Failed:**\n\n" + "\n".join(f"- {f}" for f in failed))
