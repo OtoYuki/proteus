@@ -2,7 +2,7 @@
 {% set sha256 = "9ee93258218808cd5573c877f8ee33e70c03d793346e48a16bac55af3d9b98fc" %}
 
 package:
-  name: proteus
+  name: proteus-bio
   version: {{ version }}
 
 source:
@@ -12,7 +12,7 @@ source:
 build:
   number: 0
   run_exports:
-    - {{ pin_subpackage('proteus', max_pin='x.x') }}
+    - {{ pin_subpackage('proteus-bio', max_pin='x.x') }}
 
 requirements:
   build:

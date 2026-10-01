@@ -3,10 +3,12 @@
 Proteus users mostly run their pipelines on a cluster, through Nextflow, Snakemake or a shell
 script. This directory holds what those channels need.
 
-## Bioconda — `bioconda/proteus/`
+## Bioconda — `bioconda/proteus-bio/`
 
 `meta.yaml` and `build.sh` are the recipe to submit to
-[bioconda-recipes](https://github.com/bioconda/bioconda-recipes). It builds the `proteus` binary
+[bioconda-recipes](https://github.com/bioconda/bioconda-recipes) as the package `proteus-bio`:
+conda-forge already has an unrelated `proteus` (a numerical-modelling toolkit), and Bioconda
+does not accept a name that exists there. The installed command is still `proteus`. It builds the binary
 from the release tarball with conda-forge's Rust and C toolchains, bundles third-party licences
 with `cargo-bundle-licenses`, and tests `analyze` on crambin and on trypsin–BPTI with
 `--interface`.
@@ -17,10 +19,10 @@ It has not been submitted yet. Submission waits for a release tag that contains
 ```bash
 git tag v0.9.0 && git push origin v0.9.0     # the release workflow builds binaries and the image
 packaging/bioconda/update.sh 0.9.0          # fills in the version and the tarball's sha256
-# then copy bioconda/proteus/ into recipes/proteus/ of a bioconda-recipes fork and open a PR
+# then copy bioconda/proteus-bio/ into recipes/proteus-bio/ of a bioconda-recipes fork and open a PR
 ```
 
-Once the package exists, BioContainers publishes `quay.io/biocontainers/proteus`
+Once the package exists, BioContainers publishes `quay.io/biocontainers/proteus-bio`
 automatically. The nf-core module's `container` line can then point there instead of at
 `ghcr.io/otoyuki/proteus`.
 
