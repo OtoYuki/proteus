@@ -191,8 +191,10 @@ the Overath set. `make validate-nipah` downloads ~10 GB into `~/.cache/proteus-v
 writes `nipah/last_run.md`.
 
 ipSAE_min: AP 0.191 against a random 0.093, AUROC 0.658. Boltz's interface pLDDT ties it on AP
-(0.190) and does better on AUROC (0.707); Sc is close (0.179). Half the tested designs were chosen by their collection's mean ipSAE, so the set is
-pre-filtered on the score being tested. ProteinBase's own ipSAE used 15 Å cutoffs and a
+(0.190) and does better on AUROC (0.707); Sc is close (0.179). Half the tested designs were
+chosen by their collection's mean ipSAE, so the set is pre-filtered on the score being tested;
+section 3 of the report splits it, and ipSAE ranks the other half worse (1.65× enrichment), not
+better. ProteinBase's own ipSAE used 15 Å cutoffs and a
 `boltz2_min_ipsae` that is one direction, not a minimum; its pDockQ columns are constant. The
 report explains each.
 

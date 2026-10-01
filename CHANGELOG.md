@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-10-01
+
+Fixes from a bug hunt of the code added since 0.7.0, each with a regression test, and corrected
+validation notes. The Bioconda package is named `proteus-bio` (conda-forge already has an
+unrelated `proteus`); the command is still `proteus`.
+
 ### Fixed
 - `analyze` panicked on a PDB whose chain id or residue number columns hold a multi-byte
   character (`é` as a chain id); it now reports the file as non-ASCII, as intended.
@@ -20,6 +26,18 @@ All notable changes to this project are documented here. The format follows
 - A score table's position on a structure with insertion codes (11, 11A) went to the last
   residue with that number; it goes to the first.
 - `esm scan`'s heat map drew a non-finite score as black; it is grey.
+- Validation notes: the meta-analysis paper does state its multi-chain ipSAE rule, and with
+  `ipsae.py` 3480750 it reproduces all 137 pMHC designs; where one direction has no PAE under
+  10 Å the dataset mostly holds 0 (317 of 394), it does not take the other direction; and on
+  Nipah, ipSAE ranks the designs it did not select worse (1.65× enrichment), so selection does
+  not explain its smaller margin there.
+
+### Added
+- `make validate-ipsae-versions`: `ipsae.py` before and after its 2026-01-03 d0 change over the
+  binder dataset (27.6 % of single-chain ipSAE_min values lowered by at most 0.0083, no design
+  crossing 0.61), and a test of the paper's multi-chain rule.
+- `validate-nipah` section 3: the tested set split into the collections ipSAE selected and the
+  rest. `validate-binders` adds Boltz-1 ipSAE_min and interface pLDDT.
 
 ## [0.9.0] — 2026-09-27
 
@@ -984,7 +1002,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/OtoYuki/proteus/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/OtoYuki/proteus/compare/c7b0761...v0.9.0
 [0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...c7b0761
 [0.7.0]: https://github.com/OtoYuki/proteus/compare/v0.6.0...v0.7.0

@@ -175,9 +175,11 @@ bound: 40 % of what you would send to the lab, against 11 % unfiltered, and half
 **A second, harder check**: the 1 196 designs of Adaptyv's Nipah binder competition (111 bound),
 on the Boltz-2 models and PAE that ProteinBase publishes (`make validate-nipah`). ipSAE_min scores
 AP 0.191 against a random 0.093 (AUROC 0.658). Boltz's interface pLDDT ties it on AP and does
-better on AUROC (0.707), and Sc is close (0.179).
-The margin is smaller because ipSAE had already chosen which designs were tested. The binder
-rate still climbs steadily with the score, from 2.7 % below 0.2 to 38 % above 0.8
+better on AUROC (0.707), and Sc is close (0.179). That tie does not carry over: on the Overath
+set, Boltz-1's interface pLDDT scores 0.301 per target against Boltz-1 ipSAE_min's 0.402.
+The margin is smaller than on the Overath set, and not because ipSAE chose half the designs that
+were tested: on the 596 it did not choose, its enrichment is lower still (1.65× against 2.06×
+overall). The binder rate climbs steadily with the score, from 2.7 % below 0.2 to 38 % above 0.8
 ([`last_run.md`](validate/nipah/last_run.md)).
 
 <picture>
