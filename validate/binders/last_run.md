@@ -15,10 +15,10 @@ Dataset: Zenodo 10.5281/zenodo.15722219 (CC-BY-4.0), `final_dataset.csv` and the
 | `lis` | `af3_LIS` | 3532 | 0.0229 | 0.0868 | 0.1273 | 0.15 | ✓ |
 
 - `ipsae_min` parity leaves out the 394 designs where it is 0 (see below); their largest `ipsae_max` is 0.016.
-- ipSAE follows the current `ipsae.py` (DunbrackLab, which since 2026-01-03 floors d0's residue count at 26). The dataset was made in 2025 with the earlier floor of 27, which only moves low-confidence values; with 27, our formula reproduces the dataset to its rounding (checked on 30 designs, max |Δ| 0.0005).
-- Where one direction has no PAE under 10 Å, `ipsae.py` scores that direction 0 and so does Proteus's ipSAE_min; the dataset's ipSAE_min instead takes the other direction. Such designs have no confident interface in either direction (every one has ipSAE_max below 0.02), so under either definition they sit at the bottom of an ipSAE ranking.
+- ipSAE follows the current `ipsae.py` (DunbrackLab, which since 2026-01-03 floors d0's residue count at 26). The dataset matches the version before that change: run on all 3 532 single-chain designs, `ipsae.py` at 3480750 (2026-01-02) agrees with the dataset's ipSAE_min within its 3-decimal rounding on 99.3 % of designs (median |Δ| 0.00025), the current version on 69.6 % (median 0.00037). The change lowers 27.6 % of values by at most 0.0083 and moves no design across the 0.61 threshold (Spearman 0.99996). Both runs: `make validate-ipsae-versions`, validate/binders/ipsae_versions.md.
+- Where one direction has no PAE under 10 Å, `ipsae.py` (old and current) scores that direction 0 and so does Proteus's ipSAE_min: 394 designs. The dataset holds 0 for 317 of them; the other 77 hold small values (at most 0.017) that neither direction of the model reproduces. Every one has ipSAE_max below 0.016, so they sit at the bottom of an ipSAE ranking either way.
 - LIS is `ipsae.py`'s reported value: the mean of the two directions, over PAE < 12 Å. The dataset holds one direction of an earlier version (PAE ≤ 12 Å), and which direction varies by design; so LIS is gated loosely, as a regression floor, not as parity.
-- Multi-chain targets (pMHC, 131 designs) are left out of parity: the paper does not say how ipSAE and ipAE aggregate over several target chains, and our reading (min/max over binder↔chain directions) does not reproduce its values.
+- Multi-chain targets (pMHC, 137 designs) are left out of parity because the definitions differ: Proteus's ipSAE_min is the minimum over every binder↔target-chain direction, while the paper (Methods) averages, over the target subchains the binder touches, the min of the two directions. That rule with `ipsae.py` at 3480750 reproduces the dataset on 137 of 137 within 5e-4 (validate/binders/ipsae_versions.md). The two agree when the target is one chain.
 
 ## 2. Structure-based interface metrics against the dataset's Rosetta values (AF3 models)
 
@@ -49,6 +49,8 @@ Dataset: Zenodo 10.5281/zenodo.15722219 (CC-BY-4.0), `final_dataset.csv` and the
 | pDockQ2_min | dataset (AF3) | 0.436 | 0.779 | 0.464 | 0.248 | 0.761 |
 | ipTM | proteus (from AF3's file) | 0.425 | 0.791 | 0.467 | 0.236 | 0.748 |
 | pLDDT (mean) | proteus | 0.409 | 0.730 | 0.451 | 0.208 | 0.739 |
+| ipSAE_min | dataset (Boltz-1) | 0.402 | 0.736 | 0.430 | 0.323 | 0.768 |
+| interface pLDDT | dataset (Boltz-1) | 0.301 | 0.690 | 0.338 | 0.221 | 0.739 |
 | Sc | proteus | 0.381 | 0.714 | 0.305 | 0.267 | 0.722 |
 | Sc | dataset (Rosetta) | 0.267 | 0.656 | 0.265 | 0.178 | 0.649 |
 | actifpTM | dataset (ColabFold) | 0.346 | 0.735 | 0.425 | 0.205 | 0.719 |

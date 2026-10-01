@@ -239,6 +239,8 @@ def main():
         ("pDockQ2_min", "dataset (AF3)", lambda o, x: num(x["af3_pDockQ2_min"])),
         ("ipTM", "proteus (from AF3's file)", lambda o, x: o["iptm"]),
         ("pLDDT (mean)", "proteus", lambda o, x: o["plddt_mean"]),
+        ("ipSAE_min", "dataset (Boltz-1)", lambda o, x: num(x["boltz1_ipSAE_min"])),
+        ("interface pLDDT", "dataset (Boltz-1)", lambda o, x: num(x["boltz1_complex_iplddt_avg"])),
         ("Sc", "proteus", lambda o, x: o["interface_sc"]),
         ("Sc", "dataset (Rosetta)", lambda o, x: num(x["af3_rosetta_interface_sc"])),
         ("actifpTM", "dataset (ColabFold)", lambda o, x: num(x["colab_actifptm_avg"])),

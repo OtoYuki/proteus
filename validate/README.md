@@ -178,9 +178,9 @@ threshold, keeps 509 of 3 669 designs, of which 203 bound (precision 0.40, recal
 
 Known differences, each explained in `binders/tolerances.toml`:
 - the d0 floor changed in `ipsae.py` after the dataset was made;
-- a direction with no PAE under 10 Å is scored 0 here and skipped there;
+- a direction with no PAE under 10 Å is scored 0 here; the dataset mostly agrees (317 of 394);
 - the dataset's LIS comes from an older version;
-- multi-chain targets aggregate differently, and the paper does not say how it did it.
+- multi-chain targets: the paper averages over target subchains, Proteus takes the minimum.
 
 ## Binder triage, second dataset (`make validate-nipah`)
 

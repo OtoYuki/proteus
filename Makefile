@@ -5,7 +5,7 @@ $(VENV):
 	uv venv --python 3.12 $(VENV)
 	uv pip install --python $(PY) -r validate/requirements.txt
 
-.PHONY: fetch reference geometry-reference validate validate-binders validate-nipah
+.PHONY: fetch reference geometry-reference validate validate-binders validate-ipsae-versions validate-nipah
 fetch: $(VENV)
 	$(PY) validate/fetch.py
 reference: fetch
@@ -32,6 +32,13 @@ validate-binders:
 	cargo build --release -p proteus-cli
 	target/release/proteus analyze $(BINDERS)/af3/AF3_outputs --interface A --json > $(BINDERS)/af3.jsonl
 	python3 validate/binders/compare.py $(BINDERS)/af3.jsonl $(BINDERS)/final_dataset.csv --report validate/binders/last_run.md
+
+# ipsae.py before and after its 2026-01-03 d0 change, and the paper's multi-chain rule, over the
+# binder dataset's AF3 models (needs validate-binders' download). ~6 min on 12 cores. Writes
+# validate/binders/ipsae_versions.md.
+validate-ipsae-versions: $(VENV)
+	PROTEUS_BINDERS=$(BINDERS) PY=$(CURDIR)/$(PY) validate/binders/ipsae_versions.sh
+	$(PY) validate/binders/ipsae_versions.py $(BINDERS) --report validate/binders/ipsae_versions.md
 
 # Binder triage against the Adaptyv Nipah competition (1 200 designs, one lab, Boltz-2 models with
 # full PAE). Downloads ~11 GB into ~/.cache/proteus-validate/nipah once; not part of CI. Writes

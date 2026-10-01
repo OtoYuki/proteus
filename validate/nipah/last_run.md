@@ -4,7 +4,7 @@ Dataset: ProteinBase collection `nipah-binder-competition-results` (ODC-By), tab
 
 1196 designs with a model and a lab result (5 positive controls left out), 111 binders (prevalence 0.093, the AP of a random ranking). One target, so per-target and pooled are the same number.
 
-**These designs were chosen by ipSAE before they were tested.** The competition sent the 60 collections with the best average ipSAE (600 designs) to the lab (Adaptyv's `nipah_ipsae_pipeline` README), so the tested set is already filtered on the score being evaluated: 491 of 1196 (41%) have `ipsae_min > 0.61`. Ranking within a set that ipSAE has already enriched is a harder test than validate/binders, and AP here understates what ipSAE does on unfiltered designs.
+**These designs were chosen by ipSAE before they were tested.** The competition sent the 60 collections with the best average ipSAE (600 designs) to the lab (Adaptyv's `nipah_ipsae_pipeline` README), so the tested set is already filtered on the score being evaluated: 491 of 1196 (41%) have `ipsae_min > 0.61`. Section 3 splits the tested set by how each design got there.
 
 ## 1. ipSAE against ProteinBase's own values
 
@@ -51,6 +51,18 @@ Binder rate by Proteus's `ipsae_min`:
 | 0.80–1.00 | 16 | 6 | 0.375 |
 
 Filter `ipsae_min > 0.61` (the threshold from validate/binders): keeps 491 designs, of which 70 bound (precision 0.143, recall 0.631).
+
+## 3. Designs ipSAE selected, against designs it did not
+
+75 authors had exactly 10 tested designs; ranking those collections by mean `ipsae_min` and taking 60 gives 600 designs (group A; the README says 600). Group B is every other tested design: community voting, curation, partial collections. B is less selected by ipSAE, not unselected. Enrichment is AP ÷ prevalence, comparable across groups whose binder rates differ.
+
+| group | designs | binders | prevalence | ipSAE_min AP (enrichment) | interface pLDDT AP (enrichment) |
+|---|---|---|---|---|---|
+| all | 1196 | 111 | 0.0928 | 0.191 (2.06×) | 0.190 (2.05×) |
+| A: ipSAE-selected | 600 | 77 | 0.1283 | 0.250 (1.95×) | 0.225 (1.75×) |
+| B: other routes | 596 | 34 | 0.0570 | 0.094 (1.65×) | 0.177 (3.10×) |
+
+Interface pLDDT is ProteinBase's `boltz2_complex_iplddt`, not computed by Proteus. Boltz-2 defines it as a weighted mean over all residues (interface 10, the rest 1); Boltz-1 as the mean over interface residues alone. On validate/binders the dataset's Boltz-1 interface pLDDT ranks below Boltz-1's ipSAE_min (see its table), so a lead for interface pLDDT here does not carry over to that set.
 
 ## Result
 
