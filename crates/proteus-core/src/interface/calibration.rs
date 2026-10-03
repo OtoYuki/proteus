@@ -220,6 +220,21 @@ pub fn cutoff_advice(predictor: Predictor) -> Option<String> {
             s.push('.');
         }
     }
+    // Seed-to-seed spread was measured for OpenFold3 only (Mdm2 and TrkA, one rerun each at a
+    // different seed). It is a property of the sampler, so it is quoted as measured there and
+    // not transferred to the other predictors as a number.
+    s.push(' ');
+    s.push_str(match predictor {
+        Predictor::OpenFold3 => {
+            "Seed spread (OpenFold3, 2 targets): re-running at a different seed moved 90% of \
+             designs by < 0.06-0.11 ipSAE_min and put 5-15% on the other side of 0.61, so a \
+             design within ~0.1 of the cutoff is unresolved from one run."
+        }
+        _ => {
+            "Seed spread was measured for OpenFold3 only (5-15% of designs changed side of \
+             0.61 at a different seed); it is not measured for this predictor."
+        }
+    });
     Some(s)
 }
 
@@ -319,5 +334,13 @@ mod tests {
         assert!(s.contains("0.61"), "{s}");
         // A Boltz-1 user must not be handed Boltz-2's cutoff with no way to know.
         assert!(s.contains("0.711"), "Boltz-1's own fit is missing: {s}");
+    }
+
+    #[test]
+    fn advice_states_where_the_seed_spread_was_measured() {
+        let of3 = cutoff_advice(Predictor::OpenFold3).unwrap();
+        assert!(of3.contains("OpenFold3, 2 targets"), "{of3}");
+        let boltz = cutoff_advice(Predictor::Boltz).unwrap();
+        assert!(boltz.contains("not measured for this predictor"), "{boltz}");
     }
 }
