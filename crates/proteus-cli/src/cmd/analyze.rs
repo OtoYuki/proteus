@@ -5,6 +5,7 @@
 //! so a folder of predicted models can be triaged in DuckDB, Polars or pandas.
 
 use super::prelude::*;
+use proteus_core::interface::calibration::{cutoff_advice, detect_predictor};
 use proteus_core::interface::InterfaceSpec;
 use proteus_core::qc::{is_structure_file_name, structure_qc_with, QcOptions, StructureQc};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -436,6 +437,25 @@ pub async fn run(args: Args) -> Result<()> {
             .map(|p| format!(", written to {}", p.display()))
             .unwrap_or_default()
     );
+    // Which cutoff applies to these scores. ipSAE comes from the predictor's own PAE, and PAE is
+    // not calibrated across predictors, so the widely used `> 0.61` — fitted on AlphaFold 3 —
+    // over-selects for everything else. Printed once per predictor found, only when ipSAE was
+    // actually computed, and never for AlphaFold 3, whose own cutoff is the published one.
+    if interface.is_some() {
+        let mut seen: Vec<_> = Vec::new();
+        for r in rows.iter().filter(|r| r.interface.ipsae_min.is_some()) {
+            if let Some(p) = detect_predictor(Path::new(&r.file)) {
+                if !seen.contains(&p) {
+                    seen.push(p);
+                }
+            }
+        }
+        for p in seen {
+            if let Some(line) = cutoff_advice(p) {
+                eprintln!("  {line}");
+            }
+        }
+    }
     // Confidence files that were found but could not be used; say what was lost, briefly.
     let noted: Vec<_> = rows
         .iter()
