@@ -108,7 +108,10 @@ fn rasterize(ch: char, px: f32, weight: Weight) -> Glyph {
         .unwrap_or(0.0);
     let mut path = Path::default();
     if let Some(outline) = font.outline_glyphs().get(gid) {
-        let _ = outline.draw(DrawSettings::unhinted(size, LocationRef::default()), &mut path);
+        let _ = outline.draw(
+            DrawSettings::unhinted(size, LocationRef::default()),
+            &mut path,
+        );
     }
     path.close_contour();
     let pts = path.segments.iter().flat_map(|s| match s {

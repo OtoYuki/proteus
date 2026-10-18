@@ -642,7 +642,12 @@ impl GpuRenderer {
             for y in 0..h as usize {
                 let row = &data[y * self.padded_row as usize..][..w as usize * 4];
                 let dst = &mut rgb[y * w as usize * 3..][..w as usize * 3];
-                for (px, out) in row.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+                for (px, out) in row
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(dst.as_chunks_mut::<3>().0)
+                {
                     out.copy_from_slice(&px[..3]);
                 }
             }
