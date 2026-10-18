@@ -51,6 +51,7 @@ a random order scores (the target's binder rate). Drawn from
 - [4. Look at it, over SSH](#4-look-at-it-over-ssh)
 - [5. Make the models: mutate, fold, rank](#5-make-the-models-mutate-fold-rank)
 - [6. Drive it from a workflow engine](#6-drive-it-from-a-workflow-engine)
+- [7. What did the change do? diff and film](#7-what-did-the-change-do-diff-and-film)
 - [Where this sits next to other tools](#where-this-sits-next-to-other-tools) · [Speed](#speed) · [Install](#install)
 - [Command reference](#command-reference) · [How the numbers are defined](#how-the-numbers-are-defined) · [Provenance](#provenance)
 
@@ -405,6 +406,34 @@ Two workflow examples ship with the repo. The Sprocket (WDL) one runs in CI; the
 [`examples/wdl/README.md`](examples/wdl/README.md) describes what crosses the wire.
 Swagger UI is at `/swagger-ui`, Prometheus metrics at `/metrics`.
 
+## 7. What did the change do? diff and film
+
+![a still from proteus film: barnase H102A and barstar Y30F, with the lost interface hydrogen bonds dashed and the removed histidine ring as a ghost](docs/media/film-1b3s.jpg)
+
+```bash
+proteus diff --parent wt.pdb designs/ --csv diff.csv      # one row per candidate
+proteus diff --parent 1b27.pdb 1b3s.pdb --chains A,D      # sites and local changes, in full
+proteus film --parent 1b27.pdb 1b3s.pdb --chains A,D      # films/1b3s.mp4, .png and .json
+```
+
+`diff` pairs each candidate's residues with its parent's, lists the changed sites, superposes,
+reads the predictor's confidence at the sites when the file has one, and diffs the non-covalent
+interaction networks. Each lost or gained interaction says whether its atoms were **removed** by
+the change, moved past the cut-off, or are only **marginal**: within 0.5 Å of the cut-off, an
+angle flipped, or a side chain one file did not model. Only clear changes within 10 Å of a site
+are listed; the rest are counted. Above: barnase H102A with barstar Y30F (1B3S) against 1B27, five
+interface interactions lost, every one because the side chain that made it is gone.
+
+`film` turns the same diff into a 10–20 s MP4 and a still: the candidate, then each site group
+with a clear change (side chains, the parent's removed atoms as ghosts, lost interactions dashed,
+gained ones solid, the protein cut open in front of buried sites), then a summary card. Every
+caption number is the diff's, which is written beside the film. Frames render on the GPU when
+there is one (wgpu: Vulkan, Metal, DX12) and on the CPU rasteriser otherwise; the CPU frames are
+the same bytes on every run and the GPU's are tested against them. ffmpeg encodes, with NVENC
+when it works. A point mutation in a *predicted* model often barely moves the structure (Pak et
+al., PLoS ONE 2023), so the film shows confidence and interactions and never calls "nothing
+moved" "nothing changed".
+
 ---
 
 ## Where this sits next to other tools
@@ -718,6 +747,34 @@ The browser page points at what it measures:
 
 In the terminal, `[` and `]` step through the same findings, dimming the rest and centring each
 one; `0` clears.
+
+### `proteus diff` — what candidates changed against their parent
+
+```bash
+proteus diff --parent PARENT CANDIDATE... [--chains A,D] [--local-radius 10] [--all]
+             [--json | --csv FILE]
+```
+
+One candidate prints its sites (local Cα RMSD, pLDDT in parent and candidate) and its clear local
+interaction changes; several print a table. `--all` lists marginal changes too. The CSV holds
+the counts a ranking sorts on: lost and gained H-bonds, salt bridges, π-stacks and cation–π
+within the local radius, interface changes, marginal and distal counts, identity, coverage, the
+lowest site pLDDT and the mean pLDDT change at the sites. `identity` and `coverage` together
+say whether the parent is the right one: an alignment of unrelated proteins pairs few residues,
+mostly identical ones.
+
+### `proteus film` — the diff as a short film
+
+```bash
+proteus film --parent PARENT CANDIDATE... [--chains A,D] [--out films]
+             [--aspect 1:1|4:5|16:9] [--fps 30] [--pace 1] [--max-sites 3]
+             [--renderer auto|gpu|cpu] [--encoder auto|nvenc|x264]
+             [--still-only] [--still-at SECONDS] [--supersample 2]
+```
+
+Writes `<candidate>.mp4` (H.264, BT.709, faststart), `.png` and `.json` per candidate.
+`--renderer auto` uses a hardware GPU and refuses software adapters; `cpu` is the reference.
+Without ffmpeg on PATH the still and the JSON are still written.
 
 ### `proteus analyze` — one structure in full, or a table over many
 
