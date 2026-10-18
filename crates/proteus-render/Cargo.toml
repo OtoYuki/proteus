@@ -23,7 +23,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 unicode-width = { workspace = true }
-fontdue = { workspace = true }
+skrifa = { workspace = true }
+ab_glyph_rasterizer = { workspace = true }
 wgpu = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
 bytemuck = { workspace = true, optional = true }
