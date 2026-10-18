@@ -1244,6 +1244,16 @@ fn establish_caption(diff: &VariantDiff) -> Caption {
         ),
         theme.text,
     )];
+    // Residues with no partner are not "changed sites", but a reader comparing with the
+    // PDB's mutation list needs to know they exist (1X1Y's Q2A is unmodelled).
+    let mut unpaired = Vec::new();
+    if diff.deleted > 0 {
+        unpaired.push(format!("{} parent", diff.deleted));
+    }
+    if diff.inserted > 0 {
+        unpaired.push(format!("{} new", diff.inserted));
+    }
+
     let detail = if diff.candidate_confidence.is_predicted() {
         match (
             diff.summary.min_site_confidence,
@@ -1256,7 +1266,12 @@ fn establish_caption(diff: &VariantDiff) -> Caption {
             _ => "coloured by pLDDT".into(),
         }
     } else {
-        "experimental B-factors: no model confidence to show".into()
+        "experimental: no model confidence".into()
+    };
+    let detail = if unpaired.is_empty() {
+        detail
+    } else {
+        format!("{detail} · unpaired: {}", unpaired.join(", "))
     };
     Caption {
         title,
