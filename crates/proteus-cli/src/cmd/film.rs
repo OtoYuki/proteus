@@ -309,6 +309,10 @@ fn encoder_args(e: Encoder) -> Vec<String> {
             "bt709",
             "-color_trc",
             "bt709",
+            // NVENC ignores -color_primaries/-color_trc; writing the VUI in the bitstream works
+            // for both encoders, so players do not have to guess.
+            "-bsf:v",
+            "h264_metadata=colour_primaries=1:transfer_characteristics=1:matrix_coefficients=1",
             "-movflags",
             "+faststart",
         ]

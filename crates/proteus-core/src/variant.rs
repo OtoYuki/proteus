@@ -255,6 +255,9 @@ pub struct Endpoint {
     /// The same residue in the candidate (chain, number), when it has one: for a lost
     /// interaction the endpoint above is named in the parent, whose numbering may differ.
     pub candidate_residue: Option<(String, isize)>,
+    /// The same atom (or ring centre) in the other structure, in the candidate's frame, when
+    /// it exists there: where a lost interaction's partner is now, or where a gained one's was.
+    pub other_position: Option<[f64; 3]>,
 }
 
 impl Endpoint {
@@ -961,6 +964,7 @@ fn build_change(
         atom: atom.clone(),
         position: to_arr(side.1),
         candidate_residue: side.4.clone(),
+        other_position: side.2.map(to_arr),
     };
     let describe = |r: &Residue, atom: &Option<String>| match atom {
         Some(x) => format!("{} {} {x}", r.name, r.id.1),

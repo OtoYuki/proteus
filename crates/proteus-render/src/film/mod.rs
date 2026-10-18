@@ -85,7 +85,7 @@ impl Default for FilmSettings {
 
 /// Seconds per shot at pace 1.
 const ESTABLISH_S: f32 = 2.6;
-const FLY_S: f32 = 1.4;
+const FLY_S: f32 = 2.0;
 const HOLD_S: f32 = 3.4;
 const SUMMARY_S: f32 = 2.6;
 /// Yaw swept during an establish or a hold (radians, each side).
@@ -510,10 +510,19 @@ impl Film {
             }
             let lines: Vec<Line> = changes
                 .iter()
-                .map(|c| Line {
-                    a: v32(c.a.position),
-                    b: v32(c.b.position),
-                    lost: c.change == Change::Lost,
+                .map(|c| {
+                    // A lost interaction is drawn where its atoms are now, so a partner that
+                    // moved away shows the stretched gap; an atom the change removed has no
+                    // "now" and keeps the parent's position, on its ghost.
+                    let at = |e: &proteus_core::variant::Endpoint| match c.change {
+                        Change::Lost => v32(e.other_position.unwrap_or(e.position)),
+                        Change::Gained => v32(e.position),
+                    };
+                    Line {
+                        a: at(&c.a),
+                        b: at(&c.b),
+                        lost: c.change == Change::Lost,
+                    }
                 })
                 .collect();
 
@@ -664,10 +673,13 @@ impl Film {
         let frame = frame.min(self.frames.saturating_sub(1));
         for &(seg, start, len) in &self.timeline {
             if frame < start + len {
-                let u = if len > 1 {
-                    (frame - start) as f32 / (len - 1) as f32
-                } else {
+                // End-exclusive: a shot's last state is the next shot's first frame, so no
+                // frame is shown twice at a cut. The film's final frame still reaches u = 1.
+                let last = frame + 1 == self.frames;
+                let u = if last {
                     1.0
+                } else {
+                    (frame - start) as f32 / len as f32
                 };
                 return (seg, u, frame - start);
             }
@@ -739,7 +751,8 @@ impl Film {
         // The establish and summary shots light every filmed site.
         let (seg, u, _) = self.segment_at(frame);
         let all_sites = match seg {
-            Segment::Establish => smoothstep((u - 0.25) / 0.5),
+            // Lit from the first frame: feeds use frame 0 as the thumbnail.
+            Segment::Establish => 1.0,
             Segment::Summary => smoothstep(u / 0.4),
             _ => 0.0,
         };
@@ -928,7 +941,7 @@ impl Film {
         );
 
         let (caption, alpha) = match seg {
-            Segment::Establish => (&self.establish, fade_in(k)),
+            Segment::Establish => (&self.establish, 1.0),
             Segment::Hold(g) => (&self.groups[g].caption, fade_in(k)),
             Segment::Fly { from, .. } => match from {
                 Some(g) => (&self.groups[g].caption, 1.0 - smoothstep(u / 0.3)),
@@ -1492,6 +1505,23 @@ mod tests {
                 close > 0.95,
                 "frame {frame}: only {:.1} % of pixels close",
                 close * 100.0
+            );
+        }
+    }
+
+    /// Consecutive frames never repeat the camera: a repeated frame at a cut reads as a hitch.
+    #[test]
+    fn no_frame_repeats_the_one_before_it() {
+        let (film, _) = small_film();
+        let state = |f: usize| {
+            let c = film.scene(f).camera;
+            (c.center, c.yaw, c.zoom, c.pan)
+        };
+        for f in 1..film.frame_count() {
+            assert!(
+                state(f) != state(f - 1),
+                "frame {f} repeats frame {}",
+                f - 1
             );
         }
     }
