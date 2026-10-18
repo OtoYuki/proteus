@@ -192,6 +192,9 @@ fn stem(p: &Path) -> String {
     }
 }
 
+/// Fewest paired residues, as a fraction of the larger structure, that `film` accepts.
+const MIN_COVERAGE: f64 = 0.5;
+
 #[allow(clippy::too_many_arguments)]
 fn film_one(
     path: &Path,
@@ -207,6 +210,17 @@ fn film_one(
     let candidate =
         proteus_core::variant::PreparedStructure::from_bytes(&bytes, name, opts.chains.as_deref())?;
     let d = diff(parent, &candidate, opts)?;
+    // A film of "what changed" against the wrong parent would caption hundreds of sites that
+    // are not mutations. `diff` can still show the pairing.
+    if d.coverage < MIN_COVERAGE {
+        bail!(
+            "only {:.0} % of residues pair with the parent ({}, identity {:.0} %): not the same \
+             protein, or the wrong chains; `proteus diff` shows the pairing",
+            d.coverage * 100.0,
+            d.pairing,
+            d.identity * 100.0
+        );
+    }
     let cstem = stem(path);
     let (width, height) = args.aspect.size();
     let settings = FilmSettings {

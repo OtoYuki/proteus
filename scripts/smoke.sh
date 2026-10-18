@@ -90,6 +90,8 @@ expect "…says so" 'no residue differs from the parent'
 check "film still (CPU reference)" "$BIN" film --parent "$CPLX" "$WORK/k15a.pdb" --still-only --renderer cpu --out "$WORK/films"
 check "…png written" test -s "$WORK/films/k15a.png"
 check "…json written" grep -q '"notation": "K15A"' "$WORK/films/k15a.json"
+check "film refuses an unrelated parent" bash -c "! '$BIN' film --parent '$CPLX' '$PDB' --still-only --out '$WORK/films' 2>'$WORK/err'"
+check "…and says why" grep -q 'not the same' "$WORK/err"
 if command -v ffmpeg >/dev/null; then
     check "film mp4" "$BIN" film --parent "$CPLX" "$WORK/k15a.pdb" --fps 8 --pace 0.4 --aspect 16:9 --out "$WORK/films"
     check "…mp4 written" test -s "$WORK/films/k15a.mp4"
