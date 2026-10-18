@@ -76,7 +76,7 @@ pub struct Args {
     #[arg(long, value_delimiter = ',', value_name = "IDS")]
     pub chains: Option<Vec<String>>,
 
-    /// Directory for <candidate>.mp4, .png and .json
+    /// Directory for `<candidate>.mp4`, `.png` and `.json`
     #[arg(short, long, default_value = "films", value_name = "DIR")]
     pub out: PathBuf,
 
