@@ -9,6 +9,13 @@ yanked = "deny"
 ignore = [
     # paste is unmaintained but still correct; pulled in by nalgebra → simba. No upstream fix yet.
     { id = "RUSTSEC-2024-0436", reason = "paste via nalgebra/simba; no maintained replacement upstream" },
+    # zip: all three concern ZipArchive::extract / ZipStreamReader::extract. Proteus only reads
+    # .npz entries by name and writes archives (proteus-core/src/pae.rs). zip 8.6 is pinned by
+    # candle-core 0.11 (the latest release); zip 3.0 is a build dependency of utoipa-swagger-ui,
+    # which unpacks its own Swagger UI bundle. Drop these when candle moves to zip >= 9.
+    { id = "RUSTSEC-2026-0367", reason = "zip extract() only; proteus never extracts archives" },
+    { id = "RUSTSEC-2026-0368", reason = "zip extract() only; proteus never extracts archives" },
+    { id = "RUSTSEC-2026-0369", reason = "zip extract() only; proteus never extracts archives" },
 ]
 
 [licenses]
