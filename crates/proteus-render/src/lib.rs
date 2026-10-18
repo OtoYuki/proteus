@@ -1,6 +1,7 @@
 pub mod atoms;
 pub mod brand;
 pub mod error;
+pub mod film;
 pub mod geometry;
 pub mod rasterizer;
 pub mod terminal;

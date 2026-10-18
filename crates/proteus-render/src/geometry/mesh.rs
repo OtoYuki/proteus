@@ -61,6 +61,27 @@ pub fn generate_cartoon_mesh(
     guides: &[Option<Vector3<f64>>],
     subdivisions_per_residue: usize,
 ) -> TriangleMesh {
+    generate_cartoon_mesh_detailed(
+        ca_coords,
+        ss_assignments,
+        plddts,
+        guides,
+        subdivisions_per_residue,
+        8,
+    )
+}
+
+/// [`generate_cartoon_mesh`] with the cross-section's number of sides as well. The terminal and
+/// the browser page use 8 (their meshes must match bit for bit); a film frame at 1080 pixels
+/// shows the facets of 8, so it asks for more.
+pub fn generate_cartoon_mesh_detailed(
+    ca_coords: &[Vector3<f64>],
+    ss_assignments: &[SecondaryStructure],
+    plddts: &[f64],
+    guides: &[Option<Vector3<f64>>],
+    subdivisions_per_residue: usize,
+    ring_sides: usize,
+) -> TriangleMesh {
     let n_res = ca_coords.len();
     if n_res < 2 {
         return TriangleMesh::new();
@@ -79,8 +100,8 @@ pub fn generate_cartoon_mesh(
     let mut mesh = TriangleMesh::new();
     let n_pts = spline_points.len();
 
-    // Profile ring definition: 8-sided circle/ellipse for smooth shading
-    let ring_sides = 8usize;
+    // Profile ring: a circle or ellipse of `ring_sides` points.
+    let ring_sides = ring_sides.max(4);
     let mut ring_offsets = Vec::with_capacity(ring_sides);
     for i in 0..ring_sides {
         let angle = (i as f64) * std::f64::consts::TAU / (ring_sides as f64);

@@ -80,6 +80,10 @@ comfy-table = "8"
 crossterm = "0.29"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 base64 = "0.23"
+# Caption text burned into `proteus film` frames (pure Rust, no system fonts).
+fontdue = "0.9"
+# The film's still (pure Rust; flate2 is already in the tree).
+png = "0.18"
 unicode-width = "0.2"
 
 # Diagnostics & Docs

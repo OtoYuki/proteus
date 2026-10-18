@@ -34,3 +34,4 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 pdbtbx = { workspace = true }
 tempfile = { workspace = true }
+png = { workspace = true }

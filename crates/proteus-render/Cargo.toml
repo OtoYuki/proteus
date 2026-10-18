@@ -19,3 +19,4 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 unicode-width = { workspace = true }
+fontdue = { workspace = true }

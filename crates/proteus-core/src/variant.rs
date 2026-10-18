@@ -252,6 +252,9 @@ pub struct Endpoint {
     pub atom: Option<String>,
     /// Position in the candidate's frame (the parent is superposed onto the candidate).
     pub position: [f64; 3],
+    /// The same residue in the candidate (chain, number), when it has one: for a lost
+    /// interaction the endpoint above is named in the parent, whose numbering may differ.
+    pub candidate_residue: Option<(String, isize)>,
 }
 
 impl Endpoint {
@@ -752,11 +755,17 @@ pub fn diff(
             other(l.b, l.b_atom.as_deref()),
         );
         let changed = |r: usize| !par_to_cand.contains_key(&r) || site_parents.contains(&r);
+        let in_cand = |r: usize| {
+            par_to_cand.get(&r).map(|&c| {
+                let id = &candidate.residues[c].id;
+                (id.0.clone(), id.1)
+            })
+        };
         changes.push(build_change(
             l,
             Change::Lost,
-            (ra, pa, oa, changed(l.a)),
-            (rb, pb, ob, changed(l.b)),
+            (ra, pa, oa, changed(l.a), in_cand(l.a)),
+            (rb, pb, ob, changed(l.b), in_cand(l.b)),
             &nearest_site,
             radius,
         ));
@@ -783,11 +792,12 @@ pub fn diff(
             other(l.b, l.b_atom.as_deref()),
         );
         let changed = |r: usize| !cand_to_par.contains_key(&r) || site_candidates.contains(&r);
+        let own = |r: &Residue| Some((r.id.0.clone(), r.id.1));
         changes.push(build_change(
             l,
             Change::Gained,
-            (ra, pa, oa, changed(l.a)),
-            (rb, pb, ob, changed(l.b)),
+            (ra, pa, oa, changed(l.a), own(ra)),
+            (rb, pb, ob, changed(l.b), own(rb)),
             &nearest_site,
             radius,
         ));
@@ -924,23 +934,33 @@ pub fn diff(
     })
 }
 
-/// Each side: (residue in the structure that has the interaction, its endpoint position in the
-/// candidate's frame, the same endpoint in the other structure in the candidate's frame, whether
-/// that residue changed: a site, an insertion or a deletion).
+/// One side of an interaction: the residue in the structure that has it, its endpoint position
+/// in the candidate's frame, the same endpoint in the other structure (candidate's frame),
+/// whether that residue changed (a site, an insertion or a deletion), and the residue's identity
+/// in the candidate.
+type Side<'a> = (
+    &'a Residue,
+    Vector3<f64>,
+    Option<Vector3<f64>>,
+    bool,
+    Option<(String, isize)>,
+);
+
 fn build_change(
     l: &Located,
     change: Change,
-    a: (&Residue, Vector3<f64>, Option<Vector3<f64>>, bool),
-    b: (&Residue, Vector3<f64>, Option<Vector3<f64>>, bool),
+    a: Side<'_>,
+    b: Side<'_>,
     nearest_site: &impl Fn(&[Vector3<f64>]) -> Option<(f64, usize)>,
     radius: f64,
 ) -> InteractionChange {
-    let endpoint = |r: &Residue, atom: &Option<String>, pos: Vector3<f64>| Endpoint {
-        chain_id: r.id.0.clone(),
-        res_seq: r.id.1,
-        res_name: r.name.clone(),
+    let endpoint = |side: &Side<'_>, atom: &Option<String>| Endpoint {
+        chain_id: side.0.id.0.clone(),
+        res_seq: side.0.id.1,
+        res_name: side.0.name.clone(),
         atom: atom.clone(),
-        position: to_arr(pos),
+        position: to_arr(side.1),
+        candidate_residue: side.4.clone(),
     };
     let describe = |r: &Residue, atom: &Option<String>| match atom {
         Some(x) => format!("{} {} {x}", r.name, r.id.1),
@@ -966,8 +986,8 @@ fn build_change(
     InteractionChange {
         kind: l.kind,
         change,
-        a: endpoint(a.0, &l.a_atom, a.1),
-        b: endpoint(b.0, &l.b_atom, b.1),
+        a: endpoint(&a, &l.a_atom),
+        b: endpoint(&b, &l.b_atom),
         distance: l.distance,
         other_distance,
         removed,
