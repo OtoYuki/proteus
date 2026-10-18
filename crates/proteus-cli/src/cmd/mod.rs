@@ -3,6 +3,7 @@
 
 pub mod analyze;
 pub mod delete;
+pub mod diff;
 pub mod esm;
 pub mod inspect;
 pub mod mutate;
@@ -59,6 +60,7 @@ pub async fn dispatch(
         Commands::Inspect(args) => inspect::run(args, db_path).await,
         Commands::Analyze(args) => analyze::run(args).await,
         Commands::View(args) => view::run(args, db_path).await,
+        Commands::Diff(args) => diff::run(args).await,
         Commands::Mutate(args) => mutate::run(args).await,
         Commands::Screen(args) => screen::run(args, db_path, artifacts_dir).await,
         Commands::Esm(args) => esm::run(args).await,

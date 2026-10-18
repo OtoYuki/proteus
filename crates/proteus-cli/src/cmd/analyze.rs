@@ -66,9 +66,9 @@ pub struct Args {
 /// or a directory reachable twice does not repeat files, and each file is listed once however
 /// it was reached. A subdirectory that cannot be read is reported, not fatal.
 /// A path that could not be analysed, and why.
-type Failure = (PathBuf, String);
+pub(crate) type Failure = (PathBuf, String);
 
-fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
+pub(crate) fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
     use std::collections::HashSet;
     fn walk(
         dir: &Path,
