@@ -38,6 +38,16 @@ impl Aspect {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
+pub enum Renderer {
+    /// The GPU when a hardware adapter is present, else the CPU
+    Auto,
+    /// The GPU, or fail
+    Gpu,
+    /// The CPU rasteriser: the reference, the same bytes on every machine
+    Cpu,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum, Debug)]
 pub enum Encoder {
     /// NVIDIA's hardware encoder when it works on this machine, else libx264
     Auto,
@@ -99,6 +109,9 @@ pub struct Args {
 
     #[arg(long, value_enum, default_value_t = Encoder::Auto)]
     pub encoder: Encoder,
+
+    #[arg(long, value_enum, default_value_t = Renderer::Auto)]
+    pub renderer: Renderer,
 
     /// Frames rendered in parallel [default: the number of CPUs]
     #[arg(short, long)]
@@ -228,7 +241,7 @@ fn film_one(
 
     if let Some(enc) = encoder {
         let mp4_path = base.with_extension("mp4");
-        encode(&film, enc, &mp4_path, threads)?;
+        encode(&film, enc, &mp4_path, threads, args.renderer)?;
         written.push(mp4_path.display().to_string());
     }
     Ok(written)
@@ -333,7 +346,13 @@ fn pick_encoder(choice: Encoder) -> Result<Vec<String>> {
 }
 
 /// Render every frame of `film` on `threads` threads and pipe them, in order, to ffmpeg.
-fn encode(film: &Film, enc: &[String], out: &Path, threads: usize) -> Result<()> {
+fn encode(
+    film: &Film,
+    enc: &[String],
+    out: &Path,
+    threads: usize,
+    renderer: Renderer,
+) -> Result<()> {
     let s = film.settings();
     let (w, h) = (s.width, s.height);
     let mut child = Command::new("ffmpeg")
@@ -362,11 +381,15 @@ fn encode(film: &Film, enc: &[String], out: &Path, threads: usize) -> Result<()>
             .unwrap_or_default(),
     );
 
-    let result = render_in_order(film, threads, |frame| {
+    let mut sink = |frame: &[u8]| -> Result<()> {
         stdin.write_all(frame)?;
         bar.inc(1);
         Ok(())
-    });
+    };
+    let result = match gpu_renderer(film, renderer)? {
+        Some(gpu) => render_gpu(film, gpu, &mut sink),
+        None => render_in_order(film, threads, &mut sink),
+    };
     drop(stdin);
     let output = child.wait_with_output().context("waiting for ffmpeg")?;
     bar.finish_and_clear();
@@ -380,12 +403,65 @@ fn encode(film: &Film, enc: &[String], out: &Path, threads: usize) -> Result<()>
     Ok(())
 }
 
+#[cfg(feature = "gpu")]
+type Gpu = proteus_render::film::gpu::GpuRenderer;
+#[cfg(not(feature = "gpu"))]
+type Gpu = std::convert::Infallible;
+
+/// The GPU renderer the choice asks for, `None` for the CPU path.
+fn gpu_renderer(film: &Film, choice: Renderer) -> Result<Option<Gpu>> {
+    if choice == Renderer::Cpu {
+        return Ok(None);
+    }
+    #[cfg(feature = "gpu")]
+    {
+        match Gpu::new(film) {
+            Ok(g) => {
+                eprintln!("rendering on {}", g.adapter());
+                Ok(Some(g))
+            }
+            Err(why) if choice == Renderer::Gpu => bail!("--renderer gpu: {why}"),
+            Err(why) => {
+                eprintln!("rendering on the CPU: {why}");
+                Ok(None)
+            }
+        }
+    }
+    #[cfg(not(feature = "gpu"))]
+    {
+        let _ = film;
+        if choice == Renderer::Gpu {
+            bail!("--renderer gpu: this build has no GPU support (cargo feature `gpu`)");
+        }
+        Ok(None)
+    }
+}
+
+/// Frames from the GPU, one after another (the GPU is the parallel part), to `sink`.
+#[cfg(feature = "gpu")]
+fn render_gpu(film: &Film, mut gpu: Gpu, sink: &mut impl FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    let s = film.settings();
+    let mut rgb = vec![0u8; s.width * s.height * 3];
+    let text = proteus_render::film::text::TextPainter::new();
+    for i in 0..film.frame_count() {
+        film.render_gpu(i, &mut gpu, &text, &mut rgb)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        sink(&rgb)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "gpu"))]
+fn render_gpu(_: &Film, gpu: Gpu, _: &mut impl FnMut(&[u8]) -> Result<()>) -> Result<()> {
+    match gpu {}
+}
+
 /// Render frames on `threads` threads and hand them to `sink` in frame order. At most
 /// `2 × threads` frames are in memory at once.
 fn render_in_order(
     film: &Film,
     threads: usize,
-    mut sink: impl FnMut(&[u8]) -> Result<()>,
+    sink: &mut impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<()> {
     let frames = film.frame_count();
     let s = film.settings();

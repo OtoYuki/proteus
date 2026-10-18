@@ -14,6 +14,8 @@
 //! Only *clear, local* changes are drawn or captioned (see `proteus_core::variant`): marginal
 //! and distal changes are counted on the summary card and never shown as findings.
 
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod text;
 
 use crate::brand;
@@ -969,6 +971,11 @@ impl Film {
     pub fn ribbon(&self) -> &TriangleMesh {
         &self.ribbon
     }
+
+    /// Ribbon residues (the length of [`FrameScene::residue_colors`]).
+    pub fn residue_count(&self) -> usize {
+        self.base_colors.len()
+    }
 }
 
 /// Height of the lower-third caption panel, in pixels.
@@ -1441,6 +1448,51 @@ mod tests {
             film.render_cpu(frame, &mut CpuWorker::new(), &mut b);
             assert!(a == b, "frame {frame} differs between runs");
             assert!(a.iter().any(|&v| v != a[0]), "frame {frame} is blank");
+        }
+    }
+
+    /// The GPU path against the CPU reference on the same frames. Not bit-identical (rasterisation
+    /// rules and rounding differ by vendor), so: mean difference small, and nearly every pixel
+    /// close. Skipped where there is no hardware adapter (CI runners).
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn gpu_frames_match_the_cpu_reference() {
+        let (film, _) = small_film();
+        let mut gpu = match gpu::GpuRenderer::new(&film) {
+            Ok(g) => g,
+            Err(why) => {
+                eprintln!("skipped: {why}");
+                return;
+            }
+        };
+        let text = TextPainter::new();
+        let n = 160 * 160 * 3;
+        for frame in [0, film.still_frame(), film.frame_count() - 1] {
+            let (mut cpu, mut gpu_rgb) = (vec![0u8; n], vec![0u8; n]);
+            film.render_cpu(frame, &mut CpuWorker::new(), &mut cpu);
+            film.render_gpu(frame, &mut gpu, &text, &mut gpu_rgb)
+                .unwrap();
+            let diffs: Vec<u32> = cpu
+                .iter()
+                .zip(&gpu_rgb)
+                .map(|(a, b)| (*a as i32 - *b as i32).unsigned_abs())
+                .collect();
+            let mean = diffs.iter().sum::<u32>() as f64 / n as f64;
+            let close = diffs
+                .chunks(3)
+                .filter(|p| p.iter().all(|&d| d <= 24))
+                .count() as f64
+                / (n / 3) as f64;
+            eprintln!(
+                "frame {frame}: mean |Δ| {mean:.2}, {:.1} % of pixels within 24",
+                close * 100.0
+            );
+            assert!(mean < 4.0, "frame {frame}: mean difference {mean:.2}");
+            assert!(
+                close > 0.95,
+                "frame {frame}: only {:.1} % of pixels close",
+                close * 100.0
+            );
         }
     }
 
