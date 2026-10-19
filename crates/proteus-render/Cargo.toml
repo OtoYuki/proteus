@@ -8,6 +8,10 @@ license.workspace = true
 readme = "README.md"
 description = "Pure-Rust software 3D rasterizer, cartoon ribbon extruder, and terminal viewport engine for Proteus."
 
+[features]
+# Render `proteus film` frames on the GPU (wgpu). The CPU rasteriser stays the reference.
+gpu = ["dep:wgpu", "dep:pollster", "dep:bytemuck"]
+
 [dependencies]
 proteus-core = { workspace = true }
 nalgebra = { workspace = true }
@@ -19,3 +23,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 unicode-width = { workspace = true }
+skrifa = { workspace = true }
+ab_glyph_rasterizer = { workspace = true }
+wgpu = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }

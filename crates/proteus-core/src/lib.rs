@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod models;
 pub mod mutagenesis;
 pub mod pae;
+pub mod pairing;
 pub mod qc;
 pub mod rama8000;
 pub mod ranking;
@@ -22,6 +23,7 @@ pub mod scores;
 pub mod sequence;
 pub mod structure;
 pub mod tes;
+pub mod variant;
 
 pub use clash::*;
 pub use confidence::ConfidenceSource;

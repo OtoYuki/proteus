@@ -2,4 +2,10 @@
 ignore = [
     # paste (unmaintained) via nalgebra/simba; no maintained replacement upstream
     "RUSTSEC-2024-0436",
+    # zip: extract()/ZipStreamReader::extract only; Proteus reads .npz entries by name and never
+    # extracts (proteus-core/src/pae.rs). zip 8.6 is pinned by candle-core 0.11; zip 3.0 is a
+    # build dependency of utoipa-swagger-ui. Same reasons as deny.toml.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
