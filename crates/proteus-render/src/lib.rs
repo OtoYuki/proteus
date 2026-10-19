@@ -1,6 +1,7 @@
 pub mod atoms;
 pub mod brand;
 pub mod error;
+pub mod film;
 pub mod geometry;
 pub mod gltf;
 pub mod rasterizer;
@@ -366,8 +367,7 @@ struct Trace {
     plddt_scale: f64,
 }
 
-/// Chain ID, residue number and insertion code: what identifies a residue across two files.
-type ResidueId = (String, isize, Option<String>);
+use proteus_core::pairing::ResidueId;
 
 fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
     let protein = proteus_core::io::protein_heavy_atoms(pdb);
@@ -476,7 +476,7 @@ fn segmented_cartoon_mesh_at(
     for end in 1..=n {
         if end == n || breaks[end] {
             if end - start >= 2 {
-                let mut part = geometry::mesh::generate_cartoon_mesh_with_sides(
+                let mut part = geometry::mesh::generate_cartoon_mesh_detailed(
                     &ca[start..end],
                     &ss[start..end],
                     &plddts[start..end],
@@ -797,7 +797,8 @@ impl StructureRenderData {
                 "the structure text does not match this bundle".into(),
             ));
         }
-        let (pairs, pairing) = pair_best(&tgt, &refr);
+        let (pairs, pairing) =
+            proteus_core::pairing::pair_best(&tgt.ids, &tgt.names, &refr.ids, &refr.names);
         if pairs.len() < MIN_SUPERPOSITION_PAIRS {
             return Err(RenderError::Geometry(format!(
                 "only {} residue(s) could be paired with the reference, and at least \
@@ -1087,99 +1088,6 @@ impl SuperpositionStats {
 /// Fewest shared residues a superposition is attempted on: three points fix a rotation.
 pub const MIN_SUPERPOSITION_PAIRS: usize = 3;
 
-/// Index pairs `(target, reference)` of residues with the same identity, in target order. A
-/// duplicated identity (which a well-formed file does not have) pairs its first occurrence.
-fn pair_residues(target: &[ResidueId], reference: &[ResidueId]) -> Vec<(usize, usize)> {
-    let mut by_id: std::collections::HashMap<&ResidueId, usize> =
-        std::collections::HashMap::with_capacity(reference.len());
-    for (j, id) in reference.iter().enumerate() {
-        by_id.entry(id).or_insert(j);
-    }
-    let mut used = vec![false; reference.len()];
-    let mut pairs = Vec::new();
-    for (i, id) in target.iter().enumerate() {
-        if let Some(&j) = by_id.get(id) {
-            if !used[j] {
-                used[j] = true;
-                pairs.push((i, j));
-            }
-        }
-    }
-    pairs
-}
-
-/// Global alignment (Needleman–Wunsch) of two residue-name sequences; returns the aligned
-/// index pairs. Match +2, mismatch −1, gap −1: identical stretches dominate, a point mutation
-/// stays aligned rather than opening two gaps.
-fn align_by_sequence(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
-    let (n, m) = (a.len(), b.len());
-    let mut score = vec![vec![0i32; m + 1]; n + 1];
-    for (i, row) in score.iter_mut().enumerate() {
-        row[0] = -(i as i32);
-    }
-    for (j, cell) in score[0].iter_mut().enumerate() {
-        *cell = -(j as i32);
-    }
-    for i in 1..=n {
-        for j in 1..=m {
-            let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
-            score[i][j] = (score[i - 1][j - 1] + s)
-                .max(score[i - 1][j] - 1)
-                .max(score[i][j - 1] - 1);
-        }
-    }
-    let (mut i, mut j, mut pairs) = (n, m, Vec::new());
-    while i > 0 && j > 0 {
-        let s = if a[i - 1] == b[j - 1] { 2 } else { -1 };
-        if score[i][j] == score[i - 1][j - 1] + s {
-            pairs.push((i - 1, j - 1));
-            i -= 1;
-            j -= 1;
-        } else if score[i][j] == score[i - 1][j] - 1 {
-            i -= 1;
-        } else {
-            j -= 1;
-        }
-    }
-    pairs.reverse();
-    pairs
-}
-
-/// Pair residues of two traces the way a reader would: by identity when the files share a
-/// numbering, by residue number when each is a single chain with a different chain id (a
-/// predicted model against a deposited entry), and by sequence alignment when the numbering
-/// differs altogether. The pairing that matches the most identical amino acids wins; ties go
-/// to the more literal method.
-fn pair_best(tgt: &Trace, refr: &Trace) -> (Vec<(usize, usize)>, &'static str) {
-    let matching = |pairs: &[(usize, usize)]| {
-        pairs
-            .iter()
-            .filter(|&&(i, j)| tgt.names[i] == refr.names[j])
-            .count()
-    };
-    let mut best = (pair_residues(&tgt.ids, &refr.ids), "residue id");
-    let single_chain = |ids: &[ResidueId]| ids.windows(2).all(|w| w[0].0 == w[1].0);
-    if single_chain(&tgt.ids) && single_chain(&refr.ids) {
-        let strip = |ids: &[ResidueId]| -> Vec<ResidueId> {
-            ids.iter()
-                .map(|(_, n, ic)| (String::new(), *n, ic.clone()))
-                .collect()
-        };
-        let by_number = pair_residues(&strip(&tgt.ids), &strip(&refr.ids));
-        if matching(&by_number) > matching(&best.0) {
-            best = (by_number, "residue number");
-        }
-    }
-    // The alignment table is n×m; beyond ~4000×4000 residues it is not worth the memory.
-    if tgt.names.len() * refr.names.len() <= 16_000_000 {
-        let aligned = align_by_sequence(&tgt.names, &refr.names);
-        if matching(&aligned) > matching(&best.0) {
-            best = (aligned, "sequence alignment");
-        }
-    }
-    best
-}
-
 /// Parse and superimpose two structures using Kabsch optimal alignment.
 ///
 /// Residues are paired by chain ID, residue number and insertion code, and only residues
@@ -1200,7 +1108,8 @@ pub fn prepare_superposition_for_rendering(
     let tgt = trace_of(&tgt_pdb);
     let refr = trace_of(&ref_pdb);
 
-    let (pairs, pairing) = pair_best(&tgt, &refr);
+    let (pairs, pairing) =
+        proteus_core::pairing::pair_best(&tgt.ids, &tgt.names, &refr.ids, &refr.names);
     if pairs.len() < MIN_SUPERPOSITION_PAIRS {
         return Err(RenderError::Geometry(format!(
             "only {} residue(s) could be paired between the structures (target {}, reference \

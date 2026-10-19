@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Added
+- `proteus diff --parent P CANDIDATE...`: the changed sites of each candidate, local Cα RMSD,
+  the predictor's confidence at the sites, and the non-covalent interactions lost and gained,
+  each marked removed (its atom is gone), clear (moved ≥ 0.5 Å past the cut-off) or marginal.
+  Table, JSON Lines, or a CSV of ranking columns.
+- `proteus film`: the diff as an MP4 and a still, rendered on the GPU (wgpu) when present and
+  on the CPU rasteriser otherwise, encoded by ffmpeg (NVENC when it works). Caption numbers are
+  the diff's; CPU frames are deterministic and the GPU's are tested against them.
+- The rasteriser gains a near clipping plane and a fixed fog range; the ribbon builder takes
+  its cross-section's number of sides.
+
+### Changed
+- Residue pairing (by id, by number, or by alignment) moved from `proteus-render` to
+  `proteus_core::pairing`, so the viewer's `--compare` and `diff` pair the same way.
+- rustls 0.23.46; three `zip` advisories about `extract()`, which Proteus never calls, are
+  ignored in `deny.toml` with the reason.
+
 - `view --gltf FILE.glb`: the ribbon (and disulfides) as binary glTF 2.0 for Blender, Keynote or
   three.js, with the colour scheme baked in as linear vertex colours and the file's own coordinates in
   ångström. Exports use a finer tessellation (`RibbonDetail::EXPORT`: 12 samples per residue, 16-sided

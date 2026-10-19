@@ -12,6 +12,12 @@ description = "Unified CLI binary for Proteus: mutation, screening, biophysical 
 name = "proteus"
 path = "src/main.rs"
 
+[features]
+default = ["gpu"]
+# `proteus film` renders frames on the GPU when one is present (wgpu; the CPU path is the
+# fallback and the reference).
+gpu = ["proteus-render/gpu"]
+
 [dependencies]
 proteus-core = { workspace = true }
 proteus-storage = { workspace = true }
@@ -34,3 +40,4 @@ anyhow = { workspace = true }
 serde_json = { workspace = true }
 pdbtbx = { workspace = true }
 tempfile = { workspace = true }
+png = { workspace = true }

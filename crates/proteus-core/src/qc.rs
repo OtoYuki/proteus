@@ -235,7 +235,7 @@ pub fn is_structure_file_name(path: &Path) -> bool {
         .any(|ext| name.ends_with(ext))
 }
 
-fn one_letter(three: &str) -> char {
+pub(crate) fn one_letter(three: &str) -> char {
     match three {
         "ALA" => 'A',
         "ARG" => 'R',

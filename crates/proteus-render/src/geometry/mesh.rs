@@ -61,7 +61,7 @@ pub fn generate_cartoon_mesh(
     guides: &[Option<Vector3<f64>>],
     subdivisions_per_residue: usize,
 ) -> TriangleMesh {
-    generate_cartoon_mesh_with_sides(
+    generate_cartoon_mesh_detailed(
         ca_coords,
         ss_assignments,
         plddts,
@@ -71,9 +71,10 @@ pub fn generate_cartoon_mesh(
     )
 }
 
-/// As [`generate_cartoon_mesh`] with `ring_sides` points around the ribbon's profile (8 on
-/// screen; an export rendered large wants more).
-pub fn generate_cartoon_mesh_with_sides(
+/// [`generate_cartoon_mesh`] with the cross-section's number of sides as well. The terminal and
+/// the browser page use 8 (their meshes must match bit for bit); a film frame at 1080 pixels
+/// shows the facets of 8, so it asks for more.
+pub fn generate_cartoon_mesh_detailed(
     ca_coords: &[Vector3<f64>],
     ss_assignments: &[SecondaryStructure],
     plddts: &[f64],
@@ -99,8 +100,8 @@ pub fn generate_cartoon_mesh_with_sides(
     let mut mesh = TriangleMesh::new();
     let n_pts = spline_points.len();
 
-    // Profile ring: an ellipse sampled at `ring_sides` points (8 on screen) for smooth shading
-    let ring_sides = ring_sides.max(3);
+    // Profile ring: a circle or ellipse of `ring_sides` points.
+    let ring_sides = ring_sides.max(4);
     let mut ring_offsets = Vec::with_capacity(ring_sides);
     for i in 0..ring_sides {
         let angle = (i as f64) * std::f64::consts::TAU / (ring_sides as f64);
