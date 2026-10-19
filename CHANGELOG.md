@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-19
+
+Two new commands for design candidates, a glTF export of the ribbon, and the viewers opening
+AlphaFold 3's mmCIF files.
+
 ### Added
 - `proteus diff --parent P CANDIDATE...`: the changed sites of each candidate, local Cα RMSD,
   the predictor's confidence at the sites, and the non-covalent interactions lost and gained,
