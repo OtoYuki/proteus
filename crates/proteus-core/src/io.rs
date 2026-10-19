@@ -76,8 +76,11 @@ fn looks_like_cif(text: &str, hint: Option<&str>) -> bool {
             return false;
         }
     }
+    // mmCIF may open with `#` comment lines before its `data_` block: AlphaFold 3 writes its
+    // terms of use there. A PDB file never starts with `#`.
     text.lines()
-        .find(|l| !l.trim().is_empty())
+        .map(str::trim_start)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| l.starts_with("data_"))
         .unwrap_or(false)
 }
@@ -681,6 +684,23 @@ mod tests {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data")
             .join(name)
+    }
+
+    /// AlphaFold 3's mmCIF opens with comment lines (its terms of use) before `data_`. With no
+    /// file name to go by (the viewers parse text), that must still be read as mmCIF, not as a
+    /// PDB file with no atoms.
+    #[test]
+    fn mmcif_with_leading_comments_is_sniffed_without_a_hint() {
+        let cif = std::fs::read_to_string(data("1crn.cif")).unwrap();
+        let commented = format!(
+            "# By using this file you agree to the legally binding terms of use found at\n\
+             # https://github.com/google-deepmind/alphafold3/blob/main/OUTPUT_TERMS_OF_USE.md.\n\n{cif}"
+        );
+        assert_eq!(sniff_format(&commented, None), StructureFormat::MmCif);
+        let unhinted = open_structure_bytes(commented.as_bytes(), None).unwrap();
+        let hinted = open_structure_bytes(cif.as_bytes(), Some("1crn.cif")).unwrap();
+        assert_eq!(unhinted.atom_count(), hinted.atom_count());
+        assert!(unhinted.atom_count() > 0);
     }
 
     #[test]
