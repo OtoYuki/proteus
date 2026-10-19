@@ -27,6 +27,12 @@ All notable changes to this project are documented here. The format follows
 - rustls 0.23.46; three `zip` advisories about `extract()`, which Proteus never calls, are
   ignored in `deny.toml` with the reason.
 
+### Fixed
+- `view` (terminal, `--web` and `--html`) refused AlphaFold 3's mmCIF models with "No Atoms in
+  the given PDB struct": the viewers parse text without the file name, and the format sniff
+  read the comment lines AlphaFold 3 writes before `data_` (its terms of use) as a PDB file.
+  Comment lines are now skipped. `analyze` was not affected.
+
 ## [0.9.1] — 2026-10-01
 
 Fixes from a bug hunt of the code added since 0.7.0, each with a regression test, and corrected
