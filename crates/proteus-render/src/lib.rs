@@ -2,13 +2,14 @@ pub mod atoms;
 pub mod brand;
 pub mod error;
 pub mod geometry;
+pub mod gltf;
 pub mod rasterizer;
 pub mod terminal;
 pub mod tui;
 pub mod web;
 
 use error::RenderError;
-use geometry::mesh::{generate_cartoon_mesh, TriangleMesh};
+use geometry::mesh::TriangleMesh;
 use nalgebra::Vector3;
 use proteus_core::structure::assign_secondary_structure;
 use rasterizer::buffer::{ColorRGB, Framebuffer};
@@ -430,6 +431,27 @@ fn trace_of(pdb: &pdbtbx::PDB) -> Trace {
 /// Cartoon mesh built segment by segment: the spline never crosses a chain break or a gap in
 /// the model, so no tube is drawn between chains or across missing residues. Vertex residue
 /// indices stay global so rainbow colouring runs over the whole structure.
+/// How finely the ribbon is tessellated: spline samples per residue and points around its
+/// profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RibbonDetail {
+    pub subdivisions_per_residue: usize,
+    pub ring_sides: usize,
+}
+
+impl RibbonDetail {
+    /// What every screen view draws (terminal, browser page, film).
+    pub const SCREEN: Self = Self {
+        subdivisions_per_residue: 4,
+        ring_sides: 8,
+    };
+    /// For a mesh export, which is often rendered large: no facets at 4K.
+    pub const EXPORT: Self = Self {
+        subdivisions_per_residue: 12,
+        ring_sides: 16,
+    };
+}
+
 fn segmented_cartoon_mesh(
     ca: &[Vector3<f64>],
     ss: &[proteus_core::structure::SecondaryStructure],
@@ -437,18 +459,30 @@ fn segmented_cartoon_mesh(
     breaks: &[bool],
     guides: &[Option<Vector3<f64>>],
 ) -> TriangleMesh {
+    segmented_cartoon_mesh_at(ca, ss, plddts, breaks, guides, RibbonDetail::SCREEN)
+}
+
+fn segmented_cartoon_mesh_at(
+    ca: &[Vector3<f64>],
+    ss: &[proteus_core::structure::SecondaryStructure],
+    plddts: &[f64],
+    breaks: &[bool],
+    guides: &[Option<Vector3<f64>>],
+    detail: RibbonDetail,
+) -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
     let mut start = 0usize;
     let n = ca.len();
     for end in 1..=n {
         if end == n || breaks[end] {
             if end - start >= 2 {
-                let mut part = generate_cartoon_mesh(
+                let mut part = geometry::mesh::generate_cartoon_mesh_with_sides(
                     &ca[start..end],
                     &ss[start..end],
                     &plddts[start..end],
                     &guides[start..end],
-                    4,
+                    detail.subdivisions_per_residue,
+                    detail.ring_sides,
                 );
                 for v in &mut part.vertices {
                     v.residue_index += start;
@@ -463,6 +497,14 @@ fn segmented_cartoon_mesh(
 
 /// Parse PDB/mmCIF text into the render bundle: ribbon mesh, disulfide mesh, camera, metrics.
 pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, RenderError> {
+    parse_pdb_structure_at(pdb_content, RibbonDetail::SCREEN)
+}
+
+/// As [`parse_pdb_structure`], with the ribbon tessellated at `detail`.
+pub fn parse_pdb_structure_at(
+    pdb_content: &str,
+    detail: RibbonDetail,
+) -> Result<StructureRenderData, RenderError> {
     let pdb = proteus_core::io::open_structure_bytes(pdb_content.as_bytes(), None)
         .map_err(|e| RenderError::PdbParse(e.to_string()))?;
 
@@ -494,12 +536,13 @@ pub fn parse_pdb_structure(pdb_content: &str) -> Result<StructureRenderData, Ren
         .map(|p| (p - center_f64).norm())
         .fold(0.0f64, f64::max) as f32;
 
-    let ribbon_mesh = segmented_cartoon_mesh(
+    let ribbon_mesh = segmented_cartoon_mesh_at(
         &ca_coords,
         &ss_summary.assignment,
         &plddts,
         &trace.breaks,
         &trace.guides,
+        detail,
     );
     let ca_f32: Vec<Vector3<f32>> = ca_coords
         .iter()
