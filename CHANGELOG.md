@@ -15,18 +15,17 @@ All notable changes to this project are documented here. The format follows
   the diff's; CPU frames are deterministic and the GPU's are tested against them.
 - The rasteriser gains a near clipping plane and a fixed fog range; the ribbon builder takes
   its cross-section's number of sides.
+- `view --gltf FILE.glb`: the ribbon (and disulfides) as binary glTF 2.0 for Blender, Keynote or
+  three.js, with the colour scheme baked in as linear vertex colours and the file's own coordinates in
+  ångström. Exports use a finer tessellation (`RibbonDetail::EXPORT`: 12 samples per residue, 16-sided
+  profile); the screen views are unchanged. The colour per vertex comes from the renderers' own
+  `Rasterizer::base_color`, now shared.
 
 ### Changed
 - Residue pairing (by id, by number, or by alignment) moved from `proteus-render` to
   `proteus_core::pairing`, so the viewer's `--compare` and `diff` pair the same way.
 - rustls 0.23.46; three `zip` advisories about `extract()`, which Proteus never calls, are
   ignored in `deny.toml` with the reason.
-
-- `view --gltf FILE.glb`: the ribbon (and disulfides) as binary glTF 2.0 for Blender, Keynote or
-  three.js, with the colour scheme baked in as linear vertex colours and the file's own coordinates in
-  ångström. Exports use a finer tessellation (`RibbonDetail::EXPORT`: 12 samples per residue, 16-sided
-  profile); the screen views are unchanged. The colour per vertex comes from the renderers' own
-  `Rasterizer::base_color`, now shared.
 
 ## [0.9.1] — 2026-10-01
 
