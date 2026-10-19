@@ -64,6 +64,13 @@ pub struct Args {
     #[arg(long, conflicts_with_all = TERMINAL_ONLY)]
     html: Option<PathBuf>,
 
+    /// Write the ribbon as a binary glTF (.glb) for Blender, Keynote, three.js or a slide: the
+    /// ribbon every Proteus view draws, tessellated finer (12 samples per residue, a 16-sided
+    /// profile) because an export is often rendered large, with --color (or --color-by) baked
+    /// in as vertex colours. Coordinates are the file's own, in ångström
+    #[arg(long, value_name = "FILE.glb", conflicts_with_all = TERMINAL_ONLY)]
+    gltf: Option<PathBuf>,
+
     /// Predicted aligned error to show with the model (.npz, .npy or .json). Without it the
     /// files a predictor writes next to its model are found by name: Boltz `pae_*.npz` and
     /// `confidence_*.json`, AlphaFold DB `*-predicted_aligned_error_v*.json`, ColabFold
@@ -200,6 +207,7 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         height,
         web,
         html,
+        gltf,
         pae,
         color_by,
         higher_is_worse,
@@ -369,6 +377,39 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
     };
     // --color-by opens on its colours unless --color says otherwise.
     let scores_scheme = color_by.is_some() && color.is_none();
+
+    if let Some(path) = &gltf {
+        let mut structure = proteus_render::parse_pdb_structure_at(
+            &pdb_content,
+            proteus_render::RibbonDetail::EXPORT,
+        )
+        .context("Failed to parse structure for the glTF export")?;
+        attach(&mut structure)?;
+        let scheme = if scores_scheme {
+            proteus_render::rasterizer::ColorScheme::Scores
+        } else {
+            color
+                .map(Into::into)
+                .unwrap_or_else(|| structure.default_color_scheme())
+        };
+        let glb = proteus_render::gltf::structure_glb(&structure, scheme);
+        tokio::fs::write(path, &glb)
+            .await
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+        println!(
+            "Wrote {} ({} triangles, {:.1} MB)",
+            path.display(),
+            structure.ribbon_mesh.indices.len()
+                + structure
+                    .disulfide_mesh
+                    .as_ref()
+                    .map_or(0, |m| m.indices.len()),
+            glb.len() as f64 / 1e6
+        );
+        if !(web || html.is_some()) {
+            return Ok(());
+        }
+    }
 
     if web || html.is_some() {
         let mut structure = proteus_render::parse_pdb_structure(&pdb_content)

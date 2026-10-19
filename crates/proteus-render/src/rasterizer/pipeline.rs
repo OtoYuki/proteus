@@ -3,7 +3,7 @@ use super::camera::OrbitCamera;
 use super::shader::{
     plddt_to_color, rainbow_color, secondary_structure_to_color, shade_blinn_phong, ColorScheme,
 };
-use crate::geometry::mesh::TriangleMesh;
+use crate::geometry::mesh::{TriangleMesh, Vertex3D};
 use nalgebra::Vector3;
 
 pub struct Rasterizer {
@@ -36,6 +36,27 @@ impl Rasterizer {
             depth_range: None,
             projected: Vec::new(),
             shaded_colors: Vec::new(),
+        }
+    }
+
+    /// The unlit colour of `v` under `scheme`: what every renderer then shades, and what a mesh
+    /// export carries as its vertex colour. `total_residues` spans the rainbow.
+    pub fn base_color(&self, scheme: ColorScheme, v: &Vertex3D, total_residues: usize) -> ColorRGB {
+        match scheme {
+            ColorScheme::Plddt => plddt_to_color(v.plddt),
+            ColorScheme::SecondaryStructure => secondary_structure_to_color(v.secondary_structure),
+            ColorScheme::Rainbow => rainbow_color(v.residue_index, total_residues),
+            ColorScheme::Solid(c) => c,
+            ColorScheme::Scores => self
+                .residue_colors
+                .get(v.residue_index)
+                .copied()
+                .unwrap_or(super::shader::NO_SCORE),
+            ColorScheme::Interface => self
+                .interface_colors
+                .get(v.residue_index)
+                .copied()
+                .unwrap_or(crate::brand::structure::IFACE_OTHER),
         }
     }
 
@@ -107,24 +128,7 @@ impl Rasterizer {
             let fog_factor = 1.0 - 0.30 * depth_fraction;
 
             let view_normal = rot_mat * v.normal;
-            let base_color = match scheme {
-                ColorScheme::Plddt => plddt_to_color(v.plddt),
-                ColorScheme::SecondaryStructure => {
-                    secondary_structure_to_color(v.secondary_structure)
-                }
-                ColorScheme::Rainbow => rainbow_color(v.residue_index, total_residues),
-                ColorScheme::Solid(c) => c,
-                ColorScheme::Scores => self
-                    .residue_colors
-                    .get(v.residue_index)
-                    .copied()
-                    .unwrap_or(super::shader::NO_SCORE),
-                ColorScheme::Interface => self
-                    .interface_colors
-                    .get(v.residue_index)
-                    .copied()
-                    .unwrap_or(crate::brand::structure::IFACE_OTHER),
-            };
+            let base_color = self.base_color(scheme, v, total_residues);
 
             let lit = shade_blinn_phong(base_color, view_normal);
             self.shaded_colors[i] = lit.scale(fog_factor);

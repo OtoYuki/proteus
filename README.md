@@ -690,6 +690,7 @@ proteus view structure.pdb --backend halfblock --color ss --width 80 --height 36
 proteus view structure.pdb --backend sixel        # or braille, or kitty
 proteus view mutant.pdb --compare wildtype.pdb --interactive
 proteus view structure.pdb --html out.html        # our own self-contained WebGL2 page, works offline
+proteus view structure.pdb --gltf ribbon.glb       # the ribbon as glTF, for Blender, Keynote, three.js
 scripts/gallery.sh                                 # a gallery of such pages (target/gallery/)
 ```
 
@@ -698,6 +699,10 @@ or by sequence alignment, whichever matches most; it superposes only the paired 
 reports how many that was. The RMSD is marked `✓` when the two are the same sequence residue for
 residue, and `!` with a warning otherwise, since the number then describes only the paired part.
 `--web` and `--html` draw one structure and refuse `--compare`.
+`--gltf` writes the same ribbon as a binary glTF 2.0 file, tessellated finer than the screen views
+(12 samples per residue, a 16-sided profile) and coloured by `--color` or `--color-by` as vertex
+colours; coordinates are the file's own, in ångström. Khronos's glTF validator reports no errors or
+warnings on 1CRN, 1B3S and 1AON (3 million triangles, 92 MB).
 
 ```bash
 proteus view <job> --web                                       # PAE and pTM found beside the model
