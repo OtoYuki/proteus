@@ -48,6 +48,10 @@ pub enum Commands {
     Analyze(cmd::analyze::Args),
     /// Cartoon ribbon in the terminal (half-block, Braille, Sixel or kitty graphics)
     View(cmd::view::Args),
+    /// What design candidates changed against their parent: sites, confidence, interactions lost and gained
+    Diff(cmd::diff::Args),
+    /// Film what each candidate changed against its parent: an MP4, a still and the diff
+    Film(cmd::film::Args),
     /// Write a variant library: alanine scan or site-saturation mutagenesis
     Mutate(cmd::mutate::Args),
     /// Fold a variant library, analyse every model, rank, and export

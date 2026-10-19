@@ -73,6 +73,30 @@ check "the interface table" "$BIN" analyze "$CPLX" --interface I:E
 expect "…sorted by buried surface when there is no PAE" 'sorted by dSASA'
 check "a chain that is not there" bash -c "'$BIN' analyze '$CPLX' --interface X 2>&1; true"
 expect "…is named" "no protein chain 'X'"
+# --- diff and film: BPTI Lys15 truncated to alanine against the complex
+awk '{ if (($1=="ATOM"||$1=="HETATM") && substr($0,22,1)=="I" && substr($0,23,4)+0==15) {
+         a=substr($0,13,4); gsub(/ /,"",a);
+         if (a=="N"||a=="CA"||a=="C"||a=="O"||a=="CB") print substr($0,1,17) "ALA" substr($0,21) }
+       else print }' "$CPLX" >"$WORK/k15a.pdb"
+check "diff a point mutant" "$BIN" diff --parent "$CPLX" "$WORK/k15a.pdb"
+expect "the site, in the parent's numbering" 'K15A'
+expect "its interactions are lost, at the interface" 'lost .*interface'
+expect "…because the side chain is gone" 'removed: LYS 15'
+cp "$WORK/k15a.pdb" "$WORK/k15a_again.pdb"
+check "diff --csv" "$BIN" diff --parent "$CPLX" "$WORK/k15a.pdb" "$WORK/k15a_again.pdb" --csv "$WORK/diff.csv"
+check "csv: header and two rows" test "$(wc -l <"$WORK/diff.csv")" -eq 3
+check "a structure against itself changes nothing" "$BIN" diff --parent "$CPLX" "$CPLX"
+expect "…says so" 'no residue differs from the parent'
+check "film still (CPU reference)" "$BIN" film --parent "$CPLX" "$WORK/k15a.pdb" --still-only --renderer cpu --out "$WORK/films"
+check "…png written" test -s "$WORK/films/k15a.png"
+check "…json written" grep -q '"notation": "K15A"' "$WORK/films/k15a.json"
+check "film refuses an unrelated parent" bash -c "! '$BIN' film --parent '$CPLX' '$PDB' --still-only --out '$WORK/films' 2>'$WORK/err'"
+check "…and says why" grep -q 'not the same' "$WORK/err"
+if command -v ffmpeg >/dev/null; then
+    check "film mp4" "$BIN" film --parent "$CPLX" "$WORK/k15a.pdb" --fps 8 --pace 0.4 --aspect 16:9 --out "$WORK/films"
+    check "…mp4 written" test -s "$WORK/films/k15a.mp4"
+fi
+
 check "a bad file fails the run but not the others" bash -c "! '$BIN' analyze '$WORK/models' '$FASTA' --export '$WORK/qc2.json' 2>'$WORK/err'"
 check "…and the good rows are still written" grep -q '"model": "a"' "$WORK/qc2.json"
 check "…and the failure is named" grep -q 'failed: .*1crn.fasta' "$WORK/err"

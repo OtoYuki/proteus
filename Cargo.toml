@@ -80,6 +80,16 @@ comfy-table = "8"
 crossterm = "0.29"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 base64 = "0.23"
+# Caption text burned into `proteus film` frames (pure Rust, no system fonts): skrifa reads
+# the outlines (fontations, maintained), ab_glyph_rasterizer turns them into coverage.
+skrifa = "0.48"
+ab_glyph_rasterizer = "0.1"
+# The film's still (pure Rust; flate2 is already in the tree).
+png = "0.18"
+# GPU film renderer (Vulkan/Metal/DX12, offscreen); optional, behind proteus-render's `gpu`.
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "metal", "dx12", "std"] }
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
 unicode-width = "0.2"
 
 # Diagnostics & Docs

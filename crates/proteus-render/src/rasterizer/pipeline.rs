@@ -14,6 +14,12 @@ pub struct Rasterizer {
     pub interface_colors: Vec<ColorRGB>,
     pub enable_ssao: bool,
     pub enable_outlines: bool,
+    /// Fragments nearer than this depth (view-space, Å; smaller is nearer) are not drawn: a
+    /// clipping slab that opens the protein in front of a buried site.
+    pub clip_near: Option<f32>,
+    /// Depth range the fog runs over. `None` fits it to each mesh, which is right for one mesh
+    /// and wrong for several composited into one frame (each would get its own fog).
+    pub depth_range: Option<(f32, f32)>,
     projected: Vec<Vector3<f32>>,
     shaded_colors: Vec<ColorRGB>,
 }
@@ -26,6 +32,8 @@ impl Rasterizer {
             interface_colors: Vec::new(),
             enable_ssao: true,
             enable_outlines: true,
+            clip_near: None,
+            depth_range: None,
             projected: Vec::new(),
             shaded_colors: Vec::new(),
         }
@@ -85,6 +93,10 @@ impl Rasterizer {
             max_z = max_z.max(sz);
         }
 
+        if let Some((lo, hi)) = self.depth_range {
+            min_z = lo;
+            max_z = hi;
+        }
         let z_range = (max_z - min_z).max(1e-3);
 
         // Gouraud lighting with atmospheric depth cueing (fog)
@@ -121,6 +133,7 @@ impl Rasterizer {
         // 2. Triangle rasterization pass
         let width_f = fb.width as f32;
         let height_f = fb.height as f32;
+        let clip = self.clip_near.unwrap_or(f32::NEG_INFINITY);
 
         for tri in &mesh.indices {
             let idx0 = tri[0] as usize;
@@ -138,6 +151,9 @@ impl Rasterizer {
             // Determinant (twice the signed area of triangle in screen space)
             let det = (p1.x - p0.x) * (p2.y - p0.y) - (p2.x - p0.x) * (p1.y - p0.y);
             if det.abs() < 1e-5 {
+                continue;
+            }
+            if p0.z < clip && p1.z < clip && p2.z < clip {
                 continue;
             }
             let inv_det = 1.0 / det;
@@ -181,6 +197,9 @@ impl Rasterizer {
                     const EPS: f32 = -1e-4;
                     if w0 >= EPS && w1 >= EPS && w2 >= EPS {
                         let depth = w0 * p0.z + w1 * p1.z + w2 * p2.z;
+                        if depth < clip {
+                            continue;
+                        }
                         let r = (w0 * c0_r + w1 * c1_r + w2 * c2_r).clamp(0.0, 255.0) as u8;
                         let g = (w0 * c0_g + w1 * c1_g + w2 * c2_g).clamp(0.0, 255.0) as u8;
                         let b = (w0 * c0_b + w1 * c1_b + w2 * c2_b).clamp(0.0, 255.0) as u8;
@@ -197,8 +216,8 @@ impl Rasterizer {
             if !covered {
                 let cx = (p0.x + p1.x + p2.x) / 3.0;
                 let cy = (p0.y + p1.y + p2.y) / 3.0;
-                if cx >= 0.0 && cy >= 0.0 && cx < width_f && cy < height_f {
-                    let depth = (p0.z + p1.z + p2.z) / 3.0;
+                let depth = (p0.z + p1.z + p2.z) / 3.0;
+                if cx >= 0.0 && cy >= 0.0 && cx < width_f && cy < height_f && depth >= clip {
                     let r = ((c0_r + c1_r + c2_r) / 3.0).clamp(0.0, 255.0) as u8;
                     let g = ((c0_g + c1_g + c2_g) / 3.0).clamp(0.0, 255.0) as u8;
                     let b = ((c0_b + c1_b + c2_b) / 3.0).clamp(0.0, 255.0) as u8;
@@ -314,6 +333,49 @@ mod tests {
             secondary_structure: SecondaryStructure::Coil,
             residue_index: 0,
         }
+    }
+
+    /// The clipping slab removes what is in front of it and nothing behind it.
+    #[test]
+    fn clip_near_removes_only_fragments_in_front_of_it() {
+        let camera = OrbitCamera::new(Vector3::zeros(), 21.6);
+        let quad = |z: f32| {
+            let mut m = TriangleMesh::new();
+            m.vertices = vec![
+                vert(-10.0, -10.0, z),
+                vert(10.0, -10.0, z),
+                vert(10.0, 10.0, z),
+                vert(-10.0, 10.0, z),
+            ];
+            m.indices = vec![[0, 1, 2], [0, 2, 3]];
+            m
+        };
+        // Depth is −z: the quad at z = +5 is nearer (depth −5) than the one at z = −5.
+        let mut r = Rasterizer::new(ColorScheme::Solid(ColorRGB::new(200, 0, 0)));
+        r.enable_ssao = false;
+        r.enable_outlines = false;
+        r.clip_near = Some(0.0);
+        let mut fb = Framebuffer::new(48, 48);
+        r.rasterize_mesh(
+            &quad(5.0),
+            &camera,
+            &mut fb,
+            ColorScheme::Solid(ColorRGB::new(200, 0, 0)),
+        );
+        assert!(
+            fb.depths.iter().all(|d| !d.is_finite()),
+            "the near quad was clipped away"
+        );
+        r.rasterize_mesh(
+            &quad(-5.0),
+            &camera,
+            &mut fb,
+            ColorScheme::Solid(ColorRGB::new(0, 200, 0)),
+        );
+        assert!(
+            fb.depths.iter().any(|d| d.is_finite()),
+            "the far quad is drawn"
+        );
     }
 
     /// A tube thinner than one pixel that straddles a row boundary covers no pixel centre;
