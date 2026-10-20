@@ -1,15 +1,11 @@
 <div align="center">
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/proteus-lockup-dark.svg">
-    <img alt="proteus, a s1re.sh project" src="docs/brand/proteus-lockup-light.svg" width="520">
-  </picture>
-</h1>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/proteus-lockup-dark.svg">
+  <img alt="proteus, a s1re.sh project" src="docs/brand/proteus-lockup-light.svg" width="520">
+</picture>
 
 <code>~ $ triage for protein design campaigns</code>
-
-<br><br>
 
 [![ci](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml)
 [![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
