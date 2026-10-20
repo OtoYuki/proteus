@@ -10,16 +10,17 @@ script. This directory holds what those channels need.
 conda-forge already has an unrelated `proteus` (a numerical-modelling toolkit), and Bioconda
 does not accept a name that exists there. The installed command is still `proteus`. It builds the binary
 from the release tarball with conda-forge's Rust and C toolchains, bundles third-party licences
-with `cargo-bundle-licenses`, and tests `analyze` on crambin and on trypsin–BPTI with
-`--interface`.
+with `cargo-bundle-licenses`, and tests `--version`, `analyze` and `analyze --interface` on a
+two-chain PDB written by the test itself (BioContainers re-runs the tests in the bare image, with
+no source files).
 
-It has not been submitted yet. Submission waits for a release tag that contains
-`--interface`. At that release:
+It is submitted as [bioconda-recipes#69789](https://github.com/bioconda/bioconda-recipes/pull/69789)
+and waits for a maintainer's review. At each release:
 
 ```bash
-git tag v0.10.0 && git push origin v0.10.0     # the release workflow builds binaries and the image
-packaging/bioconda/update.sh 0.10.0          # fills in the version and the tarball's sha256
-# then copy bioconda/proteus-bio/ into recipes/proteus-bio/ of a bioconda-recipes fork and open a PR
+git tag v0.11.0 && git push origin v0.11.0     # the release workflow builds binaries and the image
+packaging/bioconda/update.sh 0.11.0          # fills in the version and the tarball's sha256
+# then copy bioconda/proteus-bio/ into recipes/proteus-bio/ of the bioconda-recipes fork
 ```
 
 Once the package exists, BioContainers publishes `quay.io/biocontainers/proteus-bio`
