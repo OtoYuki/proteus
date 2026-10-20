@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-20
+
+`analyze --interface` names the `ipSAE_min` cutoff fitted for the predictor that wrote the models,
+instead of leaving AlphaFold 3's published 0.61 to be applied to every predictor.
+
 ### Added
 - `analyze --interface` prints a fitted `ipSAE_min` cutoff for the predictor that wrote each model
   (ColabFold 0.585, OpenFold3 0.683, Boltz 0.711 for Boltz-1 and 0.766 for Boltz-2), once per
@@ -1043,7 +1048,9 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/OtoYuki/proteus/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/OtoYuki/proteus/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/OtoYuki/proteus/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/OtoYuki/proteus/compare/c7b0761...v0.9.0
 [0.8.0]: https://github.com/OtoYuki/proteus/compare/v0.7.0...c7b0761
