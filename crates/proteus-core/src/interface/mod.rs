@@ -15,6 +15,7 @@
 //! unsatisfied hydrogen bonds need an energy function and explicit hydrogens, and are not
 //! computed.
 
+pub mod calibration;
 pub mod sc;
 
 use crate::error::CoreError;

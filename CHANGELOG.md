@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `analyze --interface` prints a fitted `ipSAE_min` cutoff for the predictor that wrote each model
+  (ColabFold 0.585, OpenFold3 0.683, Boltz 0.711 for Boltz-1 and 0.766 for Boltz-2), once per
+  predictor and to stderr only. The published 0.61 was fitted on AlphaFold 3 scores; AlphaFold 3
+  gets no line, and Protenix and Chai-1 get no cutoff because neither was folded in the study. The
+  line states where the seed-to-seed spread was measured: OpenFold3 only, two targets, where a
+  different seed put 5-15% of designs on the other side of 0.61.
+
 ## [0.10.0] — 2026-10-19
 
 Two new commands for design candidates, a glTF export of the ribbon, and the viewers opening
