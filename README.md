@@ -26,15 +26,11 @@ geometry checks, secondary structure, contacts. Every number that has a referenc
 is checked against it on every push, and the ones that have none are labelled as unchecked. The
 interface ranking is measured against lab results on two published datasets.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/img/per-target-dark.svg">
-  <img alt="Average precision of ranking each target's designs by ipSAE_min, for 15 targets, against a random order: ipSAE_min is above random on 14 of them and ties on IL10Ra, from 1.00 on LTK down to 0.09 on pMHC_SILSY1." src="docs/img/per-target-light.svg">
-</picture>
-
-<sub><code>ipsae_min</code> on the AlphaFold 3 models of the 3 669 lab-tested designs in Overath et al.
-2025, ranked within each target. Dot: the ranking's average precision. Ring: a random order (the
-target's binder rate). Drawn from <a href="validate/binders/last_run.md"><code>validate/binders/last_run.md</code></a>;
-a test fails if the picture and the report disagree.</sub>
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=UUzgT2dDDLg"><img src="docs/media/film-poster.jpg" width="880"
+     alt="A still from the Proteus film: an AlphaFold 3 model of a designed binder (clay) on PD-L1 (tide), its interface and sequence labelled, with a play button"></a>
+</p>
+<p align="center"><sub>The film, 70 s, on YouTube. Every number in it comes from a real run.</sub></p>
 
 ## Quick start
 
@@ -125,6 +121,16 @@ The 3 669 designs in the Overath et al. 2025 dataset that have a lab result (394
 targets), on their AlphaFold 3 models (`make validate-binders`). A campaign ranks its own designs
 against one target, so the score is average precision (AP) per target, averaged over the 15. A
 random ranking scores the binder rate, 0.131 on average.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/per-target-dark.svg">
+  <img alt="Average precision of ranking each target's designs by ipSAE_min, for 15 targets, against a random order: ipSAE_min is above random on 14 of them and ties on IL10Ra, from 1.00 on LTK down to 0.09 on pMHC_SILSY1." src="docs/img/per-target-light.svg">
+</picture>
+
+<sub><code>ipsae_min</code> on the AlphaFold 3 models of the 3 669 lab-tested designs in Overath et al.
+2025, ranked within each target. Dot: the ranking's average precision. Ring: a random order (the
+target's binder rate). Drawn from <a href="validate/binders/last_run.md"><code>validate/binders/last_run.md</code></a>;
+a test fails if the picture and the report disagree.</sub>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/img/scores-dark.svg">
