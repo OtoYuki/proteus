@@ -1,5 +1,5 @@
 [package]
-name = "proteus-server"
+name = "proteus-bio-server"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,14 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Headless Axum daemon (proteusd) with Server-Sent Events and OpenAPI documentation for Proteus."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "ga4gh", "tes", "openapi", "protein"]
+categories = ["science::bioinformatics", "web-programming::http-server"]
+
+# Published as proteus-bio-server; the library keeps its import name.
+[lib]
+name = "proteus_server"
 
 [dependencies]
 proteus-core = { workspace = true, features = ["openapi"] }

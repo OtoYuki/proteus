@@ -46,5 +46,5 @@ jobs:
           key: esm2-t6-8M-${{ hashFiles('crates/proteus-esm/src/hub.rs') }}
       - name: Parity and forward-pass-count tests
         run: |
-          cargo test -p proteus-esm --release -- --ignored --nocapture \
+          cargo test -p proteus-bio-esm --release -- --ignored --nocapture \
             esm2_t6_8m_matches_transformers library_scoring_reuses_forward_passes

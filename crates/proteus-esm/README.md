@@ -1,10 +1,10 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-esm
+# proteus-bio-esm
 
 ```toml
 [dependencies]
-proteus-esm = "0.9"
+proteus-bio-esm = "0.11"  # use proteus_esm::…
 ```
 
 ESM-2 protein language model inference in pure Rust on [candle](https://github.com/huggingface/candle):

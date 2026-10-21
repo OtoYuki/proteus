@@ -6,7 +6,7 @@
 //! no lost rows, readers not starved) and print the observed throughput, so any performance
 //! claim about the storage layer comes from a measurement rather than an assumption.
 //!
-//! Run: `cargo test -p proteus-storage --release --test concurrency -- --nocapture`.
+//! Run: `cargo test -p proteus-bio-storage --release --test concurrency -- --nocapture`.
 
 use std::sync::Arc;
 use std::time::Instant;

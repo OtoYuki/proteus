@@ -1,7 +1,7 @@
 # Benchmarks
 
 Measured on `archlinux` (x86_64), `rustc 1.98.1 (48a229cea 2026-09-01)`, Python 3.12.13, mdtraj 1.11.1.post2.
-Rust: criterion median (`cargo bench -p proteus-core`). Python: median of 7 calls after a warm-up, metric only
+Rust: criterion median (`cargo bench -p proteus-bio-core`). Python: median of 7 calls after a warm-up, metric only
 (parsing excluded on both sides), on protein heavy atoms. Same structure files, same metric definition.
 Both sides are measured back-to-back in one `bench/run.sh` on a desktop machine, so absolute times move
 a few per cent with machine load; the **ratios** are the stable quantity and are what the README quotes.
@@ -113,7 +113,7 @@ Reproduce: `bench/proteingym.py --assays 5 --max-len 60 --model facebook/esm2_t1
 
 SQLite in WAL mode permits many readers but **one writer at a time**, and Proteus fans screening
 jobs across a worker pool, so every worker's status update contends for that writer. Measured by
-`cargo test -p proteus-storage --release --test concurrency -- --nocapture` on the host above:
+`cargo test -p proteus-bio-storage --release --test concurrency -- --nocapture` on the host above:
 
 | scenario | result |
 |---|---|

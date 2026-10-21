@@ -1,5 +1,5 @@
 [package]
-name = "proteus-engine"
+name = "proteus-bio-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,14 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Asynchronous DAG pipeline scheduler and OCI/Podman container runner for Proteus."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "ga4gh", "tes", "workflow", "containers"]
+categories = ["science::bioinformatics"]
+
+# Published as proteus-bio-engine; the library keeps its import name.
+[lib]
+name = "proteus_engine"
 
 [dependencies]
 proteus-core = { workspace = true }

@@ -1,5 +1,5 @@
 [package]
-name = "proteus-esm"
+name = "proteus-bio-esm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,10 @@ repository.workspace = true
 description = "ESM-2 protein language model inference in pure Rust (candle): masked-marginal mutation scoring, deep mutational scans."
 keywords = ["bioinformatics", "protein", "esm", "language-model", "candle"]
 categories = ["science::bioinformatics"]
+
+# Published as proteus-bio-esm; the library keeps its import name.
+[lib]
+name = "proteus_esm"
 
 [dependencies]
 candle-core = { workspace = true }

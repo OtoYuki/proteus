@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-core
+# proteus-bio-core
 
 Domain models and the biophysics of [Proteus](https://github.com/OtoYuki/proteus), in pure
 Rust: structure I/O, backbone geometry, DSSP-based secondary structure, Top8000 Ramachandran

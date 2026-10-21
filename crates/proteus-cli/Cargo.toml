@@ -1,5 +1,5 @@
 [package]
-name = "proteus-cli"
+name = "proteus-bio"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,10 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Unified CLI binary for Proteus: mutation, screening, biophysical analysis, and terminal 3D inspection."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "protein-design", "alphafold", "boltz", "ipsae"]
+categories = ["science::bioinformatics", "command-line-utilities"]
 
 [[bin]]
 name = "proteus"

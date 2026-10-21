@@ -9,7 +9,7 @@
 //! over-detection is the cost of working without hydrogens and is gated, not hidden.
 //!
 //! Reference: `validate/reference/hbonds/*.json` from `validate/hbond_reference.py`.
-//! Run: `make validate` (needs `validate/corpus/`), or `cargo test -p proteus-core --test hbond_validation -- --ignored`.
+//! Run: `make validate` (needs `validate/corpus/`), or `cargo test -p proteus-bio-core --test hbond_validation -- --ignored`.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

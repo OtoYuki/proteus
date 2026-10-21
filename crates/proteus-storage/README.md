@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-storage
+# proteus-bio-storage
 
 Persistence for [Proteus](https://github.com/OtoYuki/proteus): an embedded SQLite repository
 (SQLx, WAL mode, embedded migrations) for sequences, jobs, predictions, metrics and TES tasks; a

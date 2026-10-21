@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-dssp
+# proteus-bio-dssp
 
 Pure-Rust Kabsch–Sander DSSP secondary-structure assignment.
 
@@ -38,7 +38,7 @@ prefer it:
 
 ```toml
 [dependencies]
-proteus-dssp = "0.9"
+proteus-bio-dssp = "0.11"  # use proteus_dssp::…
 ```
 
 ```rust

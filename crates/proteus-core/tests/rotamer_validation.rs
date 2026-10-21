@@ -6,7 +6,7 @@
 //! `rotalyze(outliers_only=False)`). Ignored by default because it needs the downloaded corpus:
 //!
 //! ```text
-//! cargo test -p proteus-core --release --test rotamer_validation -- --ignored --nocapture
+//! cargo test -p proteus-bio-core --release --test rotamer_validation -- --ignored --nocapture
 //! ```
 
 use std::collections::BTreeMap;

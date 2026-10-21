@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-cli
+# proteus-bio
 
 The `proteus` command-line binary of [Proteus](https://github.com/OtoYuki/proteus).
 
@@ -24,7 +24,7 @@ Install from the [GitHub releases](https://github.com/OtoYuki/proteus/releases) 
 macOS, x86_64 and arm64), as the `ghcr.io/otoyuki/proteus` image, or from source:
 
 ```bash
-cargo install --git https://github.com/OtoYuki/proteus proteus-cli
+cargo install proteus-bio
 ```
 
 This crate is not published to crates.io — the name belongs to an unrelated project — so the

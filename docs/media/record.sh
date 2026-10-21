@@ -4,7 +4,7 @@
 #   docs/media/record.sh            # all of them
 #   docs/media/record.sh loop       # just docs/media/loop.gif
 #
-# Needs: cargo build --release -p proteus-cli, asciinema (uv tool install asciinema), agg 1.9+
+# Needs: cargo build --release -p proteus-bio, asciinema (uv tool install asciinema), agg 1.9+
 # (cargo install --git https://github.com/asciinema/agg; or AGG=/path/to/agg), tmux, and the
 # Geist Mono font (falls back to JetBrains Mono). The tes demo also needs a container runtime,
 # the image (`podman build -t localhost/proteus:qa .`) and nextflow (or NF=/path/to/nextflow).

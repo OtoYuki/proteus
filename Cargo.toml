@@ -24,14 +24,15 @@ keywords = ["bioinformatics", "protein-engineering", "biophysics", "terminal-gra
 categories = ["science::bioinformatics", "command-line-utilities", "rendering::engine"]
 
 [workspace.dependencies]
-# Internal workspace crates
-proteus-core = { path = "crates/proteus-core", version = "0.11.0" }
-proteus-storage = { path = "crates/proteus-storage", version = "0.11.0" }
-proteus-engine = { path = "crates/proteus-engine", version = "0.11.0" }
-proteus-server = { path = "crates/proteus-server", version = "0.11.0" }
-proteus-render = { path = "crates/proteus-render", version = "0.11.0" }
-proteus-dssp = { path = "crates/proteus-dssp", version = "0.11.0" }
-proteus-esm = { path = "crates/proteus-esm", version = "0.11.0" }
+# Internal workspace crates. Published as proteus-bio-* (the short names are taken on
+# crates.io by unrelated projects); the keys and the library names stay proteus-*.
+proteus-core = { path = "crates/proteus-core", version = "0.11.0", package = "proteus-bio-core" }
+proteus-storage = { path = "crates/proteus-storage", version = "0.11.0", package = "proteus-bio-storage" }
+proteus-engine = { path = "crates/proteus-engine", version = "0.11.0", package = "proteus-bio-engine" }
+proteus-server = { path = "crates/proteus-server", version = "0.11.0", package = "proteus-bio-server" }
+proteus-render = { path = "crates/proteus-render", version = "0.11.0", package = "proteus-bio-render" }
+proteus-dssp = { path = "crates/proteus-dssp", version = "0.11.0", package = "proteus-bio-dssp" }
+proteus-esm = { path = "crates/proteus-esm", version = "0.11.0", package = "proteus-bio-esm" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }

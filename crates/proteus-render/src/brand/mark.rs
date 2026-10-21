@@ -358,7 +358,7 @@ mod tests {
 
 #[cfg(test)]
 mod preview {
-    /// `cargo test -p proteus-render --lib brand::mark::preview -- --ignored --nocapture`
+    /// `cargo test -p proteus-bio-render --lib brand::mark::preview -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn print_the_fold() {
