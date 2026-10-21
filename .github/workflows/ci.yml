@@ -127,3 +127,26 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  python:
+    name: python wheel (proteus-bio)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\ncrates/proteus-py -> target"
+      - uses: astral-sh/setup-uv@v6
+      # The CLI is the parity reference for the Python rows.
+      - run: cargo build --release -p proteus-bio
+      - name: build and test the wheel
+        working-directory: crates/proteus-py
+        env:
+          RUSTFLAGS: ""
+        run: |
+          uv venv -p 3.12
+          export VIRTUAL_ENV="$PWD/.venv"
+          uv pip install maturin pyarrow pandas pytest
+          .venv/bin/maturin develop --release
+          .venv/bin/python -m pytest -q tests

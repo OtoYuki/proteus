@@ -7,7 +7,7 @@
 use crate::confidence::ConfidenceSource;
 use crate::error::CoreError;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Empirical radius of gyration of a folded, globular protein of `n` residues, in Å
 /// (Rg ≈ 2.2·N^0.38; the same law the fitness score's compactness term uses).
@@ -233,6 +233,100 @@ pub fn is_structure_file_name(path: &Path) -> bool {
     [".pdb", ".ent", ".cif", ".mmcif"]
         .iter()
         .any(|ext| name.ends_with(ext))
+}
+
+/// A path that could not be analysed, and why.
+pub type Failure = (PathBuf, String);
+
+/// Expand directories into the structure files beneath them, sorted, keeping explicit file
+/// arguments in the order given. An explicit file is taken whatever its extension. Each
+/// directory is walked once by its canonical path, so a symlink loop (`models/loop -> ..`)
+/// or a directory reachable twice does not repeat files, and each file is listed once however
+/// it was reached. A path that does not exist, a directory with no structure files and a
+/// subdirectory that cannot be read are returned as failures, not errors.
+pub fn collect_structure_files(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<Failure>) {
+    use std::collections::HashSet;
+    fn walk(
+        dir: &Path,
+        out: &mut Vec<PathBuf>,
+        unreadable: &mut Vec<Failure>,
+        seen_dirs: &mut HashSet<PathBuf>,
+    ) {
+        if let Ok(real) = dir.canonicalize() {
+            if !seen_dirs.insert(real) {
+                return;
+            }
+        }
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
+            Err(e) => {
+                unreadable.push((dir.to_path_buf(), format!("cannot read directory: {e}")));
+                return;
+            }
+        };
+        entries.sort();
+        for p in entries {
+            if p.is_dir() {
+                walk(&p, out, unreadable, seen_dirs);
+            } else if is_structure_file_name(&p) {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut seen_dirs = HashSet::new();
+    for p in paths {
+        if p.is_dir() {
+            let (files, failed) = (out.len(), unreadable.len());
+            walk(p, &mut out, &mut unreadable, &mut seen_dirs);
+            if out.len() == files && unreadable.len() == failed {
+                unreadable.push((
+                    p.clone(),
+                    "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under it".into(),
+                ));
+            }
+        } else if p.exists() {
+            out.push(p.clone());
+        } else {
+            unreadable.push((p.clone(), "no such file or directory".into()));
+        }
+    }
+    let mut seen_files = HashSet::new();
+    out.retain(|p| seen_files.insert(p.canonicalize().unwrap_or_else(|_| p.clone())));
+    (out, unreadable)
+}
+
+/// Analyse `inputs` on `jobs` threads, calling `on_done` after each. Results come back in
+/// input order; a structure that fails gives its error as text.
+pub fn analyze_many(
+    inputs: &[PathBuf],
+    opts: &QcOptions,
+    jobs: usize,
+    on_done: &(dyn Fn() + Sync),
+) -> Vec<Result<StructureQc, String>> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+    let next = AtomicUsize::new(0);
+    let results: Mutex<Vec<Option<Result<StructureQc, String>>>> =
+        Mutex::new(vec![None; inputs.len()]);
+    std::thread::scope(|s| {
+        for _ in 0..jobs.clamp(1, inputs.len().max(1)) {
+            s.spawn(|| loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = inputs.get(i) else { break };
+                let r = structure_qc_with(path, opts).map_err(|e| e.to_string());
+                results.lock().unwrap_or_else(|p| p.into_inner())[i] = Some(r);
+                on_done();
+            });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_else(|p| p.into_inner())
+        .into_iter()
+        .map(|r| r.unwrap_or_else(|| Err("not analysed".into())))
+        .collect()
 }
 
 pub(crate) fn one_letter(three: &str) -> char {

@@ -448,6 +448,9 @@ podman run --rm -p 8080:8080 -v /run/user/$(id -u)/podman/podman.sock:/var/run/d
 
 Bioconda (`proteus-bio`) is submitted and waits for review; see [`packaging/`](packaging/README.md).
 
+Python: [`crates/proteus-py`](crates/proteus-py/README.md) builds a `proteus_bio` wheel whose
+`analyze()` returns the same rows as a `pyarrow.Table` (`maturin build --release`); not on PyPI yet.
+
 ---
 
 ## Command reference

@@ -7,9 +7,7 @@
 use super::prelude::*;
 use proteus_core::interface::calibration::{cutoff_advice, detect_predictor};
 use proteus_core::interface::InterfaceSpec;
-use proteus_core::qc::{is_structure_file_name, structure_qc_with, QcOptions, StructureQc};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use proteus_core::qc::{QcOptions, StructureQc};
 
 /// Arguments of `proteus analyze`.
 #[derive(clap::Args, Debug)]
@@ -61,70 +59,18 @@ pub struct Args {
     top: usize,
 }
 
-/// Expand directories into the structure files beneath them, sorted, keeping explicit file
-/// arguments in the order given. An explicit file is taken whatever its extension. Each
-/// directory is walked once by its canonical path, so a symlink loop (`models/loop -> ..`)
-/// or a directory reachable twice does not repeat files, and each file is listed once however
-/// it was reached. A subdirectory that cannot be read is reported, not fatal.
 /// A path that could not be analysed, and why.
-pub(crate) type Failure = (PathBuf, String);
+pub(crate) type Failure = proteus_core::qc::Failure;
 
+/// [`proteus_core::qc::collect_structure_files`], failing outright when the only path given
+/// could not be used (one mistyped path among many is reported, not fatal).
 pub(crate) fn collect_inputs(paths: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<Failure>)> {
-    use std::collections::HashSet;
-    fn walk(
-        dir: &Path,
-        out: &mut Vec<PathBuf>,
-        unreadable: &mut Vec<Failure>,
-        seen_dirs: &mut HashSet<PathBuf>,
-    ) {
-        if let Ok(real) = dir.canonicalize() {
-            if !seen_dirs.insert(real) {
-                return;
-            }
-        }
-        let mut entries: Vec<PathBuf> = match std::fs::read_dir(dir) {
-            Ok(rd) => rd.filter_map(|e| e.ok().map(|e| e.path())).collect(),
-            Err(e) => {
-                unreadable.push((dir.to_path_buf(), format!("cannot read directory: {e}")));
-                return;
-            }
-        };
-        entries.sort();
-        for p in entries {
-            if p.is_dir() {
-                walk(&p, out, unreadable, seen_dirs);
-            } else if is_structure_file_name(&p) {
-                out.push(p);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    let mut unreadable = Vec::new();
-    let mut seen_dirs = HashSet::new();
-    for p in paths {
-        if p.is_dir() {
-            let (files, failed) = (out.len(), unreadable.len());
-            walk(p, &mut out, &mut unreadable, &mut seen_dirs);
-            if out.len() == files && unreadable.len() == failed {
-                unreadable.push((
-                    p.clone(),
-                    "no structure files (.pdb, .ent, .cif, .mmcif, optionally .gz) under it".into(),
-                ));
-            }
-        } else if p.exists() {
-            out.push(p.clone());
-        } else {
-            // One mistyped path among many is a failure to report, not a reason to drop the rest.
-            unreadable.push((p.clone(), "no such file or directory".into()));
-        }
-    }
+    let (out, unreadable) = proteus_core::qc::collect_structure_files(paths);
     if out.is_empty() {
         if let [(p, why)] = unreadable.as_slice() {
             bail!("{}: {why}", p.display());
         }
     }
-    let mut seen_files = HashSet::new();
-    out.retain(|p| seen_files.insert(p.canonicalize().unwrap_or_else(|_| p.clone())));
     Ok((out, unreadable))
 }
 
@@ -163,15 +109,12 @@ fn forced_source(arg: ConfidenceSourceArg) -> Option<ConfidenceSource> {
     }
 }
 
-/// Analyse `inputs` on `jobs` threads. Results come back in input order.
+/// Analyse `inputs` on `jobs` threads, with a progress bar. Results come back in input order.
 fn analyze_many(
     inputs: &[PathBuf],
     opts: &QcOptions,
     jobs: usize,
 ) -> Vec<std::result::Result<StructureQc, String>> {
-    let next = AtomicUsize::new(0);
-    let results: Mutex<Vec<Option<std::result::Result<StructureQc, String>>>> =
-        Mutex::new(vec![None; inputs.len()]);
     let bar = ProgressBar::new(inputs.len() as u64);
     bar.set_style(
         ProgressStyle::with_template(&format!(
@@ -184,24 +127,9 @@ fn analyze_many(
     if inputs.len() < 2 {
         bar.set_draw_target(indicatif::ProgressDrawTarget::hidden());
     }
-    std::thread::scope(|s| {
-        for _ in 0..jobs.clamp(1, inputs.len().max(1)) {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::Relaxed);
-                let Some(path) = inputs.get(i) else { break };
-                let r = structure_qc_with(path, opts).map_err(|e| e.to_string());
-                results.lock().unwrap_or_else(|p| p.into_inner())[i] = Some(r);
-                bar.inc(1);
-            });
-        }
-    });
+    let results = proteus_core::qc::analyze_many(inputs, opts, jobs, &|| bar.inc(1));
     bar.finish_and_clear();
     results
-        .into_inner()
-        .unwrap_or_else(|p| p.into_inner())
-        .into_iter()
-        .map(|r| r.unwrap_or_else(|| Err("not analysed".into())))
-        .collect()
 }
 
 fn opt(v: Option<f64>, prec: usize) -> String {
