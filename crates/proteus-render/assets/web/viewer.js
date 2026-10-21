@@ -95,6 +95,7 @@
 
   buildPanel();
   buildSequence();
+  setupJump();
   showLegend();
   updateSelectionUI();
   // Narrow windows: the panel is a bottom sheet, and the dock sits on it.
@@ -974,6 +975,7 @@
           if (!sel.set.size) { notice('nothing selected to focus on'); break; }
           focus(true);
           break;
+        case '/': openJump(); e.preventDefault(); break;
         case 'm':
           measuring = !measuring;
           if (!measuring) finishMeasure();
@@ -1096,6 +1098,40 @@
     }
     const L = meta.labels;
     return L.name[i] + ' ' + (L.chain[i].trim() ? L.chain[i] + ':' : '') + L.number[i] + L.icode[i];
+  }
+
+  /** Go to a residue by name: "/" opens the box, enter selects what it names and focuses on it. */
+  function setupJump() {
+    const box = $('jump'), input = $('jumpq'), hint = $('jumphint');
+    if (!box || !input) return;
+    const say = (text, bad) => { hint.textContent = text; hint.classList.toggle('bad', !!bad); };
+    const close = () => { box.hidden = true; input.value = ''; say(''); const v = $('view'); if (v) v.focus(); };
+    const matches = () => C.findResidues(input.value, meta.labels);
+    input.addEventListener('input', () => {
+      const q = input.value.trim();
+      if (!q) return say('');
+      const hits = matches();
+      if (hits.length) say(hits.length === 1 ? label(hits[0]) : hits.length + ' residues');
+      else say('no match', true);
+    });
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Escape') { close(); return; }
+      if (e.key !== 'Enter') return;
+      const hits = matches();
+      if (!hits.length) { say('no match', true); return; }
+      select(new Set(hits), { focus: true, zoom: true });
+      notice(hits.length === 1 ? label(hits[0]) : hits.length + ' residues selected');
+      close();
+    });
+    box.addEventListener('mousedown', (e) => e.stopPropagation());
+  }
+  function openJump() {
+    const box = $('jump'), input = $('jumpq');
+    if (!box || !input) return;
+    box.hidden = false;
+    input.select();
+    input.focus();
   }
 
   function updateSelectionUI() {

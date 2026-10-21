@@ -5,7 +5,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `analyze --html FILE`: the rows `--export` writes, as one self-contained page. Every model is
+  a row, any column sorts, the name filters, the rows at or above the ipSAE cutoff for that
+  predictor are marked, and a click on a model copies a `proteus view` command for it.
+- The browser viewer: `/` goes to a residue by name — `B:90`, `90-110`, `GLU90`, `B:90A`.
+- The terminal's confidence page, for a model with no PAE: the files it looked for, how many
+  residues fall in each AlphaFold band, and the stretches under pLDDT 70, worst first.
+
 ### Changed
+- Both Ramachandran plots draw the Top8000 favoured and allowed contours (general case, stated
+  on the plot) instead of three rectangles sketching where the basins are.
+- The browser panel's measurements are grouped (shape, geometry, contacts) with their values
+  aligned left, as the terminal inspector lists them, instead of one long right-aligned column.
 - The crates are published on crates.io as `proteus-bio-*`, and the binary as `proteus-bio`
   (`cargo install proteus-bio` installs `proteus`). `proteus-cli`, `proteus-engine` and
   `proteus-render` are taken there by unrelated projects. Library names are unchanged

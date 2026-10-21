@@ -183,3 +183,46 @@ test('pLDDT bands use plddtColor\'s boundaries', () => {
   assert.deepEqual(C.plddtBands([]), [0, 0, 0, 0]);
   assert.deepEqual(C.plddtColor(90), C.plddtColor(99));
 });
+
+test('a residue query reads the forms a reader types', () => {
+  const p = C.parseResidueQuery;
+  assert.deepEqual(p('90'), { chain: null, name: null, number: 90, icode: null, to: null });
+  assert.deepEqual(p('B:90'), { chain: 'B', name: null, number: 90, icode: null, to: null });
+  assert.deepEqual(p('b/90'), { chain: 'b', name: null, number: 90, icode: null, to: null });
+  assert.deepEqual(p('B90'), { chain: 'B', name: null, number: 90, icode: null, to: null });
+  assert.deepEqual(p('glu90'), { chain: null, name: 'GLU', number: 90, icode: null, to: null });
+  assert.deepEqual(p('A:GLU90'), { chain: 'A', name: 'GLU', number: 90, icode: null, to: null });
+  assert.deepEqual(p('B:90a'), { chain: 'B', name: null, number: 90, icode: 'A', to: null });
+  assert.deepEqual(p(' B : 90 - 110 '), { chain: 'B', name: null, number: 90, icode: null, to: 110 });
+  // A residue number can be negative, so a leading minus is a number, not an empty range.
+  assert.deepEqual(p('-5'), { chain: null, name: null, number: -5, icode: null, to: null });
+  for (const bad of ['', '   ', 'zz', 'B:', ':', 'GLUX', '1.5', null, undefined]) assert.equal(p(bad), null, String(bad));
+});
+
+test('a residue query finds the residues it names', () => {
+  // Two chains, A 1-3 and B 90-92, with an insertion code at B 90A.
+  const labels = {
+    chain: ['A', 'A', 'A', 'B', 'B', 'B', 'B'],
+    number: [1, 2, 3, 90, 90, 91, 92],
+    icode: ['', '', '', '', 'A', '', ''],
+    name: ['MET', 'GLU', 'GLU', 'SER', 'SER', 'GLU', 'TRP'],
+  };
+  const f = (q) => C.findResidues(q, labels);
+  assert.deepEqual(f('B:90'), [3, 4]);
+  assert.deepEqual(f('B:90A'), [4]);
+  assert.deepEqual(f('B90'), [3, 4]);
+  assert.deepEqual(f('2'), [1]);
+  // No chain given: the number is looked for in every chain.
+  assert.deepEqual(f('90'), [3, 4]);
+  assert.deepEqual(f('B:90-92'), [3, 4, 5, 6]);
+  // A range given backwards is still the span between the two numbers.
+  assert.deepEqual(f('B:92-90'), [3, 4, 5, 6]);
+  assert.deepEqual(f('glu'), []);
+  assert.deepEqual(f('GLU2'), [1]);
+  assert.deepEqual(f('GLU91'), [5]);
+  // A name that does not match the residue at that number finds nothing.
+  assert.deepEqual(f('TRP91'), []);
+  assert.deepEqual(f('C:1'), []);
+  assert.deepEqual(f('nonsense'), []);
+  assert.deepEqual(C.findResidues('1', null), []);
+});

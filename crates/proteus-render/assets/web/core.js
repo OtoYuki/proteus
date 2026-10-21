@@ -568,7 +568,63 @@
     }
   }
 
-  const api = { asU8, keepUnits, valueLines, plddtBands, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
+  /**
+   * A residue query a reader would type, as `{chain, name, number, icode, to}` or null:
+   * `90`, `B:90`, `B90`, `GLU90`, `B:90A`, `B:90-110`. Chain and residue name are optional,
+   * the range end is optional, and case does not matter. A bare `-` is not a range (a residue
+   * number can be negative), so a range needs a number on both sides.
+   */
+  function parseResidueQuery(q) {
+    if (typeof q !== 'string') return null;
+    const s = q.trim().replace(/\s+/g, '');
+    if (!s) return null;
+    // chain, when it is given with a separator: "B:90", "B/90".
+    const m = /^(?:([A-Za-z0-9]{1,4})[:/])?([A-Za-z]{3})?(-?\d+)([A-Za-z])?(?:[-–](-?\d+))?$/.exec(s);
+    if (m) {
+      const [, chain, name, number, icode, to] = m;
+      return { chain: chain || null, name: name ? name.toUpperCase() : null,
+        number: parseInt(number, 10), icode: icode ? icode.toUpperCase() : null,
+        to: to === undefined ? null : parseInt(to, 10) };
+    }
+    // one letter and a number with no separator: "B90". A three-letter name is matched above.
+    const n = /^([A-Za-z])(-?\d+)([A-Za-z])?(?:[-–](-?\d+))?$/.exec(s);
+    if (n) {
+      const [, chain, number, icode, to] = n;
+      return { chain: chain.toUpperCase(), name: null, number: parseInt(number, 10),
+        icode: icode ? icode.toUpperCase() : null, to: to === undefined ? null : parseInt(to, 10) };
+    }
+    return null;
+  }
+
+  /**
+   * The residue indices a query names, given the page's `labels` ({chain, number, icode, name}
+   * arrays). A query with no chain matches that number in every chain. A range takes everything
+   * between the two numbers in the chains the first number is in; `to` below `number` still
+   * reads as a span. Returns [] when nothing matches.
+   */
+  function findResidues(q, labels) {
+    const p = typeof q === 'string' ? parseResidueQuery(q) : q;
+    if (!p || !labels || !labels.number) return [];
+    const n = labels.number.length;
+    const chainOf = (i) => (labels.chain[i] || '').trim().toUpperCase();
+    const wanted = p.chain ? p.chain.toUpperCase() : null;
+    // With no chain given, a letter that is a chain here beats reading it as a residue name.
+    const lo = p.to === null ? p.number : Math.min(p.number, p.to);
+    const hi = p.to === null ? p.number : Math.max(p.number, p.to);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      if (wanted !== null && chainOf(i) !== wanted) continue;
+      const num = labels.number[i];
+      if (num < lo || num > hi) continue;
+      // An insertion code is only checked for a single residue: a range covers whatever is in it.
+      if (p.to === null && p.icode && (labels.icode[i] || '').trim().toUpperCase() !== p.icode) continue;
+      if (p.name && (labels.name[i] || '').toUpperCase() !== p.name) continue;
+      out.push(i);
+    }
+    return out;
+  }
+
+  const api = { asU8, keepUnits, valueLines, parseResidueQuery, findResidues, plddtBands, lerp, plddtColor, ssColor, rainbowColor, b64ToBytes, gunzip, parseMesh,
     vertexColors, fitScale, mat3Mul, yawPitch, MAGIC, paeColor, ELEMENT_RGB, meshBuilder, stickMesh,
     neighbours, closestAtoms, pymolSelection, scoreColor, measure, gaussianSurface, KYTE_DOOLITTLE,
     formalCharges, coulomb, encodeSession, decodeSession };

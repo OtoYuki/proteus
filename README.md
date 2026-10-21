@@ -37,6 +37,7 @@ interface ranking is measured against lab results on two published datasets.
 ```bash
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
 ./proteus analyze boltz_results/ --interface A --export triage.parquet  # a binder campaign, one row per model
+./proteus analyze boltz_results/ --interface A --html triage.html       # the same rows as one sortable page
 ./proteus analyze models/ --export qc.parquet                           # any folder of predicted models
 ./proteus analyze model.pdb                                             # every measurement, one structure
 ./proteus view model.pdb --web                                          # look at it, in a browser or the terminal
@@ -113,7 +114,18 @@ it, and Sc would have ranked it eighth. What the score is worth over thousands o
 
 `proteus view model.cif --web` opens one model coloured by interface (binder in clay, target in
 tide, bright where they touch), with a verdict against the 0.61 cutoff and the numbers above. `i`
-draws both sides' contact residues as sticks; `b` hands the binder role to another chain.
+draws both sides' contact residues as sticks; `b` hands the binder role to another chain; `/`
+goes to a residue by name (`B:90`, `90-110`, `GLU90`).
+
+```bash
+proteus analyze boltz_results/ --interface A:B --html triage.html
+```
+
+writes the whole campaign as one page instead: every model a row, sortable by any column,
+filterable by name, with the rows at or above the cutoff for that predictor marked and a click on
+a model copying the command that opens it. It is one self-contained file that fetches nothing, so
+it travels out of the cluster by `scp` and opens anywhere. `--html` and `--export` can be given
+together.
 
 ### What these numbers are worth
 

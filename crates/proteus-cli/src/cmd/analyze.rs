@@ -50,6 +50,11 @@ pub struct Args {
     #[arg(long)]
     json: bool,
 
+    /// Write a self-contained page of the same rows: one sortable, filterable table of every
+    /// model, to open in a browser. Needs no network
+    #[arg(long, value_name = "FILE")]
+    html: Option<PathBuf>,
+
     /// Structures analysed in parallel [default: the number of CPUs]
     #[arg(short, long)]
     jobs: Option<usize>,
@@ -288,6 +293,7 @@ pub async fn run(args: Args) -> Result<()> {
         confidence_source,
         export,
         json,
+        html,
         jobs,
         top,
     } = args;
@@ -305,6 +311,7 @@ pub async fn run(args: Args) -> Result<()> {
         && paths.len() == 1
         && paths[0].is_file()
         && export.is_none()
+        && html.is_none()
         && !json
         && interface.is_none();
     if single_report {
@@ -369,20 +376,24 @@ pub async fn run(args: Args) -> Result<()> {
     // not calibrated across predictors, so the widely used `> 0.61` — fitted on AlphaFold 3 —
     // over-selects for everything else. Printed once per predictor found, only when ipSAE was
     // actually computed, and never for AlphaFold 3, whose own cutoff is the published one.
+    let mut predictors: Vec<_> = Vec::new();
     if interface.is_some() {
-        let mut seen: Vec<_> = Vec::new();
         for r in rows.iter().filter(|r| r.interface.ipsae_min.is_some()) {
             if let Some(p) = detect_predictor(Path::new(&r.file)) {
-                if !seen.contains(&p) {
-                    seen.push(p);
+                if !predictors.contains(&p) {
+                    predictors.push(p);
                 }
             }
         }
-        for p in seen {
-            if let Some(line) = cutoff_advice(p) {
+        for p in &predictors {
+            if let Some(line) = cutoff_advice(*p) {
                 eprintln!("  {line}");
             }
         }
+    }
+    if let Some(out) = &html {
+        write_triage_page(out, &paths, &rows, &predictors)?;
+        eprintln!("Wrote the triage table: {}", out.display());
     }
     // Confidence files that were found but could not be used; say what was lost, briefly.
     let noted: Vec<_> = rows
@@ -405,6 +416,52 @@ pub async fn run(args: Args) -> Result<()> {
             rows.len() + failures.len()
         );
     }
+    Ok(())
+}
+
+/// The campaign page: the rows `--export` would write, as one sortable table.
+///
+/// The cutoff it marks is the fitted one when every model came from the same predictor and a
+/// fit exists for it; with models from several predictors there is no one line to draw, so it
+/// marks none (the per-predictor advice still goes to stderr).
+fn write_triage_page(
+    out: &Path,
+    paths: &[PathBuf],
+    rows: &[StructureQc],
+    predictors: &[proteus_core::interface::calibration::Predictor],
+) -> Result<()> {
+    use proteus_core::interface::calibration::Predictor;
+    use proteus_core::interface::calibration::{ipsae_calibration, PUBLISHED_IPSAE_CUTOFF};
+    let (cutoff, note) = match predictors {
+        // AlphaFold 3's own fit reproduces the published line, and that is the one in common
+        // use, so the page marks 0.61 for it and says nothing — as `analyze` does on stderr.
+        [Predictor::AlphaFold3] => (Some(PUBLISHED_IPSAE_CUTOFF), None),
+        [one] => match ipsae_calibration(*one) {
+            Some(c) => (Some(c.threshold), cutoff_advice(*one)),
+            // Protenix and Chai-1: no fit exists, so no line is drawn.
+            None => (None, None),
+        },
+        // Models from several predictors, or none identified: there is no one line to draw.
+        _ => (None, None),
+    };
+    let subject = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let page = proteus_render::triage::TriagePage {
+        subject: &subject,
+        rows,
+        cutoff_note: note.as_deref(),
+        cutoff,
+        version: env!("CARGO_PKG_VERSION"),
+        written: &chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+    };
+    if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    std::fs::write(out, page.render()).with_context(|| format!("writing {}", out.display()))?;
     Ok(())
 }
 
