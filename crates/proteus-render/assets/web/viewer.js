@@ -1001,9 +1001,10 @@
         case ' ': state.spin = !state.spin; e.preventDefault(); request(); break;
         case 'r': reset(); request(); break;
         case 's': save(); break;
-        // Rotate and zoom without a pointer, with the terminal viewer's keys.
+        // Rotate and zoom without a pointer, with the terminal viewer's keys. `l` labels the
+        // selection (above), so rotating right is the arrow only.
         case 'ArrowLeft': case 'h': state.yaw -= 0.15; request(); break;
-        case 'ArrowRight': case 'l': state.yaw += 0.15; request(); break;
+        case 'ArrowRight': state.yaw += 0.15; request(); break;
         case 'ArrowUp': case 'k': state.pitch -= 0.15; request(); break;
         case 'ArrowDown': case 'j': state.pitch += 0.15; request(); break;
         case '+': case '=': state.zoom = Math.min(50, state.zoom * 1.15); request(); break;

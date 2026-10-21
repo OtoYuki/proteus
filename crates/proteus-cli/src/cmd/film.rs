@@ -145,6 +145,10 @@ pub async fn run(args: Args) -> Result<()> {
     } else {
         match pick_encoder(args.encoder) {
             Ok(e) => Some(e),
+            // Asked for by name: say so and stop rather than quietly writing no MP4.
+            Err(e) if args.encoder != Encoder::Auto => {
+                return Err(e.context("pass --still-only to skip the MP4"));
+            }
             Err(e) => {
                 eprintln!("no MP4: {e:#}; writing the stills and the JSON only");
                 None
@@ -156,10 +160,12 @@ pub async fn run(args: Args) -> Result<()> {
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
         .max(1);
     let parent_stem = stem(&args.parent);
+    let names = output_names(&files);
     let mut failed = unreadable.len();
-    for f in &files {
+    for (f, name) in files.iter().zip(&names) {
         match film_one(
             f,
+            name,
             &parent,
             &parent_stem,
             &opts,
@@ -192,12 +198,45 @@ fn stem(p: &Path) -> String {
     }
 }
 
+/// The output file name (without extension) for each input: its stem, made unique. Chai-1 names
+/// its samples `pred.model_idx_0.cif` … and a local AlphaFold 3 run puts every sample in its own
+/// directory as `model.cif`, so neither the bare stem nor `Path::with_extension` (which would cut
+/// `pred.model_idx_0` back to `pred`) is enough. A clashing stem takes its directory's name in
+/// front; one that still clashes takes its position.
+fn output_names(files: &[PathBuf]) -> Vec<String> {
+    use std::collections::HashMap;
+    let count = |names: &[String]| {
+        let mut n: HashMap<&str, usize> = HashMap::new();
+        for s in names {
+            *n.entry(s.as_str()).or_default() += 1;
+        }
+        names.iter().map(|s| n[s.as_str()]).collect::<Vec<_>>()
+    };
+    let mut names: Vec<String> = files.iter().map(|f| stem(f)).collect();
+    let dup = count(&names);
+    for (i, f) in files.iter().enumerate() {
+        if dup[i] > 1 {
+            if let Some(d) = f.parent().and_then(|d| d.file_name()) {
+                names[i] = format!("{}_{}", d.to_string_lossy(), names[i]);
+            }
+        }
+    }
+    let dup = count(&names);
+    for (i, n) in names.iter_mut().enumerate() {
+        if dup[i] > 1 {
+            *n = format!("{n}_{}", i + 1);
+        }
+    }
+    names
+}
+
 /// Fewest paired residues, as a fraction of the larger structure, that `film` accepts.
 const MIN_COVERAGE: f64 = 0.5;
 
 #[allow(clippy::too_many_arguments)]
 fn film_one(
     path: &Path,
+    out_name: &str,
     parent: &proteus_core::variant::PreparedStructure,
     parent_stem: &str,
     opts: &DiffOptions,
@@ -233,17 +272,17 @@ fn film_one(
         title: format!("{cstem}  vs  {parent_stem}"),
     };
     let film = Film::new(&bytes, name, opts.chains.as_deref(), &d, settings)?;
-    let base = args.out.join(&cstem);
+    let out_path = |ext: &str| args.out.join(format!("{out_name}.{ext}"));
     let mut written = Vec::new();
 
-    let json_path = base.with_extension("json");
+    let json_path = out_path("json");
     let mut v = serde_json::to_value(&d)?;
     v["candidate"] = serde_json::Value::String(path.display().to_string());
     v["parent"] = serde_json::Value::String(args.parent.display().to_string());
     std::fs::write(&json_path, serde_json::to_string_pretty(&v)?)?;
     written.push(json_path.display().to_string());
 
-    let png_path = base.with_extension("png");
+    let png_path = out_path("png");
     let mut rgb = vec![0u8; width * height * 3];
     let still = match args.still_at {
         Some(t) => film.frame_at(t),
@@ -254,7 +293,7 @@ fn film_one(
     written.push(png_path.display().to_string());
 
     if let Some(enc) = encoder {
-        let mp4_path = base.with_extension("mp4");
+        let mp4_path = out_path("mp4");
         encode(&film, enc, &mp4_path, threads, args.renderer)?;
         written.push(mp4_path.display().to_string());
     }
@@ -411,14 +450,15 @@ fn encode(
     drop(stdin);
     let output = child.wait_with_output().context("waiting for ffmpeg")?;
     bar.finish_and_clear();
-    result?;
+    // ffmpeg exiting early makes the frame writes fail with a broken pipe; its own message says
+    // why, so it goes first.
     if !output.status.success() {
         bail!(
             "ffmpeg failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    Ok(())
+    result
 }
 
 #[cfg(feature = "gpu")]
@@ -551,5 +591,29 @@ mod tests {
         assert_eq!(stem(Path::new("a/1b3s.pdb")), "1b3s");
         assert_eq!(stem(Path::new("design_07.cif.gz")), "design_07");
         assert_eq!(stem(Path::new("noext")), "noext");
+    }
+
+    #[test]
+    fn output_names_never_collide() {
+        let names = |v: &[&str]| output_names(&v.iter().map(PathBuf::from).collect::<Vec<_>>());
+        // Chai-1: dotted stems are kept whole (with_extension would make all five `pred`).
+        assert_eq!(
+            names(&["c/pred.model_idx_0.cif", "c/pred.model_idx_1.cif"]),
+            ["pred.model_idx_0", "pred.model_idx_1"]
+        );
+        // Local AlphaFold 3: one `model.cif` per sample directory.
+        assert_eq!(
+            names(&[
+                "j/seed-1_sample-0/model.cif",
+                "j/seed-1_sample-1/model.cif",
+                "x.pdb"
+            ]),
+            ["seed-1_sample-0_model", "seed-1_sample-1_model", "x"]
+        );
+        // Same directory name and stem: position decides.
+        assert_eq!(
+            names(&["a/run/m.pdb", "b/run/m.cif"]),
+            ["run_m_1", "run_m_2"]
+        );
     }
 }

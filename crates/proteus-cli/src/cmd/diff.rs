@@ -89,8 +89,13 @@ pub async fn run(args: Args) -> Result<()> {
     if rows.is_empty() {
         bail!("no candidate could be compared with the parent");
     }
+    // The rows that did compare are written above; the exit status still says some did not,
+    // as `analyze` and `film` do.
     if failed > 0 {
-        eprintln!("{failed} input(s) could not be compared");
+        bail!(
+            "{failed} of {} input(s) could not be compared",
+            rows.len() + failed
+        );
     }
     Ok(())
 }
@@ -290,7 +295,7 @@ gained_salt_bridges,gained_pi_stacking,gained_cation_pi,interface_lost,interface
 marginal_local,distal_lost,distal_gained,min_site_plddt,mean_site_plddt_change";
 
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n']) {
+    if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
@@ -350,5 +355,6 @@ mod tests {
         assert_eq!(csv_field("a,b"), "\"a,b\"");
         assert_eq!(csv_field("say \"x\", ok"), "\"say \"\"x\"\", ok\"");
         assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a\rb"), "\"a\rb\"");
     }
 }
