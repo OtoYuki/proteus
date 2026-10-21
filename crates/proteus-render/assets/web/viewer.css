@@ -131,15 +131,25 @@ body.panel-off #panel { transform: translateX(calc(100% + 24px)); visibility: hi
 .stack-key span i { width: 8px; height: 8px; display: inline-block; }
 .stack-key span em { font-style: normal; color: var(--text); }
 
-/* Measurement rows: label left, value right in tabular numerals, one line per part. */
-#panel dl { margin: 6px 0 0; display: grid; grid-template-columns: minmax(0, 36%) minmax(0, 1fr); column-gap: 0; }
-#panel dt, #panel dd { padding: 9px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+/* Measurement rows: label left, value left in tabular numerals, one line per part. Left, not
+   right: every value then starts on the same column, so the figures read down the panel. */
+#panel dl { margin: 6px 0 0; display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr); column-gap: 0; }
+#panel dt, #panel dd { padding: 7px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
 #panel dt { font: 400 12.5px/1.45 var(--text-face); color: var(--muted); }
-#panel dd { margin: 0; padding-left: 12px; font: 400 12px/1.45 var(--mono); color: var(--text); text-align: right;
+#panel dd { margin: 0; padding-left: 12px; font: 400 12px/1.45 var(--mono); color: var(--text);
   font-variant-numeric: tabular-nums; }
 #panel dd span { display: block; }
 #panel dd span + span { color: var(--muted); }
 #panel dl > :nth-last-child(-n+2) { border-bottom: 0; }
+
+/* The measurements, in the groups the terminal inspector uses. */
+#panel .kvs { margin-top: 2px; }
+#panel .kv-group + .kv-group { margin-top: 14px; }
+#panel .kv-group h3 { margin: 0; padding-bottom: 5px; font: 400 11px/1.3 var(--mono); color: var(--dim);
+  letter-spacing: .04em; border-bottom: 1px solid var(--line); }
+#panel .kv-group h3::before { content: "("; }
+#panel .kv-group h3::after { content: ")"; }
+#panel dl.kv { margin-top: 0; }
 
 #panel canvas { display: block; width: 100%; }
 #panel canvas.rama { height: auto; aspect-ratio: 1; }

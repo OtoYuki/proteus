@@ -145,6 +145,28 @@ pub fn evaluate(class: RamaClass, phi: f64, psi: f64) -> RamachandranRegion {
     }
 }
 
+/// The Top8000 regions of the **general** class on an `n` x `n` grid, for drawing the contours
+/// a Ramachandran plot is read against: `0` outlier, `1` allowed, `2` favoured, row-major from
+/// psi = +180 down to -180, column-major from phi = -180 to +180 (the orientation a plot is
+/// drawn in). Glycine and proline are judged on their own distributions, so a point of theirs
+/// can sit outside these contours; a plot that mixes the classes has to say so.
+pub fn general_region_grid(n: usize) -> Vec<u8> {
+    let mut out = vec![0u8; n * n];
+    for row in 0..n {
+        // Bin centres, so a cell's level is the level in the middle of what it covers.
+        let psi = 180.0 - (row as f64 + 0.5) * 360.0 / n as f64;
+        for col in 0..n {
+            let phi = -180.0 + (col as f64 + 0.5) * 360.0 / n as f64;
+            out[row * n + col] = match evaluate(RamaClass::General, phi, psi) {
+                RamachandranRegion::Favored => 2,
+                RamachandranRegion::Allowed => 1,
+                RamachandranRegion::Outlier => 0,
+            };
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +189,42 @@ mod tests {
         assert!(close(score(RamaClass::General, -179.5, 179.5), 0.0060123));
         assert!(close(score(RamaClass::General, 0.0, 0.0), 0.0));
         assert!(close(score(RamaClass::TransPro, 60.0, 60.0), 0.0));
+    }
+
+    /// The drawn contours are the thresholds, at the places a reader knows: the right-handed
+    /// alpha and beta basins are favoured, the bridge between them is allowed, and the
+    /// left-handed-alpha mirror image at (+60, +60) is favoured while (0, 0) is not.
+    #[test]
+    fn the_general_contour_grid_marks_the_basins() {
+        let n = 180;
+        let g = general_region_grid(n);
+        assert_eq!(g.len(), n * n);
+        let at = |phi: f64, psi: f64| {
+            let col = (((phi + 180.0) / 360.0) * n as f64) as usize;
+            let row = (((180.0 - psi) / 360.0) * n as f64) as usize;
+            g[row.min(n - 1) * n + col.min(n - 1)]
+        };
+        assert_eq!(at(-63.0, -42.0), 2, "right-handed alpha");
+        assert_eq!(at(-120.0, 130.0), 2, "beta");
+        assert_eq!(at(60.0, 60.0), 2, "left-handed alpha");
+        assert_eq!(at(0.0, 0.0), 0, "the forbidden middle");
+        // Every level the plot's key names is drawn somewhere.
+        for level in 0..=2u8 {
+            assert!(g.contains(&level), "level {level} is never drawn");
+        }
+        // The contour agrees with the classifier it is drawn from, cell by cell.
+        for row in (0..n).step_by(7) {
+            for col in (0..n).step_by(7) {
+                let psi = 180.0 - (row as f64 + 0.5) * 360.0 / n as f64;
+                let phi = -180.0 + (col as f64 + 0.5) * 360.0 / n as f64;
+                let want = match evaluate(RamaClass::General, phi, psi) {
+                    R::Favored => 2,
+                    R::Allowed => 1,
+                    R::Outlier => 0,
+                };
+                assert_eq!(g[row * n + col], want, "({phi}, {psi})");
+            }
+        }
     }
 
     #[test]

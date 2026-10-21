@@ -370,6 +370,20 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         },
         "perResidue": per_residue,
         "rama": rama,
+        // The Top8000 general-case contours the plot is read against: 180 x 180 cells, four
+        // levels packed per byte (0 outlier, 1 allowed, 2 favoured), base64. 8 KB, against
+        // 32 KB for a byte a cell; the plot is drawn at 2 px a cell.
+        "ramaContour": if rama.is_empty() { serde_json::Value::Null } else {
+            let n = 180usize;
+            let g = proteus_core::rama8000::general_region_grid(n);
+            let packed: Vec<u8> = g
+                .chunks(4)
+                .map(|c| c.iter().enumerate().fold(0u8, |b, (i, v)| b | (v << (i * 2))))
+                .collect();
+            use base64::Engine;
+            let data = base64::engine::general_purpose::STANDARD.encode(&packed);
+            serde_json::json!({ "n": n, "data": data })
+        },
         "sequence": s.residue_labels.iter().map(|l| crate::atoms::one_letter(&l.name)).collect::<String>(),
         "elements": crate::atoms::ELEMENTS,
         "atomNames": s.atoms.names,
@@ -437,6 +451,14 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
             })
         }),
         "metrics": s.metrics.as_ref().map_or_else(Vec::new, |m| proteus_core::qc::summary_rows(m, s.num_residues)),
+        // The same rows in the groups the terminal inspector uses, so both read alike. The page
+        // drops the ones its tiles already show, which can leave a group empty.
+        "metricGroups": s.metrics.as_ref().map_or_else(Vec::new, |m| {
+            proteus_core::qc::measurement_groups(&proteus_core::qc::summary_rows(m, s.num_residues))
+                .into_iter()
+                .map(|(name, rows)| serde_json::json!([name, rows]))
+                .collect::<Vec<_>>()
+        }),
         // Some of those rows' numbers unformatted, for the panel's gauges and bars.
         "stats": s.metrics.as_ref().map(|m| {
             let r3 = |v: f64| (v * 1000.0).round() / 1000.0;
