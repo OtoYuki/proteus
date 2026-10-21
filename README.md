@@ -10,6 +10,7 @@
 [![ci](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/ci.yml)
 [![validate](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml/badge.svg)](https://github.com/OtoYuki/proteus/actions/workflows/validate.yml)
 [![release](https://img.shields.io/github/v/release/OtoYuki/proteus?color=99920B)](https://github.com/OtoYuki/proteus/releases/latest)
+[![crates.io](https://img.shields.io/crates/v/proteus-bio?color=99920B&label=crates.io)](https://crates.io/crates/proteus-bio)
 [![license: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-5A6042)](#license)
 
 </div>
