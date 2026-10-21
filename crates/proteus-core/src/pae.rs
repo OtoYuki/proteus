@@ -649,6 +649,16 @@ pub fn sidecar_files(structure: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     (pae, scores)
 }
 
+/// [`ConfidenceSource::Predicted`](crate::confidence::ConfidenceSource::Predicted) when a
+/// predictor's PAE or scores file sits beside `structure`, else `None` (decide from the file).
+///
+/// Those files say what the B-factor column holds better than its values do: a failed design
+/// with every residue under pLDDT 30 reads like crystallographic B-factors.
+pub fn predicted_beside(structure: &Path) -> Option<crate::confidence::ConfidenceSource> {
+    let (pae, scores) = sidecar_files(structure);
+    (pae.is_some() || scores.is_some()).then_some(crate::confidence::ConfidenceSource::Predicted)
+}
+
 /// Read the confidences for a model: from `pae_file`/`scores_file` when given, otherwise from
 /// the files its predictor writes next to it ([`sidecar_files`]). A file that is found but
 /// cannot be read is an error; no file at all is an empty result.

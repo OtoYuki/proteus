@@ -225,4 +225,19 @@ test('a residue query finds the residues it names', () => {
   assert.deepEqual(f('C:1'), []);
   assert.deepEqual(f('nonsense'), []);
   assert.deepEqual(C.findResidues('1', null), []);
+  // With no chain written in that case, case does not matter.
+  assert.deepEqual(f('b:91'), [5]);
+});
+
+test('a residue query keeps mmCIF chains that differ only in case apart', () => {
+  const labels = {
+    chain: ['A', 'A', 'a', 'a'],
+    number: [1, 2, 1, 2],
+    icode: ['', '', '', ''],
+    name: ['MET', 'GLU', 'MET', 'GLU'],
+  };
+  const f = (q) => C.findResidues(q, labels);
+  assert.deepEqual(f('A:1'), [0]);
+  assert.deepEqual(f('a:1'), [2]);
+  assert.deepEqual(f('1'), [0, 2]);
 });

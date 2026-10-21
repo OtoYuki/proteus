@@ -103,7 +103,8 @@ pub async fn run(args: Args) -> Result<()> {
 pub(crate) fn prepare(path: &Path, opts: &DiffOptions) -> Result<PreparedStructure> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let name = path.file_name().and_then(|n| n.to_str());
-    PreparedStructure::from_bytes(&bytes, name, opts.chains.as_deref())
+    let source = proteus_core::pae::predicted_beside(path);
+    PreparedStructure::from_bytes_with_source(&bytes, name, opts.chains.as_deref(), source)
         .with_context(|| format!("{}", path.display()))
 }
 

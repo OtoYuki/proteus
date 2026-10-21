@@ -438,13 +438,7 @@ pub fn structure_qc(
 /// [`structure_qc`] with the options spelled out, including the binder–target interface.
 pub fn structure_qc_with(path: &Path, opts: &QcOptions) -> Result<StructureQc, CoreError> {
     let (reference, confidence) = (opts.reference, opts.confidence);
-    // A predictor's confidence files beside the model say what its B-factor column holds
-    // better than the values do: a failed design with every residue under pLDDT 30 reads like
-    // crystallographic B-factors, and would lose its pLDDT columns.
-    let confidence = confidence.or_else(|| {
-        let (pae, scores) = crate::pae::sidecar_files(path);
-        (pae.is_some() || scores.is_some()).then_some(ConfidenceSource::Predicted)
-    });
+    let confidence = confidence.or_else(|| crate::pae::predicted_beside(path));
     let loaded = crate::io::load_structure(path)?;
     let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,

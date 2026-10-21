@@ -258,8 +258,12 @@ fn film_one(
 ) -> Result<Vec<String>> {
     let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let name = path.file_name().and_then(|n| n.to_str());
-    let candidate =
-        proteus_core::variant::PreparedStructure::from_bytes(&bytes, name, opts.chains.as_deref())?;
+    let candidate = proteus_core::variant::PreparedStructure::from_bytes_with_source(
+        &bytes,
+        name,
+        opts.chains.as_deref(),
+        proteus_core::pae::predicted_beside(path),
+    )?;
     let d = diff(parent, &candidate, opts)?;
     // A film of "what changed" against the wrong parent would caption hundreds of sites that
     // are not mutations. `diff` can still show the pairing.

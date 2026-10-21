@@ -104,6 +104,17 @@ impl PreparedStructure {
         hint: Option<&str>,
         chains: Option<&[String]>,
     ) -> Result<Self, CoreError> {
+        Self::from_bytes_with_source(bytes, hint, chains, None)
+    }
+
+    /// [`Self::from_bytes`], with what the B-factor column holds given rather than detected
+    /// when `source` is `Some` (see [`crate::pae::predicted_beside`]).
+    pub fn from_bytes_with_source(
+        bytes: &[u8],
+        hint: Option<&str>,
+        chains: Option<&[String]>,
+        source: Option<ConfidenceSource>,
+    ) -> Result<Self, CoreError> {
         let loaded = load_structure_bytes(bytes, hint)?;
         let mut protein = protein_heavy_atoms(&loaded.pdb);
         if let Some(keep) = chains {
@@ -156,7 +167,8 @@ impl PreparedStructure {
             }));
         }
         let b: Vec<f64> = residues.iter().map(|r| r.b_factor).collect();
-        let confidence = detect_confidence_source(&loaded.header_preview, &b);
+        let confidence =
+            source.unwrap_or_else(|| detect_confidence_source(&loaded.header_preview, &b));
         let max_b = b.iter().copied().fold(f64::MIN, f64::max);
         let plddt_scale = if max_b > 0.0 && max_b <= 1.0 {
             100.0
@@ -1182,6 +1194,31 @@ mod tests {
             })
             .count();
         assert_eq!(lost_oh, hb_of_tyr_oh, "{:#?}", d.changes);
+    }
+
+    /// A failed design (every residue under pLDDT 30, no header) reads as B-factors on its own;
+    /// told it is predicted (its predictor's files are beside it), its sites carry pLDDT.
+    #[test]
+    fn a_declared_source_overrides_the_values() {
+        let low: String = PTC
+            .lines()
+            .filter(|l| l.starts_with("ATOM"))
+            .map(|l| format!("{}{:6.2}{}\n", &l[..60], 28.0, &l[66..]))
+            .collect();
+        let alone = prepared(&low);
+        assert!(
+            !alone.confidence_source().is_predicted(),
+            "the values alone"
+        );
+        let told = PreparedStructure::from_bytes_with_source(
+            low.as_bytes(),
+            Some("x.pdb"),
+            None,
+            Some(ConfidenceSource::Predicted),
+        )
+        .unwrap();
+        assert!(told.confidence_source().is_predicted());
+        assert_eq!(told.confidence_at(0), Some(28.0));
     }
 
     /// A file that names an aspartate's carboxylate oxygens the other way round is the same
