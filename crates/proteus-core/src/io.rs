@@ -81,7 +81,8 @@ fn looks_like_cif(text: &str, hint: Option<&str>) -> bool {
     text.lines()
         .map(str::trim_start)
         .find(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.starts_with("data_"))
+        // CIF reserved words are case-insensitive: `DATA_` opens a block too.
+        .map(|l| l.get(..5).is_some_and(|w| w.eq_ignore_ascii_case("data_")))
         .unwrap_or(false)
 }
 
@@ -764,6 +765,10 @@ ATOM 2 C CA . ALA A 1 2 ? 3.8 0.0 0.0 1.00 10.00 2 A 1\n";
     fn format_is_sniffed_from_content_when_the_name_says_nothing() {
         assert_eq!(
             sniff_format("data_1UBQ\n#\nloop_\n", None),
+            StructureFormat::MmCif
+        );
+        assert_eq!(
+            sniff_format("DATA_1UBQ\n#\nloop_\n", None),
             StructureFormat::MmCif
         );
         assert_eq!(
