@@ -1290,6 +1290,12 @@
   /** `B` as `BPTI (B)` when the input named the chain; several chains one by one. */
   // (Function declarations: the panel is built before this part of the file runs.)
   function chainName(id) { return (meta.chainNames && meta.chainNames[id]) || ''; }
+  /** A measurement's label where the full one is long, as the terminal inspector shortens it.
+   *  The table lives inside the function: `buildPanel` runs before this part of the file, so a
+   *  `const` beside it would still be in its temporal dead zone when the panel is built. */
+  function shortLabel(k) {
+    return ({ 'Radius of gyration': 'Rg', 'Heavy-atom overlaps': 'Overlaps', 'Covalent geometry': 'Covalent', Stereochemistry: 'Stereo' })[k] || k;
+  }
   function nameChains(ids) { return ids.split(',').map((c) => (chainName(c) ? chainName(c) + ' (' + c + ')' : c)).join(', '); }
   function shortChains(ids) { return ids.split(',').map((c) => chainName(c) || c).join(', '); }
   function pct(x) { return Math.round(x * 100) + ' %'; }
@@ -1438,24 +1444,38 @@
     if (half.length % 2 === 1) half[half.length - 1].classList.add('wide');
     if (tiles.children.length) quality.append(tiles);
 
-    const rows = meta.metrics.filter(([k]) => !covered.has(k));
+    // The rows the tiles do not already carry, under the headings the terminal inspector uses.
+    // A row's value is several measurements joined by ` · `, so each gets its own line under
+    // the label rather than one right-aligned block that wraps where it likes.
+    const keep = ([k]) => !covered.has(k);
+    const groups = (meta.metricGroups || [['', meta.metrics]])
+      .map(([name, rs]) => [name, rs.filter(keep)])
+      .filter(([, rs]) => rs.length);
     if (compare) {
-      rows.unshift(['Superposed on ' + compare.name, 'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å · ' + compare.paired +
-        ' pairs (' + compare.pairing + ')' + (compare.mismatched ? ' · ' + compare.mismatched + ' differ in residue' : '')]);
+      groups.unshift(['superposition', [['Superposed on ' + compare.name,
+        'Cα RMSD ' + compare.rmsd.toFixed(2) + ' Å · ' + compare.paired + ' pairs (' + compare.pairing + ')' +
+        (compare.mismatched ? ' · ' + compare.mismatched + ' differ in residue' : '')]]]);
     }
-    if (rows.length) {
+    if (groups.length) {
       section(quality, 'measurements');
-      const dl = el('dl');
-      for (const [k, v] of rows) {
-        const dd = el('dd');
-        let lines = C.valueLines(v);
-        // One figure and a note on it ("18.08 Å (×0.96 of a compact fold)"): the note goes under.
-        const m = lines.length === 1 && /^(.+?) (\(.+\))$/.exec(lines[0]);
-        if (m) lines = [m[1], m[2]];
-        for (const line of lines) dd.append(el('span', '', C.keepUnits(line)));
-        dl.append(el('dt', '', k), dd);
+      const box = el('div', 'kvs');
+      for (const [name, rs] of groups) {
+        const g = el('div', 'kv-group');
+        if (name) g.append(el('h3', '', name));
+        const dl = el('dl', 'kv');
+        for (const [k, v] of rs) {
+          const dd = el('dd');
+          let lines = C.valueLines(v);
+          // One figure and a note on it ("18.08 Å (×0.96 of a compact fold)"): the note goes under.
+          const m = lines.length === 1 && /^(.+?) (\(.+\))$/.exec(lines[0]);
+          if (m) lines = [m[1], m[2]];
+          for (const line of lines) dd.append(el('span', '', C.keepUnits(line)));
+          dl.append(el('dt', '', shortLabel(k)), dd);
+        }
+        g.append(dl);
+        box.append(g);
       }
-      quality.append(dl);
+      quality.append(box);
     }
     // Complexes without an interface view (a protein and its ligands) keep the chain table here.
     if (!interfaces.length) chainTable(quality, section);
@@ -1506,6 +1526,11 @@
         key.append(s);
       }
       plots.append(key);
+      if (meta.ramaContour) {
+        // The shading is one distribution; each point was judged on the one for its own residue.
+        plots.append(el('p', 'note tight', 'The shaded regions are the Top8000 favoured and allowed contours for the general case. ' +
+          'Glycine, proline and pre-proline residues are judged against their own distributions, so one of those can be favoured outside the shading.'));
+      }
     }
     if (scores && scores.matrix) {
       section(plots, 'substitutions · ' + scores.column);
@@ -1736,6 +1761,38 @@
     into.append(wrap);
   }
 
+  /** The favoured and allowed regions as a shaded background, from `meta.ramaContour`: an
+   *  n x n grid of two-bit levels, drawn once onto an offscreen canvas and scaled up. */
+  function ramaContour(g, px) {
+    const c = meta.ramaContour;
+    if (!c) return;
+    const n = c.n, bytes = C.b64ToBytes(c.data);
+    const off = document.createElement('canvas');
+    off.width = off.height = n;
+    const og = off.getContext('2d');
+    const img = og.createImageData(n, n);
+    // Two washes of the plot's own ink: the favoured basins read first, the allowed skirt behind.
+    const ink = [role('accent'), role('warm')].map((s) => {
+      const m = /rgba?\(([^)]+)\)/.exec(s);
+      if (m) return m[1].split(',').slice(0, 3).map((v) => parseFloat(v));
+      const h = s.replace('#', '');
+      const w = h.length === 3 ? h.split('').map((x) => x + x) : h.match(/../g) || ['88', '88', '88'];
+      return w.slice(0, 3).map((x) => parseInt(x, 16));
+    });
+    for (let i = 0; i < n * n; i++) {
+      const level = (bytes[i >> 2] >> ((i & 3) * 2)) & 3;
+      if (!level) continue;
+      const [r, gr, b] = level === 2 ? ink[0] : ink[1];
+      const o = i * 4;
+      img.data[o] = r; img.data[o + 1] = gr; img.data[o + 2] = b;
+      img.data[o + 3] = level === 2 ? 56 : 24;
+    }
+    og.putImageData(img, 0, 0);
+    g.imageSmoothingEnabled = false;
+    g.drawImage(off, 0, 0, px, px);
+    g.imageSmoothingEnabled = true;
+  }
+
   function ramaPlot() {
     const c = document.createElement('canvas');
     const px = 360, dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1743,6 +1800,8 @@
     const g = c.getContext('2d');
     g.scale(dpr, dpr);
     g.fillStyle = role('ground'); g.fillRect(0, 0, px, px);
+    // The Top8000 contours behind the points, from the same thresholds that classified them.
+    ramaContour(g, px);
     g.strokeStyle = role('line'); g.lineWidth = 1;
     g.strokeRect(0.5, 0.5, px - 1, px - 1);
     const to = (a) => (a + 180) / 360 * px;

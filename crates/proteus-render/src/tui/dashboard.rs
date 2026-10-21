@@ -1213,6 +1213,15 @@ impl DashboardRenderer {
                 ),
             ];
             out.push(format!("       {}", fit_items(&items, w.saturating_sub(7))));
+            // The contours are one distribution; the points were judged on six. Say so, or a
+            // favoured glycine sitting outside the shading reads as a bug.
+            out.push(format!(
+                "       {}",
+                a.paint(
+                    Role::Dim,
+                    "· favoured  ˙ allowed · Top8000 general case; Gly and Pro have their own",
+                )
+            ));
         }
         if !numbers.is_empty() {
             out.push(String::new());
@@ -1274,21 +1283,25 @@ impl DashboardRenderer {
                     continue;
                 }
                 let phi_c = -180.0 + (c as f64 / (plot_w - 1) as f64) * 360.0;
-                let basin = ((-180.0..=-45.0).contains(&phi_c)
-                    && (psi_c >= 90.0 || psi_c <= -150.0))
-                    || ((-100.0..=-30.0).contains(&phi_c) && (-70.0..=-10.0).contains(&psi_c))
-                    || ((30.0..=90.0).contains(&phi_c) && (10.0..=70.0).contains(&psi_c));
+                // The Top8000 contours themselves, not a sketch of where the basins are: the
+                // same thresholds that classified the points. General-case, as the caption says.
+                let region = proteus_core::rama8000::evaluate(
+                    proteus_core::rama8000::RamaClass::General,
+                    phi_c,
+                    psi_c,
+                );
                 let ch = if c == mid_x && r == mid_y {
                     "┼"
                 } else if c == mid_x {
                     "│"
                 } else if r == mid_y {
                     "─"
-                } else if basin {
-                    // The favoured basins (β, right-handed α, left-handed α).
-                    "·"
                 } else {
-                    " "
+                    match region {
+                        RamachandranRegion::Favored => "·",
+                        RamachandranRegion::Allowed => "˙",
+                        RamachandranRegion::Outlier => " ",
+                    }
                 };
                 if ch == " " {
                     row.push(' ');
@@ -1463,13 +1476,21 @@ impl DashboardRenderer {
                 } else {
                     "none found beside this model"
                 };
-                push_block(
-                    &mut out,
-                    vec![
-                        self.rule("predicted aligned error", "", w),
-                        a.paint(Role::Dim, &format!("– {why}")),
-                    ],
-                );
+                let mut b = vec![
+                    self.rule("predicted aligned error", "", w),
+                    a.paint(Role::Dim, &format!("– {why}")),
+                ];
+                if predicted {
+                    b.push(a.paint(
+                        Role::Dim,
+                        "  looked beside the model for pae_*.npz, *_full_data_*.json,",
+                    ));
+                    b.push(a.paint(
+                        Role::Dim,
+                        "  *_confidences.json, *_scores_*.json · --pae FILE names one",
+                    ));
+                }
+                push_block(&mut out, b);
             }
         }
         if !strip.is_empty() {
@@ -1482,7 +1503,136 @@ impl DashboardRenderer {
             b.extend(strip);
             push_block(&mut out, b);
         }
+        // With no PAE map the page is mostly empty, and the one number it has (a mean) hides
+        // where the model is weak. The bands and the weakest stretches use that room.
+        if pae.is_none() && predicted && !data.plddts.is_empty() {
+            let used = out.len();
+            let bands = self.plddt_bands_block(data, w);
+            if !bands.is_empty() && used + bands.len() + 2 <= avail {
+                push_block(&mut out, bands);
+            }
+            let weak = self.weak_stretches_block(data, w);
+            if !weak.is_empty() && out.len() + weak.len() + 2 <= avail {
+                push_block(&mut out, weak);
+            }
+        }
         out.into_iter().map(|l| truncate_to_width(&l, w)).collect()
+    }
+
+    /// How many residues sit in each AlphaFold band, as a bar each: a mean of 55 can be a whole
+    /// chain at 55 or half of one at 90 and half at 20, and those are different models.
+    fn plddt_bands_block(&self, data: &DashboardData, w: usize) -> Vec<String> {
+        let a = &self.ansi;
+        let p = crate::rasterizer::shader::plddt_to_color;
+        let n = data.plddts.len();
+        if n == 0 {
+            return Vec::new();
+        }
+        let bands = [
+            (95.0, "≥ 90", 90.0, f64::INFINITY),
+            (80.0, "70–90", 70.0, 90.0),
+            (60.0, "50–70", 50.0, 70.0),
+            (25.0, "< 50", f64::NEG_INFINITY, 50.0),
+        ];
+        let cells = w.saturating_sub(26).min(28);
+        let mut out = vec![self.rule("confidence by band", "residues", w)];
+        for (swatch, label, lo, hi) in bands {
+            let k = data.plddts.iter().filter(|v| **v >= lo && **v < hi).count();
+            let bar = if cells >= 4 {
+                let on = (k as f64 / n as f64 * cells as f64).round() as usize;
+                a.paint_rgb(p(swatch), &"█".repeat(on))
+            } else {
+                String::new()
+            };
+            out.push(format!(
+                "{} {}  {}  {}",
+                a.paint_rgb(p(swatch), "■"),
+                a.paint(Role::Muted, &pad_to_width(label, 6)),
+                pad_to_width(&self.num(&k.to_string(), ""), 14),
+                bar,
+            ));
+        }
+        out
+    }
+
+    /// The runs the model is least sure of: where a redesign or a trim would go. Residues are
+    /// numbered from 1 within their chain, as the strip above numbers them.
+    fn weak_stretches_block(&self, data: &DashboardData, w: usize) -> Vec<String> {
+        const FLOOR: f64 = 70.0;
+        const MIN_RUN: usize = 3;
+        let a = &self.ansi;
+        // Chain of a residue index, and its number within that chain.
+        let locate = |i: usize| -> (String, usize) {
+            let mut start = 0;
+            for (id, len) in &data.chains {
+                if i < start + len {
+                    return (id.clone(), i - start + 1);
+                }
+                start += len;
+            }
+            (String::new(), i + 1)
+        };
+        let mut runs: Vec<(usize, usize, f64)> = Vec::new();
+        let mut i = 0;
+        while i < data.plddts.len() {
+            if data.plddts[i] >= FLOOR {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            // A run stops at a chain break as well as at the floor, so it never spans two chains.
+            while i < data.plddts.len()
+                && data.plddts[i] < FLOOR
+                && (i == start || locate(i).0 == locate(start).0)
+            {
+                i += 1;
+            }
+            if i - start >= MIN_RUN {
+                let mean = data.plddts[start..i].iter().sum::<f64>() / (i - start) as f64;
+                runs.push((start, i, mean));
+            }
+        }
+        if runs.is_empty() {
+            return Vec::new();
+        }
+        let total: usize = runs.iter().map(|(s, e, _)| e - s).sum();
+        // Worst first: the lowest mean is the one to look at, not the longest.
+        runs.sort_by(|x, y| x.2.total_cmp(&y.2));
+        let shown = runs.len().min(5);
+        let multi = data.chains.len() > 1;
+        let mut out = vec![self.rule("least confident stretches", "pLDDT under 70", w)];
+        for (start, end, mean) in runs.iter().take(shown) {
+            let (chain, from) = locate(*start);
+            let to = from + (end - start) - 1;
+            let span = if multi && !chain.is_empty() {
+                format!("{chain} {from}–{to}")
+            } else {
+                format!("{from}–{to}")
+            };
+            out.push(format!(
+                "{}  {}  {}",
+                a.paint(Role::Text, &pad_to_width(&span, 14)),
+                pad_to_width(&self.num(&format!("{mean:.1}"), ""), 13),
+                a.paint(Role::Dim, &format!("{} residues", end - start)),
+            ));
+        }
+        let rest = runs.len() - shown;
+        out.push(a.paint(
+            Role::Dim,
+            &format!(
+                "{} of {} residues in {} stretch{}{}",
+                total,
+                data.plddts.len(),
+                runs.len(),
+                if runs.len() == 1 { "" } else { "es" },
+                if rest > 0 {
+                    format!("; {rest} more not shown")
+                } else {
+                    String::new()
+                }
+            ),
+        ));
+        out
     }
 
     /// A `side` × `side` pixel PAE map in half-blocks (each cell two pixels high) behind a
@@ -2165,6 +2315,68 @@ mod tests {
             40,
         ));
         assert!(t.contains("– none found beside this model"), "{t}");
+    }
+
+    /// With no PAE there is no map, so the page says what it looked for and spends the room on
+    /// where the model is weak: the band counts, and the stretches under 70 worst first.
+    #[test]
+    fn a_page_without_a_pae_shows_the_bands_and_the_weak_stretches() {
+        let mut data = sample_data("x");
+        // One confident chain with two weak dips: 10-14 at ~40, and 30-32 at ~62.
+        data.plddts = vec![92.0; 46];
+        for v in data.plddts[9..14].iter_mut() {
+            *v = 40.0;
+        }
+        for v in data.plddts[29..32].iter_mut() {
+            *v = 62.0;
+        }
+        // A dip of two residues is below the floor but too short to be a stretch.
+        data.plddts[40] = 55.0;
+        data.plddts[41] = 55.0;
+        let t = text(&render(
+            &data,
+            DashboardPage::Confidence,
+            ColorDepth::None,
+            70,
+            60,
+        ));
+        assert!(t.contains("looked beside the model for pae_*.npz"), "{t}");
+        assert!(t.contains("--pae FILE names one"), "{t}");
+        assert!(t.contains("(confidence by band)"), "{t}");
+        assert!(t.contains("(least confident stretches)"), "{t}");
+        // 36 residues left at 92; 3 at 62 and the 2-residue dip at 55 fall in 50-70; 5 at 40.
+        let band = |label: &str| {
+            t.lines()
+                .find(|l| l.contains(label))
+                .unwrap_or_else(|| panic!("no {label} band in {t}"))
+                .to_string()
+        };
+        assert!(band("≥ 90").contains("36"), "{t}");
+        assert!(band("70–90").contains('0'), "{t}");
+        assert!(band("50–70").contains('5'), "{t}");
+        assert!(band("< 50").contains('5'), "{t}");
+        // Worst first, numbered from 1, and the two-residue dip is not one of them.
+        let weak: Vec<&str> = t
+            .lines()
+            .skip_while(|l| !l.contains("(least confident stretches)"))
+            .skip(1)
+            .take(2)
+            .collect();
+        assert!(weak[0].contains("10–14") && weak[0].contains("40.0"), "{t}");
+        assert!(weak[1].contains("30–32") && weak[1].contains("62.0"), "{t}");
+        assert!(t.contains("8 of 46 residues in 2 stretches"), "{t}");
+        // A model that is confident everywhere has no such block.
+        let mut good = sample_data("x");
+        good.plddts = vec![95.0; 46];
+        let t = text(&render(
+            &good,
+            DashboardPage::Confidence,
+            ColorDepth::None,
+            70,
+            60,
+        ));
+        assert!(!t.contains("(least confident stretches)"), "{t}");
+        assert!(t.contains("(confidence by band)"), "{t}");
     }
 
     #[test]

@@ -640,6 +640,46 @@ pub fn summary_rows(
     rows
 }
 
+/// [`summary_rows`] in the groups a reader looks for: shape, geometry, contacts; anything else
+/// under its own heading. Which rows to leave out (because a gauge or a tile already shows them)
+/// is the caller's decision: pass only the rows to group.
+pub fn measurement_groups(rows: &[[String; 2]]) -> Vec<(&'static str, Vec<[String; 2]>)> {
+    let group_of = |k: &str| {
+        let k = k.to_lowercase();
+        if k.contains("gyration")
+            || k.contains("sasa")
+            || k.contains("surface")
+            || k.contains("density")
+        {
+            "shape"
+        } else if k.contains("overlap")
+            || k.contains("geometry")
+            || k.contains("stereo")
+            || k.contains("rotamer")
+            || k.contains("disulfide")
+            || k.contains("clash")
+        {
+            "geometry"
+        } else if k.contains("interaction") || k.contains("bond") || k.contains("bridge") {
+            "contacts"
+        } else {
+            "other"
+        }
+    };
+    let mut out: Vec<(&'static str, Vec<[String; 2]>)> = ["shape", "geometry", "contacts", "other"]
+        .into_iter()
+        .map(|g| (g, Vec::new()))
+        .collect();
+    for r in rows.iter() {
+        let g = group_of(&r[0]);
+        if let Some((_, v)) = out.iter_mut().find(|(n, _)| *n == g) {
+            v.push(r.clone());
+        }
+    }
+    out.retain(|(_, v)| !v.is_empty());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

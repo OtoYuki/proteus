@@ -1336,52 +1336,6 @@ pub fn wrap_value(v: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// The measurements the card does not already show, in groups a reader looks for: shape,
-/// geometry, contacts; anything else under its own heading.
-pub fn measurement_groups(rows: &[[String; 2]]) -> Vec<(&'static str, Vec<[String; 2]>)> {
-    // The card's gauges already show these.
-    let shown = [
-        "pLDDT",
-        "Secondary structure",
-        "Ramachandran",
-        "Triage score",
-    ];
-    let group_of = |k: &str| {
-        let k = k.to_lowercase();
-        if k.contains("gyration")
-            || k.contains("sasa")
-            || k.contains("surface")
-            || k.contains("density")
-        {
-            "shape"
-        } else if k.contains("overlap")
-            || k.contains("geometry")
-            || k.contains("stereo")
-            || k.contains("rotamer")
-            || k.contains("disulfide")
-            || k.contains("clash")
-        {
-            "geometry"
-        } else if k.contains("interaction") || k.contains("bond") || k.contains("bridge") {
-            "contacts"
-        } else {
-            "other"
-        }
-    };
-    let mut out: Vec<(&'static str, Vec<[String; 2]>)> = ["shape", "geometry", "contacts", "other"]
-        .into_iter()
-        .map(|g| (g, Vec::new()))
-        .collect();
-    for r in rows.iter().filter(|[k, _]| !shown.contains(&k.as_str())) {
-        let g = group_of(&r[0]);
-        if let Some((_, v)) = out.iter_mut().find(|(n, _)| *n == g) {
-            v.push(r.clone());
-        }
-    }
-    out.retain(|(_, v)| !v.is_empty());
-    out
-}
-
 /// Every measurement in its group; on a wide pane in two columns, balanced by height.
 fn draw_details(
     f: &mut Frame,
@@ -1394,7 +1348,19 @@ fn draw_details(
     if !interface.is_empty() {
         groups.push(("interface", interface.to_vec()));
     }
-    groups.extend(measurement_groups(rows));
+    // The card's gauges already show these.
+    let shown = [
+        "pLDDT",
+        "Secondary structure",
+        "Ramachandran",
+        "Triage score",
+    ];
+    let rest: Vec<[String; 2]> = rows
+        .iter()
+        .filter(|[k, _]| !shown.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    groups.extend(proteus_core::qc::measurement_groups(&rest));
     let two = area.width >= 100 && groups.len() > 1;
     let cols: Vec<Rect> = if two {
         let [l, _, r] = Layout::horizontal([
