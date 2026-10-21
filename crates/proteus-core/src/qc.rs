@@ -15,10 +15,69 @@ pub fn expected_folded_rg(n: usize) -> f64 {
     2.2 * (n as f64).powf(0.38)
 }
 
+/// Column names of a [`StructureQc`] row, in order. The CSV header, the Arrow schema, the
+/// JSON field names and the triage table all read this one list.
+pub const QC_COLUMNS: &[&str] = &[
+    "file",
+    "model",
+    "n_chains",
+    "n_residues",
+    "sequence",
+    "confidence_source",
+    "plddt_mean",
+    "plddt_median",
+    "plddt_ge70_pct",
+    "plddt_ge90_pct",
+    "rg",
+    "rg_expected",
+    "rg_ratio",
+    "helix_pct",
+    "strand_pct",
+    "coil_pct",
+    "dssp",
+    "rama_favored_pct",
+    "rama_allowed_pct",
+    "rama_outliers",
+    "sasa_total",
+    "hydrophobic_burial_pct",
+    "heavy_atom_overlap_score",
+    "overlap_count",
+    "bond_rmsz",
+    "bond_outliers",
+    "angle_rmsz",
+    "angle_outliers",
+    "chirality_outliers",
+    "handedness_swaps",
+    "planarity_outliers",
+    "cbeta_outliers",
+    "cis_nonpro",
+    "twisted_peptides",
+    "rotamer_outlier_pct",
+    "hbond_count",
+    "salt_bridge_count",
+    "pi_stacking_count",
+    "cation_pi_count",
+    "rmsd_to_reference",
+    "fitness",
+    "interface_binder",
+    "interface_target",
+    "interface_binder_residues",
+    "interface_target_residues",
+    "interface_dsasa",
+    "interface_sc",
+    "interface_hbonds",
+    "interface_salt_bridges",
+    "iptm",
+    "ipae",
+    "ipsae_min",
+    "ipsae_max",
+    "lis",
+];
+
 /// Flat quality metrics of one structure file. Fractions are reported as percentages.
 /// pLDDT columns are `None` unless the B-factor column was detected (or declared) to be a
 /// predicted confidence.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct StructureQc {
     /// Path as given on the command line (or as found while walking a directory).
     pub file: String,

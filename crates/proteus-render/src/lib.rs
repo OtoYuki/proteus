@@ -6,6 +6,7 @@ pub mod geometry;
 pub mod gltf;
 pub mod rasterizer;
 pub mod terminal;
+pub mod triage;
 pub mod tui;
 pub mod web;
 

@@ -23,6 +23,26 @@ const VIEWER_CSS: &str = include_str!("../assets/web/viewer.css");
 const GEIST_MONO: &[u8] = include_bytes!("../assets/web/fonts/GeistMono-latin.woff2");
 const FIGTREE: &[u8] = include_bytes!("../assets/web/fonts/Figtree-latin.woff2");
 
+/// The embedded fonts and the brand's colour roles, without the viewer's own rules: what a
+/// second page (the triage table) needs to look like part of the same tool.
+pub fn brand_css() -> String {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    format!(
+        "@font-face{{font-family:'Geist Mono';font-weight:100 900;font-display:swap;src:url(data:font/woff2;base64,{})format('woff2')}}\
+         @font-face{{font-family:'Figtree';font-weight:300 900;font-display:swap;src:url(data:font/woff2;base64,{})format('woff2')}}\
+         :root{{{}}}",
+        b64(GEIST_MONO),
+        b64(FIGTREE),
+        crate::brand::css_vars(&crate::brand::DARK),
+    )
+}
+
+/// The brand lockup, for a page that is not the viewer.
+pub fn brand_header_html() -> String {
+    brand_header()
+}
+
 /// The page's head styles: the embedded fonts, the brand's colour roles, then viewer.css.
 fn page_css() -> String {
     use base64::Engine;
@@ -370,11 +390,11 @@ fn metadata(page: &WebPage<'_>) -> serde_json::Value {
         },
         "perResidue": per_residue,
         "rama": rama,
-        // The Top8000 general-case contours the plot is read against: 180 x 180 cells, four
-        // levels packed per byte (0 outlier, 1 allowed, 2 favoured), base64. 8 KB, against
-        // 32 KB for a byte a cell; the plot is drawn at 2 px a cell.
+        // The Top8000 general-case contours the plot is read against: 120 x 120 cells (3 deg a
+        // cell), four levels packed per byte (0 outlier, 1 allowed, 2 favoured), base64. 4.8 KB
+        // of page, and the plot draws it as 3 px blocks behind the points.
         "ramaContour": if rama.is_empty() { serde_json::Value::Null } else {
-            let n = 180usize;
+            let n = 120usize;
             let g = proteus_core::rama8000::general_region_grid(n);
             let packed: Vec<u8> = g
                 .chunks(4)
@@ -572,6 +592,8 @@ impl WebPage<'_> {
 <aside id="panel" aria-label="structure details"></aside>
 <button id="panelshow" class="ghost" type="button" aria-controls="panel">‹ details<kbd>p</kbd></button>
 <div id="legend" aria-live="polite"></div>
+<div id="jump" hidden><label for="jumpq">go to</label><input id="jumpq" type="text" spellcheck="false" autocomplete="off"
+ placeholder="B:90, 90-110, GLU90" aria-label="go to a residue"><span id="jumphint"></span></div>
 <div id="overlay" aria-hidden="true"></div>
 <div id="tip" role="tooltip" hidden></div>
 <section id="selbox" aria-live="polite" hidden></section>
@@ -579,7 +601,7 @@ impl WebPage<'_> {
 <footer id="keys"><span class="hint"><kbd>drag</kbd>rotate</span><span class="hint"><kbd>wheel</kbd>zoom</span><span class="hint"><kbd>click</kbd>select</span><span class="hint"><kbd>f</kbd>focus</span><span class="hint"><kbd>c</kbd>colour</span><span class="hint iface-key"><kbd>i</kbd>interface</span><button id="helpshow" class="ghost" type="button" aria-controls="help"><kbd>?</kbd>all keys</button><span class="sig">{signature}</span></footer></div>
 <div id="help" role="dialog" aria-modal="true" aria-label="keys" hidden><div class="sheet"><div class="top"><span>(keys)</span><button class="ghost" type="button" data-close>close<kbd>esc</kbd></button></div><div class="groups">
 <section><h3>move</h3><dl><dt>drag · ←↑↓→</dt><dd>rotate</dd><dt>wheel · + −</dt><dd>zoom</dd><dt>right-drag</dt><dd>pan (or shift-drag)</dd><dt>space</dt><dd>spin</dd><dt>r · double-click</dt><dd>reset the view</dd></dl></section>
-<section><h3>select</h3><dl><dt>click</dt><dd>select a residue</dd><dt>shift-click</dt><dd>select a range</dd><dt>ctrl-click</dt><dd>add or remove one</dd><dt>n</dt><dd>5 Å neighbours on or off</dd><dt>f</dt><dd>focus on the selection</dd><dt>l</dt><dd>label the selection</dd><dt>esc</dt><dd>clear</dd></dl></section>
+<section><h3>select</h3><dl><dt>/</dt><dd>go to a residue: <code>B:90</code>, <code>90-110</code>, <code>GLU90</code></dd><dt>click</dt><dd>select a residue</dd><dt>shift-click</dt><dd>select a range</dd><dt>ctrl-click</dt><dd>add or remove one</dd><dt>n</dt><dd>5 Å neighbours on or off</dd><dt>f</dt><dd>focus on the selection</dd><dt>l</dt><dd>label the selection</dd><dt>esc</dt><dd>clear</dd></dl></section>
 <section><h3>measure</h3><dl><dt>m</dt><dd>measure: click 2, 3 or 4 atoms</dd><dt>enter</dt><dd>keep the measurement</dd><dt>backspace</dt><dd>remove the last one</dd></dl></section>
 <section><h3>show</h3><dl><dt>c</dt><dd>next colour scheme</dd><dt>u</dt><dd>surface, then its colourings</dd><dt>o</dt><dd>outlines and shading</dd><dt>d</dt><dd>disulfides</dd><dt>x</dt><dd>reference structure</dd><dt class="iface-key">i</dt><dd class="iface-key">the interface</dd><dt class="iface-key">b</dt><dd class="iface-key">next binder chain</dd><dt>p</dt><dd>the side panel</dd></dl></section>
 <section><h3>save</h3><dl><dt>s</dt><dd>save a PNG</dd><dt>?</dt><dd>this list</dd></dl></section>
@@ -887,9 +909,10 @@ mod tests {
                 "page reaches outside itself: {forbidden}"
             );
         }
-        // Measured 2026-09-27: 299 KB = fonts 58 KB, viewer code 148 KB (the panel's tabs, tiles
-        // and key list added 25 KB), crambin's mesh and 327 atoms, and the embedded model file.
-        assert!(html.len() < 315_000, "crambin page is {} bytes", html.len());
+        // Measured 2026-10-21: 313 KB = fonts 58 KB, viewer code ~150 KB (the panel's tabs,
+        // tiles and key list added 25 KB; the go-to box and the Ramachandran contour, 120 x 120
+        // cells at 2 bits, added 6 KB), crambin's mesh and 327 atoms, and the model file.
+        assert!(html.len() < 318_000, "crambin page is {} bytes", html.len());
     }
 
     #[test]
