@@ -438,6 +438,13 @@ pub fn structure_qc(
 /// [`structure_qc`] with the options spelled out, including the binder–target interface.
 pub fn structure_qc_with(path: &Path, opts: &QcOptions) -> Result<StructureQc, CoreError> {
     let (reference, confidence) = (opts.reference, opts.confidence);
+    // A predictor's confidence files beside the model say what its B-factor column holds
+    // better than the values do: a failed design with every residue under pLDDT 30 reads like
+    // crystallographic B-factors, and would lose its pLDDT columns.
+    let confidence = confidence.or_else(|| {
+        let (pae, scores) = crate::pae::sidecar_files(path);
+        (pae.is_some() || scores.is_some()).then_some(ConfidenceSource::Predicted)
+    });
     let loaded = crate::io::load_structure(path)?;
     let detailed = crate::metrics::analyze_pdb_detailed_with_source(
         &loaded.pdb,
@@ -972,5 +979,40 @@ mod tests {
         assert_eq!(qc.n_chains, 2);
         assert_eq!(qc.n_residues, 6);
         assert_eq!(qc.sequence, "GGG/GGG");
+    }
+
+    /// A failed design: every residue under pLDDT 30 and no header to say it is a prediction.
+    /// The values alone read as crystallographic B-factors, which would drop the pLDDT columns
+    /// of exactly the models a triage wants to see at the bottom. The predictor's own files
+    /// beside the model settle it.
+    #[test]
+    fn a_low_confidence_model_beside_its_predictor_files_is_predicted() {
+        let crambin = std::fs::read_to_string(data("1crn.pdb")).unwrap();
+        let low: String = crambin
+            .lines()
+            .filter(|l| l.starts_with("ATOM"))
+            .map(|l| format!("{}{:6.2}{}\n", &l[..60], 28.0, &l[66..]))
+            .collect();
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("d_unrelaxed_rank_001_m.pdb");
+        std::fs::write(&model, &low).unwrap();
+        let alone = structure_qc_with(&model, &QcOptions::default()).unwrap();
+        assert_eq!(alone.confidence_source, "experimental", "the values alone");
+
+        std::fs::write(dir.path().join("d_scores_rank_001_m.json"), "{}").unwrap();
+        let qc = structure_qc_with(&model, &QcOptions::default()).unwrap();
+        assert_eq!(qc.confidence_source, "predicted");
+        assert!((qc.plddt_mean.unwrap() - 28.0).abs() < 1e-9);
+        assert_eq!(qc.plddt_ge70_pct, Some(0.0));
+        // A source the caller declared still wins.
+        let declared = structure_qc_with(
+            &model,
+            &QcOptions {
+                confidence: Some(ConfidenceSource::ExperimentalBFactor),
+                ..QcOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(declared.confidence_source, "experimental");
     }
 }

@@ -221,10 +221,22 @@ fn output_names(files: &[PathBuf]) -> Vec<String> {
             }
         }
     }
+    // A position can still meet a name already taken (`r_m_1.pdb` beside two `r/m.pdb`), so a
+    // clashing name takes the first free number from its position on.
     let dup = count(&names);
+    let mut used: std::collections::HashSet<String> = names
+        .iter()
+        .zip(&dup)
+        .filter(|(_, d)| **d == 1)
+        .map(|(n, _)| n.clone())
+        .collect();
     for (i, n) in names.iter_mut().enumerate() {
         if dup[i] > 1 {
-            *n = format!("{n}_{}", i + 1);
+            let mut k = i + 1;
+            while !used.insert(format!("{n}_{k}")) {
+                k += 1;
+            }
+            *n = format!("{n}_{k}");
         }
     }
     names
@@ -614,6 +626,11 @@ mod tests {
         assert_eq!(
             names(&["a/run/m.pdb", "b/run/m.cif"]),
             ["run_m_1", "run_m_2"]
+        );
+        // A numbered name that is already some file's own stem is skipped.
+        assert_eq!(
+            names(&["r/m.pdb", "s/r/m.pdb", "r_m_1.pdb"]),
+            ["r_m_2", "r_m_3", "r_m_1"]
         );
     }
 }

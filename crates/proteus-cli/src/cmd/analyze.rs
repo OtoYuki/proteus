@@ -377,12 +377,15 @@ pub async fn run(args: Args) -> Result<()> {
     // over-selects for everything else. Printed once per predictor found, only when ipSAE was
     // actually computed, and never for AlphaFold 3, whose own cutoff is the published one.
     let mut predictors: Vec<_> = Vec::new();
+    // A model with an ipSAE whose predictor the file names do not give away: the page cannot
+    // know which line applies to it, so it draws none.
+    let mut unidentified = false;
     if interface.is_some() {
         for r in rows.iter().filter(|r| r.interface.ipsae_min.is_some()) {
-            if let Some(p) = detect_predictor(Path::new(&r.file)) {
-                if !predictors.contains(&p) {
-                    predictors.push(p);
-                }
+            match detect_predictor(Path::new(&r.file)) {
+                Some(p) if !predictors.contains(&p) => predictors.push(p),
+                Some(_) => {}
+                None => unidentified = true,
             }
         }
         for p in &predictors {
@@ -392,7 +395,12 @@ pub async fn run(args: Args) -> Result<()> {
         }
     }
     if let Some(out) = &html {
-        write_triage_page(out, &paths, &rows, &predictors)?;
+        let page_predictors = if unidentified {
+            &[][..]
+        } else {
+            &predictors[..]
+        };
+        write_triage_page(out, &paths, &rows, page_predictors)?;
         eprintln!("Wrote the triage table: {}", out.display());
     }
     // Confidence files that were found but could not be used; say what was lost, briefly.

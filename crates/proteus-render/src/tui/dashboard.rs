@@ -2345,16 +2345,25 @@ mod tests {
         assert!(t.contains("(confidence by band)"), "{t}");
         assert!(t.contains("(least confident stretches)"), "{t}");
         // 36 residues left at 92; 3 at 62 and the 2-residue dip at 55 fall in 50-70; 5 at 40.
+        // A band's own row starts with its swatch; the strip's legend names the bands too.
         let band = |label: &str| {
             t.lines()
-                .find(|l| l.contains(label))
+                .find(|l| l.trim_start().starts_with('■') && l.contains(label))
                 .unwrap_or_else(|| panic!("no {label} band in {t}"))
                 .to_string()
         };
-        assert!(band("≥ 90").contains("36"), "{t}");
-        assert!(band("70–90").contains('0'), "{t}");
-        assert!(band("50–70").contains('5'), "{t}");
-        assert!(band("< 50").contains('5'), "{t}");
+        // The count is the first word after the label (the label's own digits do not count).
+        let count = |label: &str| {
+            band(label)
+                .split_once(label)
+                .and_then(|(_, rest)| rest.split_whitespace().next())
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(count("≥ 90"), "36", "{t}");
+        assert_eq!(count("70–90"), "0", "{t}");
+        assert_eq!(count("50–70"), "5", "{t}");
+        assert_eq!(count("< 50"), "5", "{t}");
         // Worst first, numbered from 1, and the two-residue dip is not one of them.
         let weak: Vec<&str> = t
             .lines()
