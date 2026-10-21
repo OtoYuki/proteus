@@ -457,6 +457,12 @@ pub async fn run(args: Args, db_path: &std::path::Path) -> Result<()> {
         let html_path = match html {
             // The user named the file: write exactly there.
             Some(path) => {
+                // As `analyze --html` does: a page asked for in a new folder makes the folder.
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .with_context(|| format!("Failed to create {}", parent.display()))?;
+                }
                 tokio::fs::write(&path, html_content)
                     .await
                     .with_context(|| format!("Failed to write HTML file to {:?}", path))?;

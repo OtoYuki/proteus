@@ -606,13 +606,20 @@
     const p = typeof q === 'string' ? parseResidueQuery(q) : q;
     if (!p || !labels || !labels.number) return [];
     const n = labels.number.length;
-    const chainOf = (i) => (labels.chain[i] || '').trim().toUpperCase();
-    const wanted = p.chain ? p.chain.toUpperCase() : null;
+    const chainOf = (i) => (labels.chain[i] || '').trim();
+    // mmCIF chain ids are case-sensitive (`a` and `A` can both exist): a chain written exactly
+    // as typed wins; only when there is none does case stop mattering.
+    let inChain = null;
+    if (p.chain) {
+      const exact = labels.chain.some((c) => (c || '').trim() === p.chain);
+      const want = exact ? p.chain : p.chain.toUpperCase();
+      inChain = exact ? (c) => c === want : (c) => c.toUpperCase() === want;
+    }
     const lo = p.to === null ? p.number : Math.min(p.number, p.to);
     const hi = p.to === null ? p.number : Math.max(p.number, p.to);
     const out = [];
     for (let i = 0; i < n; i++) {
-      if (wanted !== null && chainOf(i) !== wanted) continue;
+      if (inChain && !inChain(chainOf(i))) continue;
       const num = labels.number[i];
       if (num < lo || num > hi) continue;
       // An insertion code is only checked for a single residue: a range covers whatever is in it.

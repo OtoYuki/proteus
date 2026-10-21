@@ -13,11 +13,14 @@ All notable changes to this project are documented here. The format follows
 - `analyze`: a predicted model with no header and every residue under pLDDT 30 (a failed
   ColabFold design, say) was read as a crystal structure, so its pLDDT columns were empty — on
   exactly the models a triage ranks last. The predictor's confidence files beside a model now
-  settle it as predicted.
+  settle it as predicted, in `analyze`, `diff` and `film` alike.
 - `analyze --html` marked one predictor's ipSAE cutoff on every row even when some models came
   from a predictor the file names do not identify; it now marks none, as with mixed predictors.
 - `film` output names: a clashing name numbered by position could still meet another file's own
   stem (`r_m_1.pdb` beside two `r/m.pdb`); it now takes the next free number.
+- Web viewer: `/` treated chain ids without regard to case, so `a:90` also went to chain `A`
+  in an mmCIF that has both; a chain written exactly as typed now wins.
+- `view --html DIR/page.html` makes the folder if it does not exist, as `analyze --html` does.
 - Release: the crates.io check counted a timeout or a rate limit as "not published" and could
   start a publish over versions that exist; any answer other than 200 or 404 now stops it.
 
