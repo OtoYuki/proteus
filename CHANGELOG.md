@@ -40,6 +40,10 @@ The crates go to crates.io as `proteus-bio-*`, a Python wheel exposes the same r
 - An mmCIF file whose block opens with `DATA_` is recognised (CIF keywords are case-insensitive).
 - Web viewer: `l` was bound to both labelling the selection and rotating right; it labels.
 
+### Security
+- TLS dependencies updated past RUSTSEC-2026-0381, -0382 and -0383 (distrusted certificate
+  intermediates): `rustls-webpki` 0.103.16, `webpki-roots` and `webpki-root-certs` 1.0.10.
+
 ## [0.11.0] — 2026-10-20
 
 `analyze --interface` names the `ipSAE_min` cutoff fitted for the predictor that wrote the models,
