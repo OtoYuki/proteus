@@ -52,13 +52,40 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # --no-verify: the packaged tarballs are compiled by the `package` job in ci.yml on
       # every push to main, so verifying all eight again here only costs minutes.
+      #
+      # A version already on crates.io cannot be replaced, and `cargo publish` errors on one
+      # rather than skipping it (it only warns that the crate "already exists on crates.io
+      # index", then uploads anyway). A tag for a version published by hand would therefore
+      # fail the release, so this counts first and does nothing when the work is already done.
       - name: publish the workspace
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
             echo "No CARGO_REGISTRY_TOKEN secret: skipping the crates.io publish." >&2
             exit 0
+          fi
+          ver=$(cargo metadata --no-deps --format-version 1 \
+                | jq -r '.packages[] | select(.name == "proteus-bio") | .version')
+          mapfile -t crates < <(cargo metadata --no-deps --format-version 1 \
+                | jq -r '.packages[] | select(.publish != []) | .name')
+          live=0
+          for c in "${crates[@]}"; do
+            if curl -sf -o /dev/null -A "proteus-release" \
+                 "https://crates.io/api/v1/crates/$c/$ver"; then
+              live=$((live + 1))
+            fi
+          done
+          echo "$live of ${#crates[@]} crates are already on crates.io at $ver"
+          if [ "$live" -eq "${#crates[@]}" ]; then
+            echo "Nothing to publish."
+            exit 0
+          fi
+          if [ "$live" -ne 0 ]; then
+            echo "Half of $ver is published already. Cargo cannot resume that on its own:" >&2
+            echo "finish it by hand with 'cargo publish -p <crate>' for the ones missing." >&2
+            exit 1
           fi
           cargo publish --workspace --no-verify
 
