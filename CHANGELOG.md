@@ -5,6 +5,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-10-21
+
+The crates go to crates.io as `proteus-bio-*`, a Python wheel exposes the same rows as a
+`pyarrow.Table`, and the campaign gets a page of its own.
+
 ### Added
 - `analyze --html FILE`: the rows `--export` writes, as one self-contained page. Every model is
   a row, any column sorts, the name filters, the rows at or above the ipSAE cutoff for that
@@ -1078,7 +1083,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/OtoYuki/proteus/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/OtoYuki/proteus/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/OtoYuki/proteus/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/OtoYuki/proteus/compare/v0.9.0...v0.9.1

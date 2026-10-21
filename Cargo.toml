@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.94"
 authors = ["Sushant Hona <serotoninotonin@gmail.com>", "Proteus Contributors"]
@@ -26,13 +26,13 @@ categories = ["science::bioinformatics", "command-line-utilities", "rendering::e
 [workspace.dependencies]
 # Internal workspace crates. Published as proteus-bio-* (the short names are taken on
 # crates.io by unrelated projects); the keys and the library names stay proteus-*.
-proteus-core = { path = "crates/proteus-core", version = "0.11.0", package = "proteus-bio-core" }
-proteus-storage = { path = "crates/proteus-storage", version = "0.11.0", package = "proteus-bio-storage" }
-proteus-engine = { path = "crates/proteus-engine", version = "0.11.0", package = "proteus-bio-engine" }
-proteus-server = { path = "crates/proteus-server", version = "0.11.0", package = "proteus-bio-server" }
-proteus-render = { path = "crates/proteus-render", version = "0.11.0", package = "proteus-bio-render" }
-proteus-dssp = { path = "crates/proteus-dssp", version = "0.11.0", package = "proteus-bio-dssp" }
-proteus-esm = { path = "crates/proteus-esm", version = "0.11.0", package = "proteus-bio-esm" }
+proteus-core = { path = "crates/proteus-core", version = "0.12.0", package = "proteus-bio-core" }
+proteus-storage = { path = "crates/proteus-storage", version = "0.12.0", package = "proteus-bio-storage" }
+proteus-engine = { path = "crates/proteus-engine", version = "0.12.0", package = "proteus-bio-engine" }
+proteus-server = { path = "crates/proteus-server", version = "0.12.0", package = "proteus-bio-server" }
+proteus-render = { path = "crates/proteus-render", version = "0.12.0", package = "proteus-bio-render" }
+proteus-dssp = { path = "crates/proteus-dssp", version = "0.12.0", package = "proteus-bio-dssp" }
+proteus-esm = { path = "crates/proteus-esm", version = "0.12.0", package = "proteus-bio-esm" }
 
 # Async runtime & networking
 tokio = { version = "1.43", features = ["full"] }
