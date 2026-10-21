@@ -71,11 +71,16 @@ jobs:
           mapfile -t crates < <(cargo metadata --no-deps --format-version 1 \
                 | jq -r '.packages[] | select(.publish != []) | .name')
           live=0
+          # 200 is published, 404 is not; anything else (a timeout, a 429) answers neither, and
+          # counting it as "not published" would start a publish over versions that exist.
           for c in "${crates[@]}"; do
-            if curl -sf -o /dev/null -A "proteus-release" \
-                 "https://crates.io/api/v1/crates/$c/$ver"; then
-              live=$((live + 1))
-            fi
+            code=$(curl -s -o /dev/null -w '%{http_code}' --retry 3 -A "proteus-release" \
+                     "https://crates.io/api/v1/crates/$c/$ver" || true)
+            case "$code" in
+              200) live=$((live + 1)) ;;
+              404) ;;
+              *) echo "crates.io answered '$code' for $c $ver; not guessing." >&2; exit 1 ;;
+            esac
           done
           echo "$live of ${#crates[@]} crates are already on crates.io at $ver"
           if [ "$live" -eq "${#crates[@]}" ]; then

@@ -608,7 +608,6 @@
     const n = labels.number.length;
     const chainOf = (i) => (labels.chain[i] || '').trim().toUpperCase();
     const wanted = p.chain ? p.chain.toUpperCase() : null;
-    // With no chain given, a letter that is a chain here beats reading it as a residue name.
     const lo = p.to === null ? p.number : Math.min(p.number, p.to);
     const hi = p.to === null ? p.number : Math.max(p.number, p.to);
     const out = [];

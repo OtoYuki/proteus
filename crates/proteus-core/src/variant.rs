@@ -86,7 +86,10 @@ impl Residue {
 #[derive(Debug, Clone)]
 pub struct PreparedStructure {
     residues: Vec<Residue>,
-    by_chain_seq: HashMap<(String, isize), usize>,
+    /// For each residue of the protein in file order (the `res_idx` the interaction network
+    /// gives), its index in `residues`; `None` for one without a C-alpha. Chain and number are
+    /// not enough: an insertion code (`184A` beside `184`) shares the number.
+    by_network_idx: Vec<Option<usize>>,
     confidence: ConfidenceSource,
     /// Factor from the B-factor column to pLDDT (100 for 0–1 files).
     plddt_scale: f64,
@@ -107,9 +110,12 @@ impl PreparedStructure {
             protein.remove_chains_by(|c| !keep.iter().any(|k| k == c.id().trim()));
         }
         let mut residues = Vec::new();
+        let mut by_network_idx = Vec::new();
         for chain in protein.chains() {
             let chain_id = chain.id().trim().to_string();
             for residue in chain.residues() {
+                // Every residue takes a network index, kept or not, so the two stay aligned.
+                by_network_idx.push(None);
                 let atoms: Vec<(String, Vector3<f64>)> = residue
                     .atoms()
                     .map(|a| {
@@ -122,6 +128,7 @@ impl PreparedStructure {
                 let Some(ca_atom) = residue.atoms().find(|a| a.name().trim() == "CA") else {
                     continue;
                 };
+                *by_network_idx.last_mut().expect("pushed above") = Some(residues.len());
                 residues.push(Residue {
                     id: (
                         chain_id.clone(),
@@ -148,10 +155,6 @@ impl PreparedStructure {
                 None => format!("{} protein residue(s) with a C-alpha", residues.len()),
             }));
         }
-        let mut by_chain_seq = HashMap::with_capacity(residues.len());
-        for (i, r) in residues.iter().enumerate() {
-            by_chain_seq.entry((r.id.0.clone(), r.id.1)).or_insert(i);
-        }
         let b: Vec<f64> = residues.iter().map(|r| r.b_factor).collect();
         let confidence = detect_confidence_source(&loaded.header_preview, &b);
         let max_b = b.iter().copied().fold(f64::MIN, f64::max);
@@ -163,7 +166,7 @@ impl PreparedStructure {
         let network = compute_interaction_network(&protein);
         Ok(Self {
             residues,
-            by_chain_seq,
+            by_network_idx,
             confidence,
             plddt_scale,
             network,
@@ -184,10 +187,9 @@ impl PreparedStructure {
             .then(|| self.residues[i].b_factor * self.plddt_scale)
     }
 
-    fn index_of(&self, chain_id: &str, res_seq: isize) -> Option<usize> {
-        self.by_chain_seq
-            .get(&(chain_id.to_string(), res_seq))
-            .copied()
+    /// The index in `residues` of the network's residue `res_idx`.
+    fn index_of(&self, res_idx: usize) -> Option<usize> {
+        self.by_network_idx.get(res_idx).copied().flatten()
     }
 }
 
@@ -483,10 +485,7 @@ fn locate(s: &PreparedStructure) -> Vec<Located> {
     let mut out = Vec::new();
     let n = &s.network;
     for h in &n.hbonds {
-        if let (Some(a), Some(b)) = (
-            s.index_of(&h.donor_chain_id, h.donor_res_seq),
-            s.index_of(&h.acceptor_chain_id, h.acceptor_res_seq),
-        ) {
+        if let (Some(a), Some(b)) = (s.index_of(h.donor_res_idx), s.index_of(h.acceptor_res_idx)) {
             out.push(Located {
                 kind: InteractionKind::HydrogenBond,
                 a,
@@ -498,10 +497,7 @@ fn locate(s: &PreparedStructure) -> Vec<Located> {
         }
     }
     for sb in &n.salt_bridges {
-        if let (Some(a), Some(b)) = (
-            s.index_of(&sb.cation_chain_id, sb.cation_res_seq),
-            s.index_of(&sb.anion_chain_id, sb.anion_res_seq),
-        ) {
+        if let (Some(a), Some(b)) = (s.index_of(sb.cation_res_idx), s.index_of(sb.anion_res_idx)) {
             out.push(Located {
                 kind: InteractionKind::SaltBridge,
                 a,
@@ -513,10 +509,7 @@ fn locate(s: &PreparedStructure) -> Vec<Located> {
         }
     }
     for p in &n.pi_pi_stacks {
-        if let (Some(a), Some(b)) = (
-            s.index_of(&p.ring1_chain_id, p.ring1_res_seq),
-            s.index_of(&p.ring2_chain_id, p.ring2_res_seq),
-        ) {
+        if let (Some(a), Some(b)) = (s.index_of(p.ring1_res_idx), s.index_of(p.ring2_res_idx)) {
             out.push(Located {
                 kind: InteractionKind::PiStacking,
                 a,
@@ -528,10 +521,7 @@ fn locate(s: &PreparedStructure) -> Vec<Located> {
         }
     }
     for c in &n.cation_pi_interactions {
-        if let (Some(a), Some(b)) = (
-            s.index_of(&c.cation_chain_id, c.cation_res_seq),
-            s.index_of(&c.ring_chain_id, c.ring_res_seq),
-        ) {
+        if let (Some(a), Some(b)) = (s.index_of(c.cation_res_idx), s.index_of(c.ring_res_idx)) {
             out.push(Located {
                 kind: InteractionKind::CationPi,
                 a,
@@ -1028,7 +1018,8 @@ mod tests {
     }
 
     /// Rewrite the PDB text: residue `res_seq` of `chain` becomes `new_name`, keeping only the
-    /// atoms in `keep` (a truncation such as K→A keeps N, CA, C, O, CB).
+    /// atoms in `keep` (a truncation such as K→A keeps N, CA, C, O, CB). A residue with an
+    /// insertion code (`184A`) is a different residue and is left alone.
     fn mutate(text: &str, chain: char, res_seq: isize, new_name: &str, keep: &[&str]) -> String {
         let mut out = String::new();
         for line in text.lines() {
@@ -1037,6 +1028,7 @@ mod tests {
                 && line.len() > 26
                 && line.as_bytes()[21] as char == chain
                 && line[22..26].trim().parse::<isize>().ok() == Some(res_seq)
+                && line.as_bytes()[26] == b' '
             {
                 let atom = line[12..16].trim();
                 if !keep.contains(&atom) {
@@ -1146,6 +1138,50 @@ mod tests {
             .filter(|l| l.kind == InteractionKind::HydrogenBond)
             .count();
         assert_eq!(lost_hb, expected_hb);
+    }
+
+    /// Trypsin numbers by chymotrypsin, so 2PTC has Gly E184A written before Tyr E184. An
+    /// interaction is placed on the residue that made it, not on whichever of the two shares its
+    /// number: truncating Tyr184 loses its OH hydrogen bond to Lys159 O.
+    #[test]
+    fn a_residue_beside_an_insertion_code_keeps_its_interactions() {
+        let parent = prepared(PTC);
+        let tyr = |s: &PreparedStructure| {
+            s.residues
+                .iter()
+                .position(|r| r.id == ("E".to_string(), 184, None))
+                .unwrap()
+        };
+        assert_eq!(parent.residues[tyr(&parent)].name, "TYR");
+        let hb_of_tyr_oh = locate(&parent)
+            .into_iter()
+            .filter(|l| {
+                l.kind == InteractionKind::HydrogenBond
+                    && ((l.a == tyr(&parent) && l.a_atom.as_deref() == Some("OH"))
+                        || (l.b == tyr(&parent) && l.b_atom.as_deref() == Some("OH")))
+            })
+            .count();
+        assert!(
+            hb_of_tyr_oh > 0,
+            "Tyr E184 OH makes a hydrogen bond in 2PTC"
+        );
+
+        let cand = prepared(&mutate(PTC, 'E', 184, "ALA", &["N", "CA", "C", "O", "CB"]));
+        let d = diff(&parent, &cand, &DiffOptions::default()).unwrap();
+        assert_eq!(d.sites.len(), 1);
+        assert_eq!(d.sites[0].notation, "Y184A");
+        let lost_oh = d
+            .changes
+            .iter()
+            .filter(|c| {
+                c.change == Change::Lost
+                    && c.kind == InteractionKind::HydrogenBond
+                    && [&c.a, &c.b]
+                        .iter()
+                        .any(|e| e.res_name == "TYR" && e.atom.as_deref() == Some("OH"))
+            })
+            .count();
+        assert_eq!(lost_oh, hb_of_tyr_oh, "{:#?}", d.changes);
     }
 
     /// A file that names an aspartate's carboxylate oxygens the other way round is the same
