@@ -58,3 +58,8 @@ docs/media/*.cast
 .nf-test/
 .nextflow/
 .nextflow.log*
+
+# Python bindings (crates/proteus-py, its own Cargo workspace)
+crates/proteus-py/target/
+crates/proteus-py/.venv/
+crates/proteus-py/Cargo.lock

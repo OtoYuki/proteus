@@ -1,0 +1,33 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "proteus-bio"
+description = "Triage for protein design campaigns: one row per predicted model, as a pyarrow Table"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT OR Apache-2.0"
+authors = [{ name = "Sushant Hona" }]
+dependencies = ["pyarrow>=14"]
+keywords = ["bioinformatics", "protein design", "alphafold", "boltz", "ipsae"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "pandas>=2"]
+
+[project.urls]
+Homepage = "https://github.com/OtoYuki/proteus"
+Source = "https://github.com/OtoYuki/proteus"
+
+[tool.maturin]
+python-source = "python"
+module-name = "proteus_bio._native"
+features = ["pyo3/extension-module"]
