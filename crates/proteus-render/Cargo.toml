@@ -1,5 +1,5 @@
 [package]
-name = "proteus-render"
+name = "proteus-bio-render"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,14 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Pure-Rust software 3D rasterizer, cartoon ribbon extruder, and terminal viewport engine for Proteus."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "protein", "terminal-graphics", "rasterizer", "molecular-viewer"]
+categories = ["science::bioinformatics", "rendering", "visualization"]
+
+# Published as proteus-bio-render; the library keeps its import name.
+[lib]
+name = "proteus_render"
 
 [features]
 # Render `proteus film` frames on the GPU (wgpu). The CPU rasteriser stays the reference.

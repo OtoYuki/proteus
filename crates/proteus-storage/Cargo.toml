@@ -1,5 +1,5 @@
 [package]
-name = "proteus-storage"
+name = "proteus-bio-storage"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,14 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Embedded SQLite persistence and Apache Parquet data lake exporter for Proteus."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "parquet", "sqlite", "protein"]
+categories = ["science::bioinformatics", "database"]
+
+# Published as proteus-bio-storage; the library keeps its import name.
+[lib]
+name = "proteus_storage"
 
 [dependencies]
 proteus-core = { workspace = true }

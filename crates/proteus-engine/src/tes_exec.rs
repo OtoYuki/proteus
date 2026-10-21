@@ -731,7 +731,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 
-    /// Needs a reachable Podman/Docker socket: `PROTEUS_TEST_OCI=1 cargo test -p proteus-engine -- --ignored`.
+    /// Needs a reachable Podman/Docker socket: `PROTEUS_TEST_OCI=1 cargo test -p proteus-bio-engine -- --ignored`.
     #[tokio::test]
     #[ignore]
     async fn container_executor_runs_alpine_with_bind_mount() {

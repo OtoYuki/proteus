@@ -1,5 +1,5 @@
 [package]
-name = "proteus-dssp"
+name = "proteus-bio-dssp"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,6 +10,10 @@ repository.workspace = true
 description = "Pure-Rust Kabsch-Sander DSSP secondary-structure assignment (DSSP 2.x semantics)."
 keywords = ["bioinformatics", "dssp", "protein", "secondary-structure"]
 categories = ["science::bioinformatics"]
+
+# Published as proteus-bio-dssp; the library keeps its import name.
+[lib]
+name = "proteus_dssp"
 
 [dependencies]
 serde = { workspace = true, optional = true }

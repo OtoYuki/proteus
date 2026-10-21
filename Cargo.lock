@@ -3064,7 +3064,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
-name = "proteus-cli"
+name = "proteus-bio"
 version = "0.11.0"
 dependencies = [
  "anyhow",
@@ -3076,12 +3076,12 @@ dependencies = [
  "indicatif",
  "pdbtbx",
  "png",
- "proteus-core",
- "proteus-engine",
- "proteus-esm",
- "proteus-render",
- "proteus-server",
- "proteus-storage",
+ "proteus-bio-core",
+ "proteus-bio-engine",
+ "proteus-bio-esm",
+ "proteus-bio-render",
+ "proteus-bio-server",
+ "proteus-bio-storage",
  "ratatui",
  "serde_json",
  "tempfile",
@@ -3092,7 +3092,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-core"
+name = "proteus-bio-core"
 version = "0.11.0"
 dependencies = [
  "base64 0.23.1",
@@ -3101,7 +3101,7 @@ dependencies = [
  "flate2",
  "nalgebra",
  "pdbtbx",
- "proteus-dssp",
+ "proteus-bio-dssp",
  "serde",
  "serde_json",
  "tempfile",
@@ -3113,7 +3113,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-dssp"
+name = "proteus-bio-dssp"
 version = "0.11.0"
 dependencies = [
  "pdbtbx",
@@ -3121,7 +3121,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-engine"
+name = "proteus-bio-engine"
 version = "0.11.0"
 dependencies = [
  "async-trait",
@@ -3129,8 +3129,8 @@ dependencies = [
  "chrono",
  "futures-util",
  "glob",
- "proteus-core",
- "proteus-storage",
+ "proteus-bio-core",
+ "proteus-bio-storage",
  "reqwest",
  "serde",
  "serde_json",
@@ -3144,7 +3144,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-esm"
+name = "proteus-bio-esm"
 version = "0.11.0"
 dependencies = [
  "candle-core",
@@ -3157,7 +3157,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-render"
+name = "proteus-bio-render"
 version = "0.11.0"
 dependencies = [
  "ab_glyph_rasterizer",
@@ -3168,7 +3168,7 @@ dependencies = [
  "nalgebra",
  "pdbtbx",
  "pollster",
- "proteus-core",
+ "proteus-bio-core",
  "serde_json",
  "skrifa",
  "thiserror 2.0.20",
@@ -3178,7 +3178,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-server"
+name = "proteus-bio-server"
 version = "0.11.0"
 dependencies = [
  "axum",
@@ -3187,10 +3187,10 @@ dependencies = [
  "chrono",
  "form_urlencoded",
  "glob",
- "proteus-core",
- "proteus-engine",
- "proteus-render",
- "proteus-storage",
+ "proteus-bio-core",
+ "proteus-bio-engine",
+ "proteus-bio-render",
+ "proteus-bio-storage",
  "reqwest",
  "serde",
  "serde_json",
@@ -3207,7 +3207,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "proteus-storage"
+name = "proteus-bio-storage"
 version = "0.11.0"
 dependencies = [
  "arrow-array",
@@ -3216,7 +3216,7 @@ dependencies = [
  "bytes",
  "chrono",
  "parquet",
- "proteus-core",
+ "proteus-bio-core",
  "serde",
  "serde_json",
  "sqlx",

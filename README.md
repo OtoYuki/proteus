@@ -437,8 +437,8 @@ Same metric, same file, median wall clock; full table in [`bench/README.md`](ben
 # release binaries: Linux x86_64/aarch64, macOS x86_64/arm64
 curl -L https://github.com/OtoYuki/proteus/releases/latest/download/proteus-x86_64-unknown-linux-gnu.tar.gz | tar xz
 
-# from source (Rust 1.94+). Not on crates.io: that name is an unrelated project
-cargo install --git https://github.com/OtoYuki/proteus proteus-cli
+# from crates.io (Rust 1.94+): the package is proteus-bio, the binary it installs is proteus
+cargo install proteus-bio
 
 # container: the CLI works as is; `serve` needs the host's container socket for TES executors
 podman run --rm -v "$PWD:/w" ghcr.io/otoyuki/proteus analyze /w/structure.pdb
@@ -774,8 +774,9 @@ crates/
 └── proteus-cli/        The binary: analyze, view, diff, film, mutate, screen, esm, submit, serve
 ```
 
-The application crates are not on crates.io: `proteus-engine` and `proteus-cli` are taken there by
-unrelated projects.
+On crates.io every crate is published as `proteus-bio-*` (the binary as `proteus-bio`), because
+`proteus-cli`, `proteus-engine` and `proteus-render` are taken there by unrelated projects. The
+library names are unchanged: `proteus-bio-dssp` is still `use proteus_dssp::…`.
 
 </details>
 

@@ -1,5 +1,5 @@
 [package]
-name = "proteus-core"
+name = "proteus-bio-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,14 @@ authors.workspace = true
 license.workspace = true
 readme = "README.md"
 description = "Domain models, FASTA parsing, in-silico mutagenesis, and native biophysical calculations for Proteus."
+repository.workspace = true
+homepage.workspace = true
+keywords = ["bioinformatics", "protein", "structure", "biophysics", "molprobity"]
+categories = ["science::bioinformatics"]
+
+# Published as proteus-bio-core; the library keeps its import name.
+[lib]
+name = "proteus_core"
 
 [dependencies]
 base64 = { workspace = true }

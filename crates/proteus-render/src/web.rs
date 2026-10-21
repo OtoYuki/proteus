@@ -905,7 +905,7 @@ mod tests {
 
     /// The colour fixture `core.js` is tested against (`assets/web/test/colors.json`). The page
     /// computes colours itself, so the two implementations are pinned to one file:
-    /// `UPDATE_WEB_FIXTURES=1 cargo test -p proteus-render web::` rewrites it.
+    /// `UPDATE_WEB_FIXTURES=1 cargo test -p proteus-bio-render web::` rewrites it.
     #[test]
     fn colour_fixture_matches_the_rust_shader() {
         let plddt: Vec<serde_json::Value> = (0..=1000)

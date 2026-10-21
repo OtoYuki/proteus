@@ -1,6 +1,6 @@
 <img src="https://raw.githubusercontent.com/OtoYuki/proteus/main/docs/brand/proteus-mark.png" width="48" align="right" alt="Proteus">
 
-# proteus-server
+# proteus-bio-server
 
 The `proteusd` HTTP daemon of [Proteus](https://github.com/OtoYuki/proteus), on axum: a GA4GH
 TES 1.1 server (`/v1/tasks`, `/ga4gh/tes/v1/…`; passes the ELIXIR compliance suite), the native

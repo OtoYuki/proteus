@@ -5,6 +5,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The crates are published on crates.io as `proteus-bio-*`, and the binary as `proteus-bio`
+  (`cargo install proteus-bio` installs `proteus`). `proteus-cli`, `proteus-engine` and
+  `proteus-render` are taken there by unrelated projects. Library names are unchanged
+  (`use proteus_core::…`), and so are the directories under `crates/`.
+
+### Fixed
+- `film` gave every Chai-1 sample (`pred.model_idx_0.cif` …) and every sample of a local
+  AlphaFold 3 run (`seed-1_sample-0/model.cif` …) the same output name, so each film overwrote
+  the last. Output names are now the whole file stem, made unique.
+- `film --encoder nvenc|x264` stops with an error when that encoder does not work, instead of
+  quietly writing no MP4; when ffmpeg fails mid-film its own message is reported, not the
+  broken pipe it causes.
+- `diff` exits non-zero when some candidates could not be compared, as `analyze` and `film` do.
+- `diff --csv` quotes fields that contain a carriage return.
+- An mmCIF file whose block opens with `DATA_` is recognised (CIF keywords are case-insensitive).
+- Web viewer: `l` was bound to both labelling the selection and rotating right; it labels.
+
 ## [0.11.0] — 2026-10-20
 
 `analyze --interface` names the `ipSAE_min` cutoff fitted for the predictor that wrote the models,

@@ -390,7 +390,7 @@ mod tests {
     /// framebuffer pixel for pixel, the bytes are right in a way our own parser could never
     /// prove.
     ///
-    /// Ignored by default because it shells out; `cargo test -p proteus-render -- --ignored`
+    /// Ignored by default because it shells out; `cargo test -p proteus-bio-render -- --ignored`
     /// and `make validate` run it where libsixel is installed.
     #[test]
     #[ignore]

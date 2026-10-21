@@ -13,7 +13,7 @@
 //! Reference values: `tests/data/<model>.json` and `tests/data/<model>_long.json`, produced by
 //! `validate/esm_reference.py` (`--long` for the latter). Needs the checkpoints (downloaded from
 //! the Hub into the cache on first run), so the tests are `#[ignore]`d:
-//! `cargo test -p proteus-esm -- --ignored`.
+//! `cargo test -p proteus-bio-esm -- --ignored`.
 #![cfg(feature = "hub")]
 
 use std::collections::HashMap;
