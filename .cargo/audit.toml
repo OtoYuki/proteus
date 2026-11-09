@@ -8,4 +8,8 @@ ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0429",
+    # libsqlite3-sys: the fix needs >= 0.39 and sqlx 0.9.0 caps it below 0.38; Proteus opens only its
+    # own proteus.db. Same reasons as deny.toml.
+    "RUSTSEC-2026-0459",
 ]
