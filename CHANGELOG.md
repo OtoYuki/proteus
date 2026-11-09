@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-11-09
+
+Fixes from a review of 0.12.0. The release archives and the container image now carry the
+licence texts and notices of the data and fonts compiled into the binary, and the dependencies
+are past seven RustSec advisories and a critical zip advisory (GHSA-m665-v7pm-7grj).
+
 ### Changed
 - `proteus-bio-core` and `proteus-bio-render` name what they embed in their licence expressions:
   `(MIT OR Apache-2.0) AND BSD-3-Clause-LBNL AND CC-BY-4.0 AND MIT` (cctbx and geostd data, the
@@ -1129,7 +1135,8 @@ BLAKE3 CAS, Parquet export, software terminal rasterizer, DMS screening funnel.
 
 Original Python/Django thesis implementation (git tag `v0.1.0-thesis`).
 
-[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/OtoYuki/proteus/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/OtoYuki/proteus/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/OtoYuki/proteus/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/OtoYuki/proteus/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/OtoYuki/proteus/compare/v0.9.1...v0.10.0
