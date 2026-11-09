@@ -5,6 +5,14 @@
 set -euo pipefail
 v="${1:?usage: update.sh VERSION}"
 here="$(cd "$(dirname "$0")" && pwd)"
+# Every file a binary must ship with (scripts/licenses.sh) has to be in about.license_file.
+missing="$("$here/../../scripts/licenses.sh" --list | while IFS= read -r f; do
+    grep -qxF -- "    - $f" "$here/proteus-bio/meta.yaml" || printf '%s\n' "$f"
+done)"
+if [ -n "$missing" ]; then
+    printf 'about.license_file in proteus-bio/meta.yaml misses:\n%s\n' "$missing" >&2
+    exit 1
+fi
 sum="$(curl -fsSL "https://github.com/OtoYuki/proteus/archive/refs/tags/v$v.tar.gz" | sha256sum | cut -d' ' -f1)"
 sed -i -e "s/{% set version = \".*\" %}/{% set version = \"$v\" %}/" \
        -e "s/{% set sha256 = \".*\" %}/{% set sha256 = \"$sum\" %}/" "$here/proteus-bio/meta.yaml"

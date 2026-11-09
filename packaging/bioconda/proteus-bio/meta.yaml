@@ -34,12 +34,22 @@ about:
   home: https://github.com/OtoYuki/proteus
   dev_url: https://github.com/OtoYuki/proteus
   doc_url: https://github.com/OtoYuki/proteus/blob/v{{ version }}/README.md
-  license: MIT OR Apache-2.0
+  # Ours, then the data and fonts compiled into the binary (each named in its NOTICE). The
+  # Rust dependencies' licences are in THIRDPARTY.yml, written by build.sh.
+  license: (MIT OR Apache-2.0) AND BSD-3-Clause-LBNL AND CC-BY-4.0 AND MIT AND OFL-1.1
   license_family: MIT
   license_file:
     - LICENSE-MIT
     - LICENSE-APACHE
     - THIRDPARTY.yml
+    - crates/proteus-core/data/LICENSE-cctbx.txt
+    - crates/proteus-core/data/cdl/NOTICE
+    - crates/proteus-core/data/rama8000/NOTICE
+    - crates/proteus-core/data/rota8000/NOTICE
+    - crates/proteus-core/data/sc/NOTICE
+    - crates/proteus-render/assets/film/fonts/Geist-OFL.txt
+    - crates/proteus-render/assets/web/fonts/Figtree-OFL.txt
+    - crates/proteus-render/assets/web/fonts/Geist-OFL.txt
   summary: Triage of predicted protein structures and designed binders, with every metric checked against its reference implementation.
   description: |
     One binary that measures folders of predicted protein models in parallel and writes one row
