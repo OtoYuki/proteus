@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-license.workspace = true
+# Our code is MIT OR Apache-2.0. It embeds cctbx/geostd data (BSD-3-Clause-LBNL), the Top8000
+# rotamer grids (CC-BY-4.0) and a port of sc-rs (MIT); see data/*/NOTICE.
+license = "(MIT OR Apache-2.0) AND BSD-3-Clause-LBNL AND CC-BY-4.0 AND MIT"
 readme = "README.md"
 description = "Domain models, FASTA parsing, in-silico mutagenesis, and native biophysical calculations for Proteus."
 repository.workspace = true

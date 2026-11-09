@@ -4,7 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-license.workspace = true
+# Our code is MIT OR Apache-2.0. It embeds the Geist Mono and Figtree fonts (OFL-1.1); see
+# assets/*/fonts/*-OFL.txt.
+license = "(MIT OR Apache-2.0) AND OFL-1.1"
 readme = "README.md"
 description = "Pure-Rust software 3D rasterizer, cartoon ribbon extruder, and terminal viewport engine for Proteus."
 repository.workspace = true

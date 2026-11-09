@@ -54,6 +54,9 @@ jobs:
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # Every NOTICE and font licence under crates/ is on the list the release archives, the
+      # container and the Bioconda recipe ship.
+      - run: scripts/licenses.sh --list
 
   viewer-js:
     name: browser viewer (node --test)

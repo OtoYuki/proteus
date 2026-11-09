@@ -11,8 +11,9 @@ from
 
 cctbx Copyright (c) 2006 - 2026, The Regents of the University of California, through
 Lawrence Berkeley National Laboratory (subject to receipt of any required approvals
-from the U.S. Dept. of Energy). All rights reserved. Redistributed under the cctbx
-BSD-3-style licence: https://github.com/cctbx/cctbx_project/blob/master/LICENSE.txt
+from the U.S. Dept. of Energy). All rights reserved. Redistributed under the cctbx licence
+(SPDX: BSD-3-Clause-LBNL), whose full text is in ../LICENSE-cctbx.txt, a verbatim copy of
+cctbx_project's LICENSE.txt.
 
 The underlying distributions are from the Top8000 dataset (Richardson laboratory,
 Duke University): Lovell et al. 2003, Proteins 50:437; Chen et al. 2010, Acta Cryst

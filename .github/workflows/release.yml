@@ -34,10 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Our licences and the notices of the data and fonts compiled into the binary, which the
+      # BSD, MIT, CC-BY and OFL terms require alongside it; the archive carries them in licenses/.
+      - run: scripts/licenses.sh licenses
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: proteus
           target: ${{ matrix.target }}
+          include: licenses
           tar: unix
           checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}

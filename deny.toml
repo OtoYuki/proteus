@@ -45,6 +45,16 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# Our own crates name the data and fonts they embed (see their Cargo.toml and NOTICE files).
+# Allowed for these two crates only, so a dependency under these terms still fails the check.
+[[licenses.exceptions]]
+crate = "proteus-bio-core"
+allow = ["BSD-3-Clause-LBNL", "CC-BY-4.0"]
+
+[[licenses.exceptions]]
+crate = "proteus-bio-render"
+allow = ["OFL-1.1"]
+
 [[licenses.clarify]]
 crate = "ring"
 expression = "MIT AND ISC AND OpenSSL"

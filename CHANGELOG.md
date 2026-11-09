@@ -5,6 +5,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `proteus-bio-core` and `proteus-bio-render` name what they embed in their licence expressions:
+  `(MIT OR Apache-2.0) AND BSD-3-Clause-LBNL AND CC-BY-4.0 AND MIT` (cctbx and geostd data, the
+  Top8000 rotamer grids, the sc-rs port) and `(MIT OR Apache-2.0) AND OFL-1.1` (Geist Mono,
+  Figtree). Our own code stays MIT OR Apache-2.0.
+
 ### Fixed
 - `diff` and `film` lost every interaction of a residue that shares its number with an
   insertion-code residue written before it: in trypsin (2PTC), Gly E184A comes before Tyr E184,
@@ -23,6 +29,13 @@ All notable changes to this project are documented here. The format follows
 - `view --html DIR/page.html` makes the folder if it does not exist, as `analyze --html` does.
 - Release: the crates.io check counted a timeout or a rate limit as "not published" and could
   start a publish over versions that exist; any answer other than 200 or 404 now stops it.
+- Licences: the Ramachandran, rotamer-name and CDL data come from cctbx, whose BSD licence asks
+  for its copyright notice and full text with every binary copy; the NOTICE files linked to the
+  text instead. It is now in `crates/proteus-core/data/LICENSE-cctbx.txt`, verbatim, and the CDL
+  notice carries cctbx's copyright line rather than only geostd's.
+- The release archives (`licenses/`) and the container image (`/usr/share/doc/proteus`) held the
+  binary alone. They now carry our licences and the notices of every data set and font compiled
+  into it. `scripts/licenses.sh` keeps that list, and CI fails on a notice the list leaves out.
 
 ### Security
 - Dependencies moved past RUSTSEC-2026-0385 (ctutils), RUSTSEC-2026-0386 (tokio),
