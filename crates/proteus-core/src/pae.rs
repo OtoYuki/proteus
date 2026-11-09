@@ -306,7 +306,11 @@ fn square(
 fn pae_from_npz(bytes: &[u8]) -> Result<PredictedAlignedError, CoreError> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes))
         .map_err(|e| parse_err(format!("not an .npz archive: {e}")))?;
-    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let names = zip
+        .file_names()
+        .map(|n| n.map(|n| n.into_owned()))
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|e| parse_err(format!("unreadable entry name in the .npz: {e}")))?;
     let name = ["pae.npy", "predicted_aligned_error.npy"]
         .iter()
         .find(|n| names.iter().any(|m| m == *n))

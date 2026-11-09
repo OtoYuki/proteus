@@ -70,8 +70,10 @@ candle-nn = "0.11"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 pdbtbx = "0.12"
 flate2 = "1"
-# Reads .npz arrays (Boltz PAE); the same major as candle-core's, with deflate added.
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2"] }
+# Reads predictors' .npz arrays (Boltz PAE, Chai-1 scores), which are other people's files: 9.x,
+# for the header-parsing fix of GHSA-m665-v7pm-7grj (>= 9.0.5). candle-core still pulls its own
+# 8.x, but proteus calls none of candle's archive readers (ESM-2 loads safetensors).
+zip = { version = "9.5", default-features = false, features = ["deflate-flate2"] }
 nalgebra = "0.35"
 
 # CLI & UX
