@@ -24,6 +24,13 @@ All notable changes to this project are documented here. The format follows
 - Release: the crates.io check counted a timeout or a rate limit as "not published" and could
   start a publish over versions that exist; any answer other than 200 or 404 now stops it.
 
+### Security
+- Dependencies moved past RUSTSEC-2026-0385 (ctutils), RUSTSEC-2026-0386 (tokio),
+  RUSTSEC-2026-0391, -0398, -0403 and -0410 (zstd) and RUSTSEC-2026-0442 (arrow-data).
+  RUSTSEC-2026-0429 (zip) and RUSTSEC-2026-0459 (the bundled SQLite) have no compatible fix yet
+  and are ignored with their reasons in `deny.toml`: Proteus never calls `ZipArchive::extract`,
+  and it opens no SQLite database but its own `proteus.db`.
+
 ## [0.12.0] — 2026-10-21
 
 The crates go to crates.io as `proteus-bio-*`, a Python wheel exposes the same rows as a
