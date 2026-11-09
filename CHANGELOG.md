@@ -43,6 +43,9 @@ All notable changes to this project are documented here. The format follows
   RUSTSEC-2026-0429 (zip) and RUSTSEC-2026-0459 (the bundled SQLite) have no compatible fix yet
   and are ignored with their reasons in `deny.toml`: Proteus never calls `ZipArchive::extract`,
   and it opens no SQLite database but its own `proteus.db`.
+- Predictors' `.npz` files (Boltz PAE, Chai-1 scores) are read with zip 9.5, past
+  GHSA-m665-v7pm-7grj: zip before 9.0.5 could read an entry differently from other zip readers
+  when an archive's local and central headers disagree.
 
 ## [0.12.0] — 2026-10-21
 
