@@ -55,8 +55,9 @@ chi-angle boxes that name each rotamer (`RotamerID.identify`).
 
 cctbx Copyright (c) 2006 - 2026, The Regents of the University of California, through
 Lawrence Berkeley National Laboratory (subject to receipt of any required approvals
-from the U.S. Dept. of Energy). All rights reserved. Redistributed under the cctbx
-BSD-3-style licence: https://github.com/cctbx/cctbx_project/blob/master/LICENSE.txt
+from the U.S. Dept. of Energy). All rights reserved. Redistributed under the cctbx licence
+(SPDX: BSD-3-Clause-LBNL), whose full text is in ../LICENSE-cctbx.txt, a verbatim copy of
+cctbx_project's LICENSE.txt.
 
 Evaluation (chi definitions, grid selection, the n-dimensional linear interpolation of
 mmtbx/rotamer/n_dim_table.py and the favored >= 2 % / outlier < 0.3 % thresholds of
